@@ -196,8 +196,19 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		if resolved := models.ResolveLatest(stringValue(config["coder_agent"]), *route.Model); resolved != "" {
 			*route.Model = resolved
 		}
-	} else if liveModel := stringValue(live["model"]); models.SameFamily(*route.Model, liveModel) {
-		*route.Model = liveModel
+	} else {
+		liveModel, liveEffort := stringValue(live["model"]), stringValue(live["effort"])
+		if models.SameFamily(*route.Model, liveModel) {
+			*route.Model = liveModel
+			if liveEffort != "" && supportsPreCoderEffort(liveModel, liveEffort) {
+				*route.Effort = liveEffort
+			}
+		} else if targetModel, targetEffort, changed := policy.GearTarget(config, *route.Model, *route.Effort); changed && targetModel == liveModel {
+			*route.Model, *route.Effort = targetModel, targetEffort
+			if liveEffort != "" && supportsPreCoderEffort(targetModel, liveEffort) {
+				*route.Effort = liveEffort
+			}
+		}
 	}
 	if !reply && root != nil && config["coder_agent"] == "codex" {
 		if effort, effortErr := contextio.CoderEffort(defaultPreStateRoot(runtimeRoot), projectKey(root)); effortErr == nil && effort != "" &&
@@ -1234,9 +1245,9 @@ func denyPre(code, message string) map[string]any {
 		reason += "\n\n" + `Prepend this as the FIRST line of the prompt; the hook removes it before Codex sees it:
   ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>
   Add |scope=<path[,path...]> for implementation; omit it for operation.
-  route  mechanical -> luna/high | subtle -> luna/high | normal -> sol/medium | consequential -> sol/high | escalated -> sol/xhigh | operation -> luna/high
+  The dispatch receipt shows the configured coder, model, and effort.
   reason is optional; basis is required for normal, consequential, and escalated, and optional otherwise. eta=<N>m is optional; N must be an integer from 1..600. Reason, when supplied, is one of new_task | continue | fix | route_change | reanchor | repeated_failure | user_override.
-  phase  'operation' for deploy, runner control, status, or read-only investigation; it skips Reviewer-1. 'implementation' for anything that changes code.
+  phase  'operation' for established runbooks, deploy, runner control, or status; it skips the reviewer. 'implementation' for anything that changes code.
   scope  required for implementation; the paths the delegation may touch. It bounds the baseline scan, so it cannot be the whole repository.
   codex-reply may omit ORCH only when its threadId identifies a recorded thread; otherwise the reply is denied.
 See .claude/skills/codex-orchestrator/SKILL.md for how to choose the route.`
@@ -1277,7 +1288,7 @@ func appendPrePlanShape(prompt, phase string) string {
 		return prompt
 	}
 	block := `Required plan shape (Purser):
-Write Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), Milestones (at most 5; each has bounded scope, observable acceptance, validation, dependency, touched files/dirs, and parallel group; same-group paths are disjoint). Example fields: - **Dependency:** None. and - **Write paths:** ` + "`go/internal/testutil/environment.go`" + ` only. Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.`
+Write Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), and Milestones (at most 5; each has bounded scope, observable acceptance, validation, and parallel group; same-group paths are disjoint). Make each milestone a ` + "`### M<N>`" + ` section with exactly one ` + "`**Dependency:**`" + ` field and one ` + "`**Write paths:**`" + ` field; keep each section at or below 32 KiB. Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.`
 	return strings.TrimRight(prompt, " \t\r\n") + "\n\n" + block
 }
 

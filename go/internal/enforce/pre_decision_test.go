@@ -85,7 +85,8 @@ func TestAppendPreCodeMapFallsBackToPointer(t *testing.T) {
 
 func TestAppendPrePlanShapeIsPlanOnlyAndIdempotent(t *testing.T) {
 	block := appendPrePlanShape("task", "plan")
-	if strings.Count(block, prePlanShapeMarker) != 1 || !strings.Contains(block, "Summary:") || !strings.Contains(block, "Milestones") {
+	if strings.Count(block, prePlanShapeMarker) != 1 || !strings.Contains(block, "Summary:") || !strings.Contains(block, "Milestones") ||
+		!strings.Contains(block, "### M<N>") || !strings.Contains(block, "**Dependency:**") || !strings.Contains(block, "**Write paths:**") || !strings.Contains(block, "32 KiB") {
 		t.Fatalf("plan shape block missing or duplicated:\n%s", block)
 	}
 	if got := appendPrePlanShape(block, "plan"); got != block {
@@ -94,6 +95,83 @@ func TestAppendPrePlanShapeIsPlanOnlyAndIdempotent(t *testing.T) {
 	if got := appendPrePlanShape("implementation", "implementation"); strings.Contains(got, prePlanShapeMarker) {
 		t.Fatalf("implementation prompt received plan shape:\n%s", got)
 	}
+}
+
+func TestPreReplyUsesRecordedModelBeforeCompatibility(t *testing.T) {
+	root, repo, state := setupRecordedReply(t, "gpt-6-luna", "high", "gpt-6.1-sol", "medium")
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
+	t.Setenv("PURSER_STATE_DIR", state)
+	t.Setenv("CODEX_HOME", root)
+	t.Setenv("CLAUDE_PLUGIN_ROOT", root)
+	got, err := Pre(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex-reply",
+		"tool_input": map[string]any{"threadId": "thread-p63", "prompt": "ORCH|task=task-recorded|phase=implementation|route=subtle|reason=continue|basis=continue implementation|scope=src/a.go\nContinue.", "label": "saved label"},
+		"cwd":        repo, "session_id": "recorded-model", "tool_use_id": "recorded-model"}, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision := mapValue(got["hookSpecificOutput"])["permissionDecision"]; decision == "deny" {
+		t.Fatalf("reply was denied before recorded model restoration: %#v", got)
+	}
+}
+
+func TestPreReplyUsesRecordedEffortBeforeCompatibility(t *testing.T) {
+	root, repo, state := setupRecordedReply(t, "gpt-6-luna", "medium", "gpt-6-luna", "high")
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
+	t.Setenv("PURSER_STATE_DIR", state)
+	t.Setenv("CODEX_HOME", root)
+	t.Setenv("CLAUDE_PLUGIN_ROOT", root)
+	got, err := Pre(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex-reply",
+		"tool_input": map[string]any{"threadId": "thread-p63", "prompt": "ORCH|task=task-recorded|phase=implementation|route=subtle|reason=continue|basis=continue implementation|scope=src/a.go\nContinue.", "label": "saved label"},
+		"cwd":        repo, "session_id": "recorded-effort", "tool_use_id": "recorded-effort"}, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision := mapValue(got["hookSpecificOutput"])["permissionDecision"]; decision == "deny" {
+		t.Fatalf("reply was denied before recorded effort restoration: %#v", got)
+	}
+}
+
+func setupRecordedReply(t *testing.T, routeModel, routeEffort, recordedModel, recordedEffort string) (string, string, string) {
+	t.Helper()
+	root := preTempDir(t)
+	repo, state := filepath.Join(root, "repo"), filepath.Join(root, "state")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	seedPreThread(t, repo, state)
+	project := filepath.Join(state, "projects", projectKey(&repo))
+	record := ledger.FindByThreadID(project, "thread-p63")
+	mapValue(record["live_thread"])["model"], mapValue(record["live_thread"])["effort"] = recordedModel, recordedEffort
+	if saved := ledger.Save(project, record); saved.Status != ledger.OK {
+		t.Fatalf("update recorded thread: %#v", saved)
+	}
+	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	entry := mapValue(mapValue(config["routes"])["subtle"])
+	entry["model"], entry["effort"] = routeModel, routeEffort
+	configRoot := filepath.Join(root, ".claude", "hooks", "orchestrator")
+	if err := os.MkdirAll(configRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, err = json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configRoot, "config.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return root, repo, state
 }
 
 func TestPlanMilestoneLabel(t *testing.T) {
