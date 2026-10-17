@@ -71,7 +71,7 @@ export const WAKE_MARKER = '⚓ /compact ✓'
 // The English master of the notice the woken turn writes, plus what to do next.
 export function compactNotice(before: number, after: number | undefined): string {
   const saving = after !== undefined && after < before ? Math.round((1 - after / before) * 100) : undefined
-  return `> ⚓ **Context passed ${Math.floor(before / 1000)}K, so Purser ran /compact.** *${saving !== undefined ? `Every later message is now ~${saving}% cheaper; d` : 'D'}ecisions and the next step were carried over from the handoff Purser prepared. Nothing is lost.*`
+  return `> ⚓ **Context passed ${Math.floor(before / 1000)}K, so Purser ran /compact.** *${saving !== undefined ? `Every later message is now ~${saving}% cheaper; d` : 'D'}ecisions and the next step were carried over from the handoff Purser prepared.*`
 }
 
 export const RESUME_PROMPT = 'Continue the task in progress; if nothing was in progress, stop after that line.'

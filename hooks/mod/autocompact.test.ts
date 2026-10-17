@@ -146,7 +146,7 @@ test('compact notice reports the measured saving; the visible wake line stays la
   const text = compactNotice(415_943, 83_000)
   expect(text).toContain('**Context passed 415K, so Purser ran /compact.**')
   expect(text).toContain('Every later message is now ~80% cheaper')
-  expect(text).toContain('Nothing is lost.')
+  expect(text.endsWith('from the handoff Purser prepared.*')).toBe(true)
   expect(compactNotice(415_943, undefined)).not.toContain('cheaper')
   expect(WAKE_MARKER).toBe('⚓ /compact ✓')
   const context = wakeContext(text)
