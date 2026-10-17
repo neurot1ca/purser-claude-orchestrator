@@ -34,6 +34,37 @@ func sessionStartContext(t *testing.T, event map[string]any) string {
 	return context
 }
 
+func TestSessionStartConfiguredCoderGuidance(t *testing.T) {
+	const want = "Purser is installed for this project. Delegate repository code changes (features, fixes, refactors, tests) to the configured coder through the `purser:dispatcher` agent or `codex_start`; Purser's refusal messages explain the required first prompt line. Make trivial edits, such as a typo or a one-line change, yourself. Review each result, then accept and apply it with `codex_apply`."
+	for _, source := range []string{"startup", "resume", "compact", "clear"} {
+		t.Run(source, func(t *testing.T) {
+			stateRoot := t.TempDir()
+			t.Setenv("PURSER_STATE_DIR", stateRoot)
+			repo := updateSessionTestRepo(t)
+			rolesPath := filepath.Join(stateRoot, "projects", repositoryProjectKey(repo), "roles.toml")
+			if err := os.MkdirAll(filepath.Dir(rolesPath), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(rolesPath, []byte("[roles]\ncoder = \"codex\"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			event := map[string]any{"hook_event_name": "SessionStart", "session_id": "coder-guidance-" + source, "source": source, "cwd": repo}
+			if got := sessionStartContext(t, event); !strings.Contains(got, want) {
+				t.Fatalf("SessionStart context missing configured coder guidance: %q", got)
+			}
+		})
+	}
+	t.Run("roles absent", func(t *testing.T) {
+		stateRoot := t.TempDir()
+		t.Setenv("PURSER_STATE_DIR", stateRoot)
+		repo := updateSessionTestRepo(t)
+		got := sessionStartContext(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "coder-guidance-absent", "source": "startup", "cwd": repo})
+		if strings.Contains(got, want) {
+			t.Fatalf("SessionStart context unexpectedly contains configured coder guidance: %q", got)
+		}
+	})
+}
+
 func TestSessionStartPluginVersionNoticeParity(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", stateRoot)

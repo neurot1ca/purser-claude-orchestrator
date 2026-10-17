@@ -146,6 +146,10 @@ func SessionStart(event map[string]any) []byte {
 	additional = joinContext(additional, delivered)
 	if validSession && repository != "" {
 		root := stateRoot()
+		rolesPath := filepath.Join(root, "projects", projectKey, "roles.toml")
+		if _, err := os.Stat(rolesPath); err == nil {
+			additional = joinContext(additional, "Purser is installed for this project. Delegate repository code changes (features, fixes, refactors, tests) to the configured coder through the `purser:dispatcher` agent or `codex_start`; Purser's refusal messages explain the required first prompt line. Make trivial edits, such as a typo or a one-line change, yourself. Review each result, then accept and apply it with `codex_apply`.")
+		}
 		additional = joinContext(additional, durationHint(root, projectKey, "codex-main"))
 		additional = joinContext(additional, followupHints(root, projectKey, session))
 		additional = joinContext(additional, recoverGearAdvice(root, projectKey, time.Now().UTC()))
