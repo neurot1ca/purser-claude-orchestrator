@@ -213,6 +213,17 @@ func TestClaudeCoderUsesTierAliasesAndRequiresClaudeRole(t *testing.T) {
 }
 
 func testPythonCoderConfigGoldenParity(t *testing.T, p32Only bool) {
+	configRoot := t.TempDir()
+	t.Setenv("HOME", configRoot)
+	t.Setenv("USERPROFILE", configRoot)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
+	t.Setenv("APPDATA", configRoot)
+	t.Setenv("LOCALAPPDATA", configRoot)
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	t.Setenv("PURSER_STATE_DIR", configRoot)
+	t.Setenv("CLAUDE_CONFIG_DIR", configRoot)
+
 	path := filepath.Join("testdata", "config_cases.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
