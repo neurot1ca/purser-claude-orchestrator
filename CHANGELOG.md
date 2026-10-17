@@ -3,6 +3,20 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.170 — 2026-10-17
+
+- **Added:** in a project set up with Purser, session start tells Claude to delegate code changes to the configured coder.
+- **Added:** auto-compact also compacts a large idle session just before its prompt cache lapses, and infers a one hour cache from cached reads after a long gap.
+- **Added:** setup offers Claude as coder and reviewer and explains the optional different-family rule; it no longer offers a Cursor reviewer that cannot run.
+- **Changed:** Codex tool schemas hide server-injected fields and describe each tool's workflow; malformed JSON gets a JSON-RPC parse error.
+- **Changed:** denials show the routing tutorial only for ORCH line errors and give other errors a targeted repair; `requested=user` satisfies the Sol basis rule and skips the plan-first gate.
+- **Changed:** user-facing text says reviewer instead of Reviewer-1, and the auto-compact notice no longer promises that nothing is lost.
+- **Fixed:** the job board reports a refresh failure only after three consecutive failures and names the failing step.
+- **Fixed:** `codex_apply` rejects a non-boolean `acceptOnly`, marks refusals as errors, and names the next step for unready jobs and stale revisions.
+- **Fixed:** a start that already succeeded says call `codex_result`; the returned waiter command runs as-is in PowerShell on Windows, and the dispatcher collects host validation.
+- **Fixed:** replies on geared or effort-overridden threads are checked against the recorded model and effort; `/plan` asks for `M<N>` sections and no manual dispatch receipt; `codex-reply` drops the `conversationId` alias.
+- **Fixed:** proceeding with Codex after a low-quota warning is no longer read as fallback consent, and a `codex_start` denied before it started no longer reports an ambiguous outcome.
+
 ## 0.1.169 — 2026-10-17
 
 - **Added:** Cursor Agent CLI (`cursor-agent`) can be the coder or the reviewer; `init` and `/purser:reviewer` offer it when it is installed, with `latest:<family>` model choices and `auto` for Cursor free plans.
