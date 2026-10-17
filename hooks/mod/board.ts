@@ -256,18 +256,29 @@ let timerStarted = false
 const reported = new Set<string>()
 const detailsPaneId = 'purser-job-board'
 let latestBoard: JobBoard | undefined
+let consecutiveFailures = 0
 
-async function reportOnce($, message: string) {
+async function reportOnce($, diagnostic: string) {
   const sessionId = await $.session.id().catch(() => '<unknown>')
   if (reported.has(sessionId)) return
   reported.add(sessionId)
-  try { await $.ui.log(message) } catch { /* Observability must not block the hook. */ }
+  try {
+    await $.ui.log(`Purser job board refresh failed; turn continued unchanged. (${diagnostic})`)
+  } catch { /* Observability must not block the hook. */ }
+}
+
+async function failedRefresh($, diagnostic: string) {
+  consecutiveFailures++
+  if (consecutiveFailures >= 3) await reportOnce($, diagnostic)
 }
 
 export function registerBoard(on) {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const prior = await next(e)
     if (e.props.hasSurvey) return prior
+    let failureStep: 'board read' | 'render' = 'board read'
+    let refreshFailed = false
+    let diagnostic = ''
     try {
       if (!timerStarted) {
         timerStarted = true
@@ -278,12 +289,18 @@ export function registerBoard(on) {
       try {
         board = await readBoard($, target)
         latestBoard = board
-      } catch {
+      } catch (error) {
         // A failed refresh keeps the last board on screen instead of hiding it.
-        await reportOnce($, 'Purser job board refresh failed; turn continued unchanged.')
+        refreshFailed = true
+        diagnostic = `board read: ${String(error)}`
         board = latestBoard
       }
-      if (!board) return prior
+      if (!board) {
+        if (refreshFailed) await failedRefresh($, diagnostic)
+        else consecutiveFailures = 0
+        return prior
+      }
+      failureStep = 'render'
       const { Box, Text, Button } = $.ui.resolve(e)
       const content = board.summary.map((part, index) => Text({
         key: `purser-summary-${index}`, children: part.text, color: part.color,
@@ -294,16 +311,24 @@ export function registerBoard(on) {
         key: 'purser-board-details', label: 'details', plain: true, dimColor: true,
         onPress: async () => { await $.ui.open({ id: detailsPaneId, title: 'Jobs' }) },
       }))
-      if (!prior) return Box({ width: e.props.bodyColumns, flexDirection: 'row', flexWrap: 'nowrap', children: content })
+      if (!prior) {
+        const result = Box({ width: e.props.bodyColumns, flexDirection: 'row', flexWrap: 'nowrap', children: content })
+        if (refreshFailed) await failedRefresh($, diagnostic)
+        else consecutiveFailures = 0
+        return result
+      }
       // The engine refuses its own node under a Box with a width, so the outer row stays unsized.
       // It wraps so a narrow window moves the board below the band instead of drawing over it.
-      return Box({
+      const result = Box({
         flexDirection: 'row', flexWrap: 'wrap',
         children: [prior, Text({ children: ' · ', dimColor: true }),
           Box({ flexDirection: 'row', flexWrap: 'nowrap', flexShrink: 1, children: content })],
       })
-    } catch {
-      await reportOnce($, 'Purser job board refresh failed; turn continued unchanged.')
+      if (refreshFailed) await failedRefresh($, diagnostic)
+      else consecutiveFailures = 0
+      return result
+    } catch (error) {
+      await failedRefresh($, `${failureStep}: ${String(error)}`)
       return prior
     }
   })

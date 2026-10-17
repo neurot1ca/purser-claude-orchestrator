@@ -230,10 +230,10 @@ test('a non-git project with no jobs is empty and does not log a refresh failure
   await ui.unmount()
 })
 
-test('board read errors fail silently, preserve the turn, and log once per session', async ($, on) => {
+test('one board read failure stays quiet and a later success clears it', async ($, on) => {
+  mock.clock(on)
+  let failRead = true
   const logs: string[] = []
-  let logged: () => void = () => {}
-  const didLog = new Promise<void>(resolve => { logged = resolve })
   on('env.get', (_$, e) => ({
     value: e.name === 'OS' ? 'Linux' : e.name === 'HOME' ? '/home/test' :
       e.name === 'OSTYPE' ? 'linux-gnu' : e.name === 'HOSTTYPE' ? 'x86_64' : undefined,
@@ -241,11 +241,43 @@ test('board read errors fail silently, preserve the turn, and log once per sessi
   on('process.run', (_$, e) => ({
     value: { exitCode: 0, stdout: e.init.stdin ? '' : '/repo\n', stderr: '' },
   }))
-  mock.clock(on)
+  on('session.cwd', () => ({ value: '/repo' }))
+  on('session.id', () => ({ value: 'board-recovery' }))
+  on('fs.list', () => failRead ? { deny: 'fixture read failure' } : { value: [] })
+  on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: 'Other mod status' })
+  })
+  const ui = await $.ui.mount({
+    plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} },
+  })
+  expect(logs).toEqual([])
+  await ui.unmount()
+  failRead = false
+  const recoveredUi = await $.ui.mount({
+    plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} },
+  })
+  expect(logs).toEqual([])
+  await recoveredUi.unmount()
+})
+
+test('board read errors fail silently until repeated and log once per session', async ($, on) => {
+  const clock = mock.clock(on)
+  const logs: string[] = []
+  on('env.get', (_$, e) => ({
+    value: e.name === 'OS' ? 'Linux' : e.name === 'HOME' ? '/home/test' :
+      e.name === 'OSTYPE' ? 'linux-gnu' : e.name === 'HOSTTYPE' ? 'x86_64' : undefined,
+  }))
+  on('process.run', (_$, e) => ({
+    value: { exitCode: 0, stdout: e.init.stdin ? '' : '/repo\n', stderr: '' },
+  }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.id', () => ({ value: 'board-error' }))
   on('fs.list', () => ({ deny: 'fixture read failure' }))
-  on('ui.log', (_$, e) => { logs.push(e.text); logged(); return { value: undefined } })
+  on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return Text({ children: 'Other mod status' })
@@ -257,15 +289,14 @@ test('board read errors fail silently, preserve the turn, and log once per sessi
     plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} },
   })
-  await didLog
   expect(result.additionalContext).toEqual(['existing context'])
   expect((await ui.find({ type: 'Text', text: 'Other mod status' }))?.text).toBe('Other mod status')
   expect(await ui.find({ text: /Purser jobs/ })).toBeUndefined()
-  const nextUi = await $.ui.mount({
-    plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
-    props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} },
-  })
-  await nextUi.unmount()
-  expect(logs).toEqual(['Purser job board refresh failed; turn continued unchanged.'])
+  expect(logs).toEqual([])
+  await clock.advance(10_000)
+  expect(logs).toEqual([
+    'Purser job board refresh failed; turn continued unchanged. (board read: HooksError: purser: $.fs.list: fixture read failure)',
+  ])
+  expect(logs).toHaveLength(1)
   await ui.unmount()
 })
