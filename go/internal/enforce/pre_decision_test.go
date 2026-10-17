@@ -844,6 +844,18 @@ func TestPreInvalidOrchWithoutTask(t *testing.T) {
 	}
 }
 
+func TestDenyPreRoutingHelpTargetsORCHErrors(t *testing.T) {
+	malformed := mapValue(mapValue(denyPre("MALFORMED_ORCH_LINE", "Each ORCH field must use key=value syntax.")["hookSpecificOutput"]))
+	if reason := stringValue(malformed["permissionDecisionReason"]); !strings.Contains(reason, "Prepend this as the FIRST line") {
+		t.Fatalf("malformed ORCH denial is missing routing help: %q", reason)
+	}
+
+	scope := mapValue(mapValue(denyPre("INVALID_SCOPE", "Scope must contain repository-relative paths without traversal.")["hookSpecificOutput"]))
+	if reason := stringValue(scope["permissionDecisionReason"]); strings.Contains(reason, "Prepend this as the FIRST line") || !strings.Contains(reason, "Replace absolute or traversing paths") {
+		t.Fatalf("scope denial should give only its targeted repair: %q", reason)
+	}
+}
+
 func TestPreRouteDiscipline(t *testing.T) {
 	for _, tc := range []struct {
 		name, route, basis, requested, wantRoute, wantModel, wantEffort string

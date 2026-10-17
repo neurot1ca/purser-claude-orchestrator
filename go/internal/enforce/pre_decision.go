@@ -1241,7 +1241,22 @@ func loadPreConfig(repository ...string) (map[string]any, error) {
 
 func denyPre(code, message string) map[string]any {
 	reason := code + ": " + message
-	if strings.Contains(" MISSING_ORCH_LINE MALFORMED_ORCH_LINE UNKNOWN_KEY MISSING_REQUIRED_KEY INVALID_ENUM_VALUE SOL_ROUTE_NEEDS_BASIS UNBOUNDED_SCOPE NO_LIVE_THREAD ", " "+code+" ") {
+	showRoutingHelp := code == "MISSING_ORCH_LINE" || code == "MALFORMED_ORCH_LINE" ||
+		(code == "MISSING_REQUIRED_KEY" && !strings.Contains(message, "scope")) ||
+		(code == "INVALID_ENUM_VALUE" && (strings.Contains(message, "ORCH phase value") || strings.Contains(message, "ORCH reason value") || strings.Contains(message, "ORCH route value") || strings.Contains(message, "Unknown route")))
+	if code == "MISSING_REQUIRED_KEY" && strings.Contains(message, "scope") {
+		reason += " Add |scope=<path[,path...]> with repository-relative paths."
+	}
+	if code == "UNKNOWN_KEY" {
+		reason += " Remove the unsupported key or use a supported ORCH field."
+	}
+	if code == "INVALID_SCOPE" {
+		reason += " Replace absolute or traversing paths with repository-relative paths."
+	}
+	if code == "UNBOUNDED_SCOPE" {
+		reason += " Name a narrower directory or file."
+	}
+	if showRoutingHelp {
 		reason += "\n\n" + `Prepend this as the FIRST line of the prompt; the hook removes it before Codex sees it:
   ORCH|task=<stable-id>|phase=<implementation|operation>|route=<route>
   Add |scope=<path[,path...]> for implementation; omit it for operation.
