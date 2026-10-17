@@ -193,8 +193,19 @@ func TestRunChecksPassEmptyAndDeadlineSideEffects(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	exhausted := RunChecksReport(root, []profile.Check{{Name: "write-sleep", Argv: checkHelperArgv(), TimeoutSeconds: 5}}, ctx)
-	if exhausted.Status != "UNKNOWN" || exhausted.Results[0].Status != "UNKNOWN" || strings.Join(exhausted.SideEffectPaths, ",") != "generated.txt" {
+	if exhausted.Status != "UNKNOWN" || len(exhausted.Results) != 1 || exhausted.Results[0].Status != "UNKNOWN" {
 		t.Fatalf("deadline report %#v", exhausted)
+	}
+	if exhausted.Results[0].Tail == "not run: deadline" {
+		if len(exhausted.SideEffectPaths) != 0 {
+			t.Fatalf("unstarted check side effects %#v", exhausted)
+		}
+	} else if exhausted.Results[0].Tail == "timed out" || strings.HasSuffix(exhausted.Results[0].Tail, "\ntimed out") {
+		if strings.Join(exhausted.SideEffectPaths, ",") != "generated.txt" {
+			t.Fatalf("started check side effects %#v", exhausted)
+		}
+	} else {
+		t.Fatalf("unexpected deadline result %#v", exhausted.Results[0])
 	}
 }
 

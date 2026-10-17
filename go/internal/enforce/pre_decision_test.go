@@ -116,6 +116,9 @@ func TestPreReplyUsesRecordedModelBeforeCompatibility(t *testing.T) {
 }
 
 func TestPreReplyUsesRecordedEffortBeforeCompatibility(t *testing.T) {
+	oldSupport := supportsPreCoderEffort
+	supportsPreCoderEffort = func(model, effort string) bool { return model == "gpt-6-luna" && effort == "high" }
+	t.Cleanup(func() { supportsPreCoderEffort = oldSupport })
 	root, repo, state := setupRecordedReply(t, "gpt-6-luna", "medium", "gpt-6-luna", "high")
 	t.Setenv("HOME", root)
 	t.Setenv("USERPROFILE", root)
