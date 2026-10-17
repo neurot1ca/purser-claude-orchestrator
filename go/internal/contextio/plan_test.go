@@ -51,6 +51,57 @@ func TestParsePlanMilestonesBulletInlineDeclarations(t *testing.T) {
 	}
 }
 
+func TestParsePlanMilestoneDependencyCommentary(t *testing.T) {
+	for _, tc := range []struct {
+		name, dependency string
+		milestone        int
+		want             []int
+		valid            bool
+	}{
+		{"none with explanation", "None; all six lanes run in parallel", 1, nil, true},
+		{"single ID with explanation", "M1 complete; all six lanes run in parallel", 2, []int{1}, true},
+		{"list with parenthetical explanation", "M1, M2 (after the model change)", 3, []int{1, 2}, true},
+		{"explanation without ID", "after the model change", 2, nil, false},
+		{"invalid ID after comma", "M1, foo", 2, nil, false},
+		{"period glued ID", "M1.M9", 2, nil, false},
+		{"dash glued ID", "M1-M2", 2, nil, false},
+		{"colon glued ID", "M1:M2", 2, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			artifact := "## Milestones\n### M1\n**Dependency:** none\n**Write paths:** src/a.go\n### M2\n**Dependency:** none\n**Write paths:** src/b.go\n"
+			if tc.milestone == 1 {
+				artifact = "## Milestones\n### M1\n**Dependency:** " + tc.dependency + "\n**Write paths:** src/a.go\n"
+			} else if tc.milestone == 2 {
+				artifact = "## Milestones\n### M1\n**Dependency:** none\n**Write paths:** src/a.go\n### M2\n**Dependency:** " + tc.dependency + "\n**Write paths:** src/b.go\n"
+			} else {
+				artifact = "## Milestones\n### M1\n**Dependency:** none\n**Write paths:** src/a.go\n### M2\n**Dependency:** none\n**Write paths:** src/b.go\n### M3\n**Dependency:** " + tc.dependency + "\n**Write paths:** src/c.go\n"
+			}
+			if tc.name == "none with explanation" {
+				artifact = strings.ReplaceAll(artifact, "\n", "\r\n")
+			}
+			ids := []int{1}
+			if tc.milestone == 2 {
+				ids = []int{1, 2}
+			} else if tc.milestone == 3 {
+				ids = []int{1, 2, 3}
+			}
+			milestones, err := parsePlanMilestones([]byte(artifact), ids)
+			if !tc.valid {
+				if err == nil {
+					t.Fatal("invalid dependency declaration was accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := milestones[tc.milestone-1].Dependencies; !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("dependencies = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParsePlanMilestonesResolvesBareListNames(t *testing.T) {
 	artifact := []byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:** go/internal/jobs/a.go, session_maintenance.go\n")
 	milestones, err := parsePlanMilestones(artifact, []int{1})

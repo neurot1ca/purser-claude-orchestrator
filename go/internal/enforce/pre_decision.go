@@ -1303,7 +1303,7 @@ func appendPrePlanShape(prompt, phase string) string {
 		return prompt
 	}
 	block := `Required plan shape (Purser):
-Write Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), and Milestones (at most 5; each has bounded scope, observable acceptance, validation, and parallel group; same-group paths are disjoint). Make each milestone a ` + "`### M<N>`" + ` section with exactly one ` + "`**Dependency:**`" + ` field and one ` + "`**Write paths:**`" + ` field; keep each section at or below 32 KiB. Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.`
+Write Markdown with a leading Summary: section of at most 4000 characters, then sections Goal and boundaries, Current evidence (observed facts vs labelled assumptions, with paths/symbols), Decision (one recommendation and brief alternatives), and Milestones (at most 5; each has bounded scope, observable acceptance, validation, and parallel group; same-group paths are disjoint). Make each milestone a ` + "`### M<N>`" + ` section with exactly one ` + "`**Dependency:**`" + ` field holding only ` + "`none`" + ` or comma-separated ` + "`M<N>`" + ` IDs (put explanations on separate lines), and one ` + "`**Write paths:**`" + ` field; keep each section at or below 32 KiB. Risks/open decisions (at most 5, each with an owner or blocking question), and Implementation handoff (first task's paths and acceptance). Read-only: no code edits.`
 	return strings.TrimRight(prompt, " \t\r\n") + "\n\n" + block
 }
 

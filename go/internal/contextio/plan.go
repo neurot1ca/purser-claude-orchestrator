@@ -202,6 +202,9 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 	headings := regexp.MustCompile(`(?m)^(#{1,6})\s+([^\n]+)(?:\n|$)`).FindAllStringSubmatchIndex(text, -1)
 	idPattern := regexp.MustCompile(`^M([0-9]+)\b`)
 	depLine := regexp.MustCompile(`(?im)^[ \t]*(?:[-*][ \t]+)?\*\*Dependenc(?:y|ies):\*\*[ \t]*([^\n]*)`)
+	depListPattern := regexp.MustCompile(`(?i)^(none|M[1-9][0-9]*((\s*,\s*(and\s+)?M[1-9][0-9]*)|(\s+and\s+M[1-9][0-9]*))*)`)
+	depIDPattern := regexp.MustCompile(`(?i)M[1-9][0-9]*`)
+	depGluedIDPattern := regexp.MustCompile(`(?i)^\s*[-–—:.,]\s*M[0-9]`)
 	pathLine := regexp.MustCompile(`(?im)^[ \t]*(?:[-*][ \t]+)?\*\*(?:Touched paths|Touched files/dirs|Write paths):\*\*[ \t]*([^\n]*)`)
 	quotedPath := regexp.MustCompile("`([^`]+)`")
 	var result []PlanMilestone
@@ -234,10 +237,22 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 		if len(declarations) == 1 {
 			explicit = true
 			// Parallel-group annotations are not dependency declarations.
-			raw := strings.TrimSuffix(strings.TrimSpace(strings.SplitN(declarations[0][1], ". **Parallel group:**", 2)[0]), ".")
-			if !strings.EqualFold(raw, "none") {
-				for _, token := range strings.Split(raw, ",") {
-					n, err := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(token), "M"))
+			raw := strings.TrimSuffix(strings.SplitN(declarations[0][1], ". **Parallel group:**", 2)[0], "\r")
+			match := depListPattern.FindStringSubmatchIndex(raw)
+			if match == nil {
+				return nil, fmt.Errorf("invalid dependencies for %s", m.ID)
+			}
+			list := raw[match[2]:match[3]]
+			remainder := raw[match[1]:]
+			if remainder != "" && !strings.HasPrefix(remainder, " ") && !strings.HasPrefix(remainder, "\t") && !strings.HasPrefix(remainder, ";") && !strings.HasPrefix(remainder, "(") && !(strings.HasPrefix(remainder, ".") && (len(remainder) == 1 || remainder[1] == ' ' || remainder[1] == '\t')) {
+				return nil, fmt.Errorf("invalid dependencies for %s", m.ID)
+			}
+			if depGluedIDPattern.MatchString(remainder) {
+				return nil, fmt.Errorf("invalid dependencies for %s", m.ID)
+			}
+			if !strings.EqualFold(list, "none") {
+				for _, token := range depIDPattern.FindAllString(list, -1) {
+					n, err := strconv.Atoi(token[1:])
 					if err != nil || n < 1 || containsMilestone(m.Dependencies, n) {
 						return nil, fmt.Errorf("invalid dependencies for %s", m.ID)
 					}
