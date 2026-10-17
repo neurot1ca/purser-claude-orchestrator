@@ -32,7 +32,7 @@ func TestPostStartPythonWriteFixture(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.Oracle != "codex._post_start+post_tool_use_failure" || len(fixture.Cases) != 5 {
+	if fixture.Oracle != "codex._post_start+post_tool_use_failure" || len(fixture.Cases) != 6 {
 		t.Fatalf("unexpected Post start fixture: %+v", fixture)
 	}
 	for _, tc := range fixture.Cases {
@@ -81,6 +81,8 @@ func TestPostStartPythonWriteFixture(t *testing.T) {
 				if err := writeFixtureJSON(filepath.Join(root, "async_jobs", jobID+".json"), index); err != nil {
 					t.Fatal(err)
 				}
+			case "succeeded":
+				response["state"] = "SUCCEEDED"
 			}
 			event["tool_response"] = map[string]any{"structuredContent": response}
 			got, err := postStart(event, root)

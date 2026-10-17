@@ -87,8 +87,13 @@ func postStart(event map[string]any, root string) (map[string]any, error) {
 	if strings.HasPrefix(os.Getenv("CLAUDE_CODE_ENTRYPOINT"), "sdk-") {
 		mode = "foreground"
 	}
-	next := fmt.Sprintf("Run in the %s (use the PowerShell tool on Windows): %s ; if it prints STILL_WAITING, run it again; otherwise call codex_result with this jobId.", mode, waiter.Command(jobID))
-	textValue, _ := canonicalJSON(map[string]any{"jobId": jobID, "state": state, "next": next})
+	result := map[string]any{"jobId": jobID, "state": state}
+	if state == "SUCCEEDED" {
+		result["next"] = "Call codex_result with this jobId."
+	} else {
+		result["next"] = fmt.Sprintf("Run in the %s (use the PowerShell tool on Windows): %s ; if it prints STILL_WAITING, run it again; otherwise call codex_result with this jobId.", mode, waiter.Command(jobID))
+	}
+	textValue, _ := canonicalJSON(result)
 	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse",
 		field: []any{map[string]any{"type": "text", "text": string(textValue)}}}}, nil
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -360,6 +361,25 @@ func TestValidationDefaultHookRecordsWithoutLaunchingDetachedChild(t *testing.T)
 	}
 	if validation := value["validation"].(map[string]any); validation["status"] != "pending" {
 		t.Fatalf("validation result=%#v", validation)
+	}
+}
+
+func TestValidationPendingInstructionReferencesWaiter(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"main.go"})
+	value := map[string]any{"applied": true, "paths": record.Paths}
+	enqueueAppliedValidation(root, map[string]any{"jobId": record.JobID, "repoRoot": repo}, value)
+	command := stringValue(value["waiter"])
+	next := stringValue(value["next"])
+	if command == "" || strings.Contains(next, command) {
+		t.Fatalf("pending validation instruction duplicated waiter command: waiter=%q next=%q", command, next)
+	}
+	want := "Run the waiter command in the background"
+	if runtime.GOOS == "windows" {
+		want += " (use the PowerShell tool on Windows)"
+	}
+	want += "; if it prints STILL_WAITING, run it again, otherwise use its final line to report host validation."
+	if next != want {
+		t.Fatalf("pending validation next=%q, want %q", next, want)
 	}
 }
 
