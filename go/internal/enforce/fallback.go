@@ -32,8 +32,8 @@ func decideFallbackPre(parsed policy.OrchParseResult, session string, active map
 	}
 
 	if fallback != nil && active["active_coder"] == "primary" {
-		if reason(parsed) == "user_override" {
-			if !consent || evidence["question_session"] != session || evidence["question_shown"] != true || evidence["answerable"] != true {
+		if reason(parsed) == "user_override" && consent {
+			if evidence["question_session"] != session || evidence["question_shown"] != true || evidence["answerable"] != true {
 				return denyFallback("FALLBACK_CONSENT_REQUIRED", "reason=user_override requires a shown fallback question and a later user prompt.")
 			}
 			return fallbackPreDecision{Action: "approve", Kind: "consent"}

@@ -103,6 +103,36 @@ func TestFallbackPreP36Fixture(t *testing.T) {
 	}
 }
 
+func TestQuotaUserOverrideProceedsWithPrimaryAt92Percent(t *testing.T) {
+	phase, override := "implementation", "user_override"
+	got := decideFallbackPre(policy.OrchParseResult{Phase: &phase, Reason: &override}, "session",
+		map[string]any{"active_coder": "primary"}, map[string]any{"model": "fallback-model"},
+		map[string]any{"5h_used_pct": 92, "5h_resets_at": "2026-10-17T18:00:00Z"}, nil, time.Now())
+	if got.Action != "continue" {
+		t.Fatalf("decision = %#v, want proceed with primary", got)
+	}
+}
+
+func TestFallbackPendingUserOverrideApprovesSwitch(t *testing.T) {
+	phase, override := "implementation", "user_override"
+	active := map[string]any{"active_coder": "primary", "triggering_evidence": map[string]any{
+		"question_session": "session", "question_shown": true, "answerable": true,
+	}}
+	got := decideFallbackPre(policy.OrchParseResult{Phase: &phase, Reason: &override}, "session", active,
+		map[string]any{"model": "fallback-model"}, nil, nil, time.Now())
+	if got.Action != "approve" {
+		t.Fatalf("decision = %#v, want fallback approval", got)
+	}
+	project, runtimeRoot := t.TempDir(), t.TempDir()
+	writeFallbackFixtureState(t, project, runtimeRoot, active)
+	if changed, err := contextio.ApplyFallbackConsent(project, runtimeRoot, "session", true, nil, "now"); err != nil || !changed {
+		t.Fatalf("approval transition = %v, %v", changed, err)
+	}
+	if state := readFallbackFixtureState(t, project, runtimeRoot); state["active_coder"] != "fallback" {
+		t.Fatalf("approval state = %#v", state)
+	}
+}
+
 func TestFallbackReturnP37Fixture(t *testing.T) {
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "fallback.json")
 	data, err := os.ReadFile(path)
