@@ -46,7 +46,7 @@ func ReviewerRun(stdout, stderr io.Writer, args []string) int {
 	if err != nil {
 		return reviewerError(stdout, err)
 	}
-	detected, err := detect(home, root, options{})
+	detected, err := detect(home, root)
 	if err != nil {
 		return reviewerError(stdout, err)
 	}
@@ -199,7 +199,7 @@ func reviewerDefault(detected map[string]any, configuredModel, configuredEffort 
 func reviewerChoices(detected map[string]any) []map[string]any {
 	agents, _ := detected["agents"].(map[string]any)
 	choices := []map[string]any{}
-	for _, name := range []string{"codex", "claude", "agy", "opencode", "cursor"} {
+	for _, name := range []string{"codex", "claude", "agy", "opencode"} {
 		info, _ := agents[name].(map[string]any)
 		if info["available"] != true {
 			continue

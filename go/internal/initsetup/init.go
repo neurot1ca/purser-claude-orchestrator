@@ -186,7 +186,7 @@ func Run(stdout, stderr io.Writer, args []string) int {
 	}
 	configPath := filepath.Join(home, ".orchestrator", "config.toml")
 	if o.detect {
-		value, e := detect(home, root, o)
+		value, e := detect(home, root)
 		if e != nil {
 			return printError(stderr, e)
 		}
@@ -272,7 +272,7 @@ func agent(name string) map[string]any {
 	return map[string]any{"available": true, "path": p, "version": version}
 }
 
-func detect(home, root string, o options) (map[string]any, error) {
+func detect(home, root string) (map[string]any, error) {
 	configPath := filepath.Join(home, ".orchestrator", "config.toml")
 	data, err := effectiveUserConfig(root, configPath)
 	if err != nil {
@@ -286,7 +286,6 @@ func detect(home, root string, o options) (map[string]any, error) {
 			a := cursorAgent()
 			if a["available"] == true {
 				models, _ := a["models"].([]string)
-				modelSets[name] = cursorModelFacts(models)
 				a["options"] = cursorModelOptions(models)
 				a["models"] = stringsToAny(models)
 				agents[name] = a
@@ -353,15 +352,11 @@ func detect(home, root string, o options) (map[string]any, error) {
 			}
 		}
 	}
-	coderFamily := selectedFamily(data, o, providers)
 	reviewerOptions := []map[string]any{}
-	for _, name := range []string{"codex", "agy", "opencode", "cursor"} {
-		if name == "cursor" {
-			for _, option := range cursorReviewerOptions(modelSets[name], coderFamily) {
-				reviewerOptions = append(reviewerOptions, option)
-			}
-			continue
-		}
+	if claude, _ := agents["claude"].(map[string]any); claude["available"] == true {
+		reviewerOptions = append(reviewerOptions, map[string]any{"agent": "claude", "model": "claude-haiku-5-5", "label": "claude-haiku-5-5", "family": "anthropic"})
+	}
+	for _, name := range []string{"codex", "agy", "opencode"} {
 		if name == "codex" {
 			reviewerOptions = append(reviewerOptions, codexReviewerOptions(modelSets[name])...)
 			continue
@@ -378,11 +373,7 @@ func detect(home, root string, o options) (map[string]any, error) {
 			reviewerOptions = append(reviewerOptions, entry)
 		}
 	}
-	var familyValue any
-	if coderFamily != "" {
-		familyValue = coderFamily
-	}
-	return map[string]any{"agents": agents, "reviewer_options": reviewerOptions, "coder_family": familyValue, "roles": defaultMap(roles), "trusted": trusted, "profile_exists": exists(filepath.Join(root, ".orchestrator", "profile.toml")), "maintenance_enabled": maintenanceEnabled, "auto_compact_enabled": autoCompactEnabled}, nil
+	return map[string]any{"agents": agents, "reviewer_options": reviewerOptions, "roles": defaultMap(roles), "trusted": trusted, "profile_exists": exists(filepath.Join(root, ".orchestrator", "profile.toml")), "maintenance_enabled": maintenanceEnabled, "auto_compact_enabled": autoCompactEnabled}, nil
 }
 
 func codexReviewerOptions(models []map[string]any) []map[string]any {
@@ -600,61 +591,6 @@ func cursorHasFamily(ids []string, family string) bool {
 		}
 	}
 	return false
-}
-
-func cursorReviewerOptions(models []map[string]any, coderFamily string) []map[string]any {
-	options, families, seen := []map[string]any{}, []string{}, map[string]bool{}
-	for _, model := range models {
-		id, family := asString(model["id"]), asString(model["family"])
-		if family == "" {
-			continue
-		}
-		familyKey := cursormodel.Family(id)
-		if familyKey != "" && !seen[familyKey] {
-			seen[familyKey] = true
-			families = append(families, familyKey)
-		}
-	}
-	type rankedFamily struct{ key, newest string }
-	ranked := make([]rankedFamily, 0, len(families))
-	for _, familyKey := range families {
-		members := []string{}
-		for _, model := range models {
-			if cursormodel.Family(asString(model["id"])) == familyKey {
-				members = append(members, asString(model["id"]))
-			}
-		}
-		ranked = append(ranked, rankedFamily{familyKey, modelversion.NewestVersion(members)})
-	}
-	sort.SliceStable(ranked, func(i, j int) bool {
-		return ranked[i].newest != ranked[j].newest && modelversion.NewestVersion([]string{ranked[i].newest, ranked[j].newest}) == ranked[i].newest
-	})
-	if len(ranked) > 4 {
-		ranked = ranked[:4]
-	}
-	for _, family := range ranked {
-		vendor := cursorFamilyVendorFromFacts(models, family.key)
-		if vendor != "" {
-			selector := "latest:" + family.key
-			options = append(options, map[string]any{"agent": "cursor", "model": selector, "label": selector, "family": vendor})
-		}
-	}
-	for _, model := range models {
-		if asString(model["id"]) == "auto" {
-			options = append(options, map[string]any{"agent": "cursor", "model": "auto", "label": "auto", "family": nil})
-			break
-		}
-	}
-	return options
-}
-
-func cursorFamilyVendorFromFacts(models []map[string]any, familyKey string) string {
-	for _, model := range models {
-		if cursormodel.Family(asString(model["id"])) == familyKey {
-			return asString(model["family"])
-		}
-	}
-	return ""
 }
 
 func defaultMap(v map[string]any) map[string]any {
@@ -957,42 +893,6 @@ func vendorFamily(f string) string {
 		return "google"
 	}
 	return f
-}
-func selectedFamily(data map[string]any, o options, providers map[string]map[string]map[string]any) string {
-	roles, _ := data["roles"].(map[string]any)
-	coding, _ := data["coding"].(map[string]any)
-	coder := o.coder
-	if coder == "" {
-		coder = asString(roles["coder"])
-	}
-	if coder == "claude" {
-		return "anthropic"
-	}
-	model := o.model
-	if model == "" && roles["coder"] == coder {
-		routes, _ := coding["routes"].(map[string]any)
-		route := routes["normal"]
-		if m, ok := route.(map[string]any); ok {
-			model = asString(m["model"])
-		} else {
-			model = asString(route)
-		}
-	}
-	if coder == "cursor" {
-		return cursormodel.VendorFamily(model)
-	}
-	if !oneOf(coder, "codex", "agy", "opencode") {
-		return ""
-	}
-	if model == "" && coder == "codex" {
-		var cfg map[string]any
-		raw, _ := os.ReadFile(obsidian.ConfigPath())
-		_ = json.Unmarshal(raw, &cfg)
-		r, _ := cfg["routes"].(map[string]any)
-		m, _ := r["normal"].(map[string]any)
-		model = asString(m["model"])
-	}
-	return vendorFamily(asString(modelFact(model, nil, providers, "")["family"]))
 }
 func validateSelection(o options, home string) error {
 	if o.mode == "balanced" && o.coder != "codex" {

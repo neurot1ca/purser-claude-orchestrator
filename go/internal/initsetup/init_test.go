@@ -20,7 +20,7 @@ func TestCursorReviewerSetupDiscoveryUsesAgentCLIAndListedChoices(t *testing.T) 
 	bin := t.TempDir()
 	writeFakeCursorCLI(t, bin, "cursor-agent", "Available models\ngpt-5.6-codex-high - GPT\nclaude-opus-5-5-high - Claude\ngemini-3.8-flash-high - Gemini\ngrok-4.7-high - Grok\ncomposer-2.5 - Composer\nauto - Automatic\n")
 	t.Setenv("PATH", bin)
-	got, err := detect(home, root, options{})
+	got, err := detect(home, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestCursorSetupDoesNotTreatEditorLauncherAsAgentCLI(t *testing.T) {
 	bin := t.TempDir()
 	writeFakeCursorCLI(t, bin, "cursor", "Available models\ngpt-5.6-sol-high - GPT\n")
 	t.Setenv("PATH", bin)
-	got, err := detect(home, root, options{})
+	got, err := detect(home, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,15 +72,28 @@ func TestCursorSetupListingFailureIsUnavailable(t *testing.T) {
 	bin := t.TempDir()
 	writeFakeCursorCLI(t, bin, "cursor-agent", "")
 	t.Setenv("PATH", bin)
-	got, err := detect(home, root, options{})
+	got, err := detect(home, root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, present := got["agents"].(map[string]any)["cursor"]; present {
 		t.Fatalf("failed Cursor listing was shown: %#v", got["agents"])
 	}
-	if len(got["reviewer_options"].([]map[string]any)) != 0 {
-		t.Fatalf("failed Cursor listing offered reviewer choices: %#v", got["reviewer_options"])
+}
+
+func TestInitReviewerOptionsIncludeInstalledClaude(t *testing.T) {
+	home, root, restore := initTestEnvironment(t)
+	defer restore()
+	bin := t.TempDir()
+	writeFakeCursorCLI(t, bin, "claude", "Claude Code 1.0\n")
+	t.Setenv("PATH", bin)
+	got, err := detect(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := got["reviewer_options"].([]map[string]any)
+	if len(options) != 1 || options[0]["agent"] != "claude" || options[0]["model"] != "claude-haiku-5-5" {
+		t.Fatalf("Claude reviewer option = %#v", options)
 	}
 }
 
