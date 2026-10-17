@@ -34,6 +34,14 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 			return result(map[string]any{"applied": false, "reason": "resolved must be a boolean."})
 		}
 	}
+	acceptOnly := false
+	if value, ok := args["acceptOnly"]; ok {
+		var valid bool
+		acceptOnly, valid = value.(bool)
+		if !valid {
+			return result(map[string]any{"applied": false, "reason": "acceptOnly must be a boolean; use true to record acceptance without applying."})
+		}
+	}
 	id, _ := args["jobId"].(string)
 	dir := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
 	job := readJob(dir, id)
@@ -57,7 +65,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		return result(map[string]any{"state": "FAILED", "errorCode": "NOT_WORKTREE_JOB", "message": "Job has no worktree"})
 	}
 	if state != "SUCCEEDED" && !(resolved && state == "FAILED" && conflictReason == "worker_replay") {
-		return result(map[string]any{"state": "FAILED", "errorCode": "JOB_NOT_READY", "message": "Job has not succeeded"})
+		return result(map[string]any{"state": "FAILED", "errorCode": "JOB_NOT_READY", "message": "Job has not succeeded. Follow the start response's wait instructions, then call codex_result."})
 	}
 	root, err := filepath.EvalSymlinks(repo)
 	if err != nil {
@@ -83,14 +91,14 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	job.Get("worktreePath", &worktree)
 	job.Get("repoRoot", &repo)
 	job.Get("snapshot", &snapshot)
-	if args["acceptOnly"] == true {
+	if acceptOnly {
 		sessionID, _ := args["sessionId"].(string)
 		revision, _ := args["revision"].(string)
 		var reviewedSnapshot string
 		job.Get("reviewedSnapshot", &reviewedSnapshot)
 		current, digestErr := changedPathsDigest(worktree, snapshot)
 		if sessionID == "" || reviewedSnapshot == "" || digestErr != nil || revision == "" || revision != current {
-			return result(map[string]any{"accepted": false, "reason": "reviewed revision is unavailable or stale"})
+			return result(map[string]any{"accepted": false, "reason": "Reviewed revision is unavailable or stale. Call codex_result, review the refreshed bundle, then retry acceptance."})
 		}
 		acceptance := map[string]any{"revision": current, "sessionId": sessionID, "acceptedAt": time.Now().UTC().Format(time.RFC3339Nano)}
 		if err := job.Set("acceptance", acceptance); err != nil {
@@ -367,6 +375,12 @@ func applyToolResult(value map[string]any) map[string]any {
 		text = string(b)
 	}
 	_, isError := value["errorCode"]
+	if accepted, ok := value["accepted"].(bool); ok && !accepted {
+		isError = true
+	}
+	if applied, ok := value["applied"].(bool); ok && !applied {
+		isError = true
+	}
 	return map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "structuredContent": value, "isError": isError}
 }
 

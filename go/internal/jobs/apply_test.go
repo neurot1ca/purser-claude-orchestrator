@@ -146,6 +146,7 @@ func TestApplyPythonOracle(t *testing.T) {
 			Snapshot string         `json:"snapshot"`
 			Reviewed any            `json:"reviewedSnapshot"`
 			Result   map[string]any `json:"result"`
+			IsError  *bool          `json:"isError"`
 			Record   map[string]any `json:"record"`
 			Checkout string         `json:"checkout"`
 			Index    map[string]any `json:"index"`
@@ -212,6 +213,9 @@ func TestApplyPythonOracle(t *testing.T) {
 			delete(got, "next")
 			if !reflect.DeepEqual(got, c.Result) {
 				t.Errorf("result got %#v want %#v", got, c.Result)
+			}
+			if c.IsError != nil && result["isError"] != *c.IsError {
+				t.Errorf("isError got %#v want %#v", result["isError"], *c.IsError)
 			}
 			stored, err := os.ReadFile(filepath.Join(jobDir, id+".json"))
 			if err != nil {
@@ -315,6 +319,38 @@ func TestApplyAcceptanceAndForegroundPaths(t *testing.T) {
 		got := Apply(state, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
 		if got["applied"] != true {
 			t.Fatalf("foreground apply unexpectedly gated: %#v", got)
+		}
+	})
+	t.Run("string acceptOnly is rejected before apply", func(t *testing.T) {
+		id := strings.Repeat("e", 64)
+		state, _, worktree, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
+		got := Apply(state, map[string]any{"jobId": id, "acceptOnly": "true"})
+		result := got["structuredContent"].(map[string]any)
+		if result["applied"] != false || got["isError"] != true || result["reason"] != "acceptOnly must be a boolean; use true to record acceptance without applying." {
+			t.Fatalf("malformed acceptOnly was not rejected: %#v", got)
+		}
+		content, err := os.ReadFile(filepath.Join(worktree, "tracked.txt"))
+		if err != nil || string(content) != "changed\n" {
+			t.Fatalf("malformed acceptOnly reached apply: %q, %v", content, err)
+		}
+	})
+	t.Run("accepted false is an error", func(t *testing.T) {
+		got := applyToolResult(map[string]any{"accepted": false, "reason": "rejected"})
+		if got["isError"] != true || got["structuredContent"].(map[string]any)["reason"] != "rejected" {
+			t.Fatalf("accepted false was not reported as an error: %#v", got)
+		}
+	})
+	t.Run("stale acceptance text", func(t *testing.T) {
+		id := strings.Repeat("f", 64)
+		state, _, worktree, snapshot := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
+		revision, err := changedPathsDigest(worktree, snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := Apply(state, map[string]any{"jobId": id, "acceptOnly": true, "sessionId": "session-main", "revision": revision + "stale"})
+		result := got["structuredContent"].(map[string]any)
+		if got["isError"] != true || result["accepted"] != false || result["reason"] != "Reviewed revision is unavailable or stale. Call codex_result, review the refreshed bundle, then retry acceptance." {
+			t.Fatalf("stale acceptance text mismatch: %#v", got)
 		}
 	})
 }

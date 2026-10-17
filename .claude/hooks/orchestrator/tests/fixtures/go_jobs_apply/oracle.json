@@ -120,6 +120,7 @@
           "tracked.txt"
         ]
       },
+      "isError": true,
       "record": {
         "jobId": "5218622e2ee4d583bf093ca5cc9a85ff90bcbe063ee41250e10453b4aeed33e5",
         "state": "SUCCEEDED",
@@ -152,6 +153,7 @@
         "applicable": [],
         "worktreePath": "WORKTREE"
       },
+      "isError": true,
       "record": {
         "jobId": "fa9e1d22205ad852b0dc9509ec4e31644e88742c4dfce93c08f011fee1cd8a1a",
         "state": "SUCCEEDED",
@@ -184,8 +186,9 @@
       "result": {
         "state": "FAILED",
         "errorCode": "JOB_NOT_READY",
-        "message": "Job has not succeeded"
+        "message": "Job has not succeeded. Follow the start response's wait instructions, then call codex_result."
       },
+      "isError": true,
       "record": {
         "jobId": "2f66e6e4d95d69d19bdfd4477821f817e98c51a794a572f48a2a11fd1e20da29",
         "state": "RUNNING",
