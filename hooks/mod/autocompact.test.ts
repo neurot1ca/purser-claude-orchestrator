@@ -1,10 +1,11 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, RESUME_PROMPT, thresholdFrom, WAKE_MARKER, wakeContext } from './autocompact.js'
+import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, resetAutoCompactForTests, RESUME_PROMPT, thresholdFrom, WAKE_MARKER, wakeContext } from './autocompact.js'
 
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
 const normalized = (path: string) => path.replace(/\\/g, '/').replace(/(^|:)[A-Za-z]:(?=\/)/g, '$1')
 
 function engine(on, tokens: number, env: Record<string, string> = {}, failures = 0, setting: string | null = '{"enabled": true}') {
+  resetAutoCompactForTests()
   const calls = { compacts: 0 }
   const reads: string[] = []
   const clock = mock.clock(on)
@@ -15,6 +16,7 @@ function engine(on, tokens: number, env: Record<string, string> = {}, failures =
     return { value: setting }
   })
   on('turn.complete', async () => ({ text: 'ok' }))
+  on('prompt.submit', async (_$, e) => ({ text: e.text, origin: e.origin }))
   on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [] } }))
   on('session.compact', async (_$, e) => {
     calls.compacts++
@@ -45,6 +47,81 @@ test('leaves turns under the threshold alone', async ($, on) => {
   await $.turn.complete(TURN)
   await clock.advance(20_000)
   expect(calls.compacts).toBe(0)
+})
+
+test('arms the idle timer only from half threshold through just below threshold', async ($, on) => {
+  const { calls, clock } = engine(on, 130_000)
+  await $.turn.complete(TURN)
+  await clock.advance(271_000)
+  expect(calls.compacts).toBe(1)
+})
+
+test('does not arm the idle timer below half threshold', async ($, on) => {
+  const { calls, clock } = engine(on, 124_999)
+  await $.turn.complete(TURN)
+  await clock.advance(271_000)
+  expect(calls.compacts).toBe(0)
+})
+
+test('a prompt before the cache timer fires prevents compaction', async ($, on) => {
+  const { calls, clock } = engine(on, 130_000)
+  await $.turn.complete(TURN)
+  await $.prompt.submit({ text: 'continue', asUser: true })
+  await clock.advance(270_000)
+  expect(calls.compacts).toBe(0)
+})
+
+test('the cache timer compacts at the default TTL minus its margin', async ($, on) => {
+  const { calls, clock } = engine(on, 130_000)
+  await $.turn.complete(TURN)
+  await clock.advance(269_999)
+  expect(calls.compacts).toBe(0)
+  await clock.advance(1)
+  await clock.advance(1_000)
+  expect(calls.compacts).toBe(1)
+})
+
+test('cache creation after a long idle gap does not infer a one hour TTL', async ($, on) => {
+  const { calls, clock } = engine(on, 130_000)
+  await $.turn.complete(TURN)
+  await $.prompt.submit({ text: 'cancel the pending idle timer', asUser: true })
+  await clock.advance(300_001)
+  await $.prompt.submit({ text: 'next', asUser: true })
+  await $.turn.complete({ ...TURN, turnId: 't-write', usage: { model: 'test', input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 1 } })
+  await clock.advance(269_999)
+  expect(calls.compacts).toBe(0)
+  await clock.advance(1)
+  await clock.advance(1_000)
+  expect(calls.compacts).toBe(1)
+})
+
+test('an aborted turn consumes the pending long-gap inference', async ($, on) => {
+  const { calls, clock } = engine(on, 130_000)
+  await $.turn.complete(TURN)
+  await $.prompt.submit({ text: 'cancel the pending idle timer', asUser: true })
+  await clock.advance(300_001)
+  await $.prompt.submit({ text: 'next', asUser: true })
+  await $.turn.complete({ ...TURN, turnId: 't-aborted', reason: 'aborted', isAborted: true, usage: { model: 'test', input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1, cache_creation_input_tokens: 0 } })
+  await $.turn.complete({ ...TURN, turnId: 't-later', usage: { model: 'test', input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1, cache_creation_input_tokens: 0 } })
+  await clock.advance(269_999)
+  expect(calls.compacts).toBe(0)
+  await clock.advance(1)
+  await clock.advance(1_000)
+  expect(calls.compacts).toBe(1)
+})
+
+test('infers a one hour cache TTL from cache usage after a long idle gap', async ($, on) => {
+  const { calls, clock } = engine(on, 130_000)
+  await $.turn.complete(TURN)
+  await $.prompt.submit({ text: 'cancel the pending idle timer', asUser: true })
+  await clock.advance(300_001)
+  await $.prompt.submit({ text: 'next', asUser: true })
+  await $.turn.complete({ ...TURN, turnId: 't2', usage: { model: 'test', input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1, cache_creation_input_tokens: 0 } })
+  await clock.advance(3_570_000)
+  expect(calls.compacts).toBe(0)
+  await clock.advance(29_000)
+  await clock.advance(1_000)
+  expect(calls.compacts).toBe(1)
 })
 
 test('the off switch disables it', async ($, on) => {

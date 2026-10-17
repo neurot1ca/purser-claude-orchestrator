@@ -16,6 +16,10 @@ async function runtimeStateRoot($): Promise<string | undefined> {
 
 export const DEFAULT_THRESHOLD = 250_000
 const RETRY_DELAYS_MS = [1_000, 3_000, 10_000]
+const DEFAULT_CACHE_TTL_MS = 5 * 60_000
+const LONG_CACHE_TTL_MS = 60 * 60_000
+const CACHE_MARGIN_MS = 30_000
+const LONG_GAP_MS = 5 * 60_000
 
 const LOG_LINES = 40
 
@@ -24,6 +28,39 @@ let lines: string[] = []
 // The size the last main-conversation compaction left, from its own result:
 // usage() cannot report it right after a /compact command.
 let compactedTokens: number | undefined
+let cacheTtlMs = DEFAULT_CACHE_TTL_MS
+let previousTurnEnd: number | undefined
+let longGapForNextTurn = false
+let idle = true
+let idleTimer: { cancel: () => void } | undefined
+let idleGeneration = 0
+let idleTimerTokens: number | undefined
+let pendingWake: string | undefined
+
+// Test isolation only; the engine keeps one module instance for the session.
+export function resetAutoCompactForTests() {
+  idleTimer?.cancel()
+  inFlight = false
+  lines = []
+  compactedTokens = undefined
+  cacheTtlMs = DEFAULT_CACHE_TTL_MS
+  previousTurnEnd = undefined
+  longGapForNextTurn = false
+  idle = true
+  idleTimer = undefined
+  idleGeneration++
+  idleTimerTokens = undefined
+  pendingWake = undefined
+}
+
+function dropIdleTimer($, reason: string) {
+  if (!idleTimer) return
+  idleGeneration++
+  idleTimer.cancel()
+  idleTimer = undefined
+  void trace($, `idle timer dropped (${idleTimerTokens ?? 'unknown'} tokens, ${reason}), TTL ${cacheTtlMs}ms`)
+  idleTimerTokens = undefined
+}
 
 export function thresholdFrom(value: string | undefined): number | undefined {
   if (value === '0' || value?.toLowerCase() === 'off') return undefined
@@ -80,9 +117,6 @@ export function wakeContext(notice: string): string {
   return `Purser's automatic /compact just ran and submitted "${WAKE_MARKER}" to wake this session. Tell the user in the user's language exactly one line, translated from: "${notice}" ${RESUME_PROMPT}`
 }
 
-// The context for the next wake marker Purser submits.
-let pendingWake: string | undefined
-
 // /compact leaves the session idle, so wake it: the next turn carries on with
 // the work that was running.
 async function resume($, before: number) {
@@ -135,26 +169,61 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
 
 export function registerAutoCompact(on) {
   on('prompt.submit', async ($, e, next) => {
+    if (!(e.text === WAKE_MARKER && e.origin?.kind === 'plugin')) {
+      idle = false
+      dropIdleTimer($, 'prompt submitted')
+      const submittedAt = await $.clock.now()
+      longGapForNextTurn = previousTurnEnd !== undefined && submittedAt - previousTurnEnd > LONG_GAP_MS
+    }
     if (pendingWake === undefined || e.text !== WAKE_MARKER || e.origin?.kind !== 'plugin') return next(e)
     const context = pendingWake
     pendingWake = undefined
     return next({ ...e, context: [...(e.context ?? []), context] })
   })
   on('session.compact', async ($, e, next) => {
+    dropIdleTimer($, 'compaction')
     const result = await next(e)
     if (!e.agentId && e.trigger !== 'precompute' && result && 'tokensAfter' in result) compactedTokens = result.tokensAfter
     return result
   })
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId || e.isAborted || inFlight) return result
+    if (e.agentId) return result
+    const inferLongCache = longGapForNextTurn
+    longGapForNextTurn = false
+    idle = true
+    previousTurnEnd = await $.clock.now()
+    if (e.isAborted || inFlight) return result
     try {
       const threshold = thresholdFrom(await $.env.get('PURSER_AUTO_COMPACT_TOKENS'))
       if (threshold === undefined || !(await optedIn($))) return result
       const tokens = (await $.session.usage()).context.tokens
+      const cacheReads = e.usage?.cache_read_input_tokens ?? 0
+      if (inferLongCache && cacheReads > 0) cacheTtlMs = LONG_CACHE_TTL_MS
       const compacting = tokens !== undefined && tokens >= threshold
       await trace($, `turn ${e.turnId}: ${tokens ?? 'no'} tokens, threshold ${threshold}, ${compacting ? 'compacting' : 'below'}`)
-      if (!compacting) return result
+      if (!compacting) {
+        if (idle && tokens !== undefined && tokens >= threshold / 2) {
+          const ttl = cacheTtlMs
+          const generation = ++idleGeneration
+          idleTimerTokens = tokens
+          await trace($, `idle timer armed at ${tokens} tokens, TTL ${ttl}ms`)
+          idleTimer = $.clock.after(Math.max(0, ttl - CACHE_MARGIN_MS), async () => {
+            if (generation !== idleGeneration) return
+            idleTimer = undefined
+            await trace($, `idle timer fired at ${tokens} tokens, TTL ${ttl}ms`)
+            if (!idle || inFlight) {
+              idleTimerTokens = undefined
+              await trace($, `idle timer dropped at ${tokens} tokens, TTL ${ttl}ms (session not idle)`)
+              return
+            }
+            idleTimerTokens = undefined
+            inFlight = true
+            compactWhenIdle($, tokens)
+          })
+        }
+        return result
+      }
       inFlight = true
       compactWhenIdle($, tokens)
     } catch (error) {
