@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -179,7 +180,11 @@ func TestPostStartWaiterUsesExecutablePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := stringValue(payload["next"])
-	if !strings.Contains(next, `"`+executable+`" wait `+jobID+` --session-owner `) || strings.Contains(strings.ToLower(next), "python") {
+	command := `"` + executable + `" wait ` + jobID + ` --session-owner `
+	if runtime.GOOS == "windows" {
+		command = "& '" + executable + "' wait " + jobID + " --session-owner "
+	}
+	if !strings.Contains(next, command) || !strings.Contains(next, " wait ") || strings.Contains(strings.ToLower(next), "python") {
 		t.Fatalf("next command does not invoke Go waiter by executable path: %s", next)
 	}
 }
@@ -297,8 +302,8 @@ func normalizePostStart(value any, root, repo, project string) any {
 		var payload map[string]any
 		if json.Unmarshal([]byte(item), &payload) == nil {
 			if next, ok := payload["next"].(string); ok {
-				const commandPrefix = `Run in the background (use the PowerShell tool on Windows): "`
-				const waiterSeparator = `" wait `
+				const commandPrefix = `Run in the background (use the PowerShell tool on Windows): `
+				const waiterSeparator = ` wait `
 				if strings.HasPrefix(next, commandPrefix) {
 					if separator := strings.Index(next[len(commandPrefix):], waiterSeparator); separator >= 0 {
 						jobCommand := next[len(commandPrefix)+separator+len(waiterSeparator):]
@@ -308,7 +313,7 @@ func normalizePostStart(value any, root, repo, project string) any {
 								jobCommand = jobCommand[:start] + jobCommand[start+end:]
 							}
 						}
-						payload["next"] = commandPrefix + `__PYTHON__" "__WAITER__" ` + jobCommand
+						payload["next"] = commandPrefix + `__WAITER__ wait ` + jobCommand
 						if normalized, err := canonicalJSON(payload); err == nil {
 							item = string(normalized)
 						}

@@ -148,6 +148,26 @@ func TestValidationCommandQuotesArgumentsForCurrentShell(t *testing.T) {
 	}
 }
 
+func TestCommandUsesPowerShellCallOperatorOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows PowerShell command")
+	}
+	command := waitercommand.Command("job-id")
+	if !strings.HasPrefix(command, "& '") || !strings.Contains(command, "' wait job-id --session-owner ") {
+		t.Fatalf("Command is not invokable in PowerShell: %q", command)
+	}
+}
+
+func TestCommandKeepsUnixInvocationUnchanged(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell command")
+	}
+	command := waitercommand.Command("job-id")
+	if !strings.HasPrefix(command, `"`) || !strings.Contains(command, `" wait job-id --session-owner `) || strings.HasPrefix(command, "& ") {
+		t.Fatalf("Command changed from the Unix shell form: %q", command)
+	}
+}
+
 func TestStalledJobSurfacesOnceAndRerunWaitsUntilTerminal(t *testing.T) {
 	root := t.TempDir()
 	lastActivity := time.Now().Add(-10 * time.Minute)

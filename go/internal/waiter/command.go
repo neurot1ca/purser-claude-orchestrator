@@ -21,6 +21,9 @@ func Command(jobID string) string {
 	if owner, err := SessionOwner(); err == nil {
 		token = owner.String()
 	}
+	if runtime.GOOS == "windows" {
+		return "& " + powerShellQuote(executable) + " wait " + jobID + " --session-owner " + token
+	}
 	return `"` + executable + `" wait ` + jobID + ` --session-owner ` + token
 }
 
