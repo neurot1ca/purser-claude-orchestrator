@@ -187,7 +187,7 @@ func bridgePanic(value any, args map[string]any) (BridgeOutcome, error) {
 	if provider == "" {
 		provider = "agy"
 	}
-	attrs := map[string]any{"reason": "REVIEWER_BRIDGE_EXCEPTION", "review_status": "UNAVAILABLE", "available": false, "provider": provider, "result": Reviewer1Unavailable, "validation": "UNKNOWN", "findings": []map[string]string{FindingMap("REVIEWER_BRIDGE_EXCEPTION", "Reviewer-1 failed unexpectedly ("+name+").")}, "error_code": "REVIEWER_BRIDGE_EXCEPTION", "reviewer1_model_requested": model, "served_model_attestation": "UNAVAILABLE"}
+	attrs := map[string]any{"reason": "REVIEWER_BRIDGE_EXCEPTION", "review_status": "UNAVAILABLE", "available": false, "provider": provider, "result": Reviewer1Unavailable, "validation": "UNKNOWN", "findings": []map[string]string{FindingMap("REVIEWER_BRIDGE_EXCEPTION", "The reviewer failed unexpectedly ("+name+").")}, "error_code": "REVIEWER_BRIDGE_EXCEPTION", "reviewer1_model_requested": model, "served_model_attestation": "UNAVAILABLE"}
 	return BridgeOutcome{Outcome: "unavailable", Attributes: attrs}, &BridgeError{Code: "REVIEWER_BRIDGE_EXCEPTION", Err: fmt.Errorf("reviewer panic (%s)", name)}
 }
 
@@ -309,7 +309,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 		return bridgeOutcome(Unavailable("REVIEWER_ADAPTER_UNAVAILABLE", "No reviewer adapter is registered for "+provider+".", config, provider))
 	}
 	if provider == "cursor" && config["reviewer1_internal_cursor_enabled"] != true {
-		return bridgeOutcome(Unavailable("REVIEWER_CURSOR_CONFINEMENT_UNVERIFIED", "Cursor Reviewer-1 is unavailable until live confinement is verified.", config, provider))
+		return bridgeOutcome(Unavailable("REVIEWER_CURSOR_CONFINEMENT_UNVERIFIED", "Cursor reviewer is unavailable until live confinement is verified.", config, provider))
 	}
 	budget := defaultPacketBudget
 	if n, ok := finiteNumber(config["reviewer1_packet_max_bytes"]); ok && n > 0 {
@@ -380,7 +380,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	if provider == "agy" || provider == "codex" {
 		prompt = reviewerPromptWithPacket(ready.Encoded)
 	} else if provider == "cursor" {
-		prompt = "You are Reviewer-1. Read only the JSON packet at the exact path below. Return only JSON matching the supplied schema file. Do not inspect unrelated files, infer hidden reasoning, or accept an implementer narrative. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. Report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_PATH=" + packetPath + "\nREVIEW_SCHEMA_PATH=" + filepath.Join(working, "reviewer1-output-schema.json")
+		prompt = "You are the reviewer. Read only the JSON packet at the exact path below. Return only JSON matching the supplied schema file. Do not inspect unrelated files, infer hidden reasoning, or accept an implementer narrative. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. Report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_PATH=" + packetPath + "\nREVIEW_SCHEMA_PATH=" + filepath.Join(working, "reviewer1-output-schema.json")
 	}
 	command, err := adapter.BuildCommand(prompt, reviewSchema, config, options)
 	if err != nil {
@@ -516,7 +516,7 @@ func reviewerFailureMessage(code string, retries, exitCode int) string {
 func diagnosticReviewerArgv(command []string) []string {
 	argv := append([]string(nil), command...)
 	for i, arg := range argv {
-		if strings.Contains(arg, "You are Reviewer-1.") {
+		if strings.Contains(arg, "You are the reviewer.") {
 			argv[i] = fmt.Sprintf("<omitted %d bytes>", len(arg))
 		}
 		if arg == "--json-schema" && i+1 < len(argv) {

@@ -371,7 +371,7 @@ func TestNativeReviewerDiagnosticRecordsFailedLaunchDetails(t *testing.T) {
 		if !ok {
 			t.Fatalf("argv_flags[%d] = %#v", i, value)
 		}
-		if strings.Contains(arg, "You are Reviewer-1.") {
+		if strings.Contains(arg, "You are the reviewer.") {
 			t.Fatalf("prompt leaked in argv_flags: %q", arg)
 		}
 		if strings.HasPrefix(arg, "<omitted ") {

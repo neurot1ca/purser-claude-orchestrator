@@ -218,7 +218,7 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 			"--model", model.(string), "--effort", effort, prompt, "--tools", "Read,Glob,Grep"}, nil
 	case "cursor":
 		if config["reviewer1_internal_cursor_enabled"] != true {
-			return nil, errors.New("Cursor Reviewer-1 is unavailable until confinement is verified")
+			return nil, errors.New("Cursor reviewer is unavailable until confinement is verified")
 		}
 		cwd, err := resolveReviewerPath(options.WorkingDirectory)
 		if err != nil {
@@ -340,7 +340,7 @@ func RefuseUnsafeFlags(command []string, repositoryRoot string) error {
 			return &CommandRefused{"--add-dir names an unresolvable path"}
 		}
 		if withinPath(candidate, root) {
-			return &CommandRefused{"--add-dir must never grant Reviewer-1 access to the repository under review"}
+			return &CommandRefused{"--add-dir must never grant reviewer access to the repository under review"}
 		}
 	}
 	return nil
@@ -355,7 +355,7 @@ func RefuseWorkingDirectory(workingDirectory, repositoryRoot string) error {
 		return err
 	}
 	if withinPath(working, repository) {
-		return &CommandRefused{"the Reviewer-1 working directory must be outside the repository under review"}
+		return &CommandRefused{"the reviewer working directory must be outside the repository under review"}
 	}
 	return nil
 }
@@ -389,9 +389,9 @@ func flagValue(command []string, name string) string {
 	return ""
 }
 func ReviewPrompt(path string) string {
-	return "You are Reviewer-1. Read and review only the JSON packet at the exact path below. Do not inspect unrelated files, infer hidden reasoning, or accept an implementer narrative. Return only the supplied JSON schema. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. The normal absence of orchestrator validation evidence is not by itself grounds for UNCERTAIN; report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_PATH=" + path
+	return "You are the reviewer. Read and review only the JSON packet at the exact path below. Do not inspect unrelated files, infer hidden reasoning, or accept an implementer narrative. Return only the supplied JSON schema. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. The normal absence of orchestrator validation evidence is not by itself grounds for UNCERTAIN; report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_PATH=" + path
 }
 
 func reviewerPromptWithPacket(packet []byte) string {
-	return "You are Reviewer-1. Review only the complete JSON packet included below. Do not inspect files or run commands. Do not infer hidden reasoning or accept an implementer narrative. Return only the supplied JSON schema. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. The normal absence of orchestrator validation evidence is not by itself grounds for UNCERTAIN; report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_JSON:\n" + string(packet)
+	return "You are the reviewer. Review only the complete JSON packet included below. Do not inspect files or run commands. Do not infer hidden reasoning or accept an implementer narrative. Return only the supplied JSON schema. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. The normal absence of orchestrator validation evidence is not by itself grounds for UNCERTAIN; report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_JSON:\n" + string(packet)
 }

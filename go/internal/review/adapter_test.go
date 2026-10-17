@@ -300,7 +300,7 @@ type adapterGolden struct {
 	} `json:"launch"`
 }
 
-func TestAdapterRefusalsMatchPython(t *testing.T) {
+func TestReviewerAccessRefusals(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if err := RefuseUnsafeFlags([]string{"agy", "--mode", "plan", "--disable-slash-commands"}, ""); err == nil || err.Error() != "--disable-slash-commands silently voids --mode plan; refusing unsafe reviewer command" {
 		t.Fatalf("unsafe refusal = %v", err)
@@ -309,10 +309,10 @@ func TestAdapterRefusalsMatchPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RefuseWorkingDirectory(filepath.Join(repository, "inside"), repository); err == nil || err.Error() != "the Reviewer-1 working directory must be outside the repository under review" {
+	if err := RefuseWorkingDirectory(filepath.Join(repository, "inside"), repository); err == nil || err.Error() != "the reviewer working directory must be outside the repository under review" {
 		t.Fatalf("cwd refusal = %v", err)
 	}
-	if err := RefuseUnsafeFlags([]string{"agy", "--add-dir", filepath.Join(repository, "nested")}, repository); err == nil || err.Error() != "--add-dir must never grant Reviewer-1 access to the repository under review" {
+	if err := RefuseUnsafeFlags([]string{"agy", "--add-dir", filepath.Join(repository, "nested")}, repository); err == nil || err.Error() != "--add-dir must never grant reviewer access to the repository under review" {
 		t.Fatalf("repository add-dir refusal = %v", err)
 	}
 }

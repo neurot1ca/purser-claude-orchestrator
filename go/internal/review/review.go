@@ -58,7 +58,7 @@ const (
 	PhasePlan      = "PHASE_PLAN"
 )
 
-// Gate applies the mechanical delta threshold before deciding whether to run Reviewer-1.
+// Gate applies the mechanical delta threshold before deciding whether to run the reviewer.
 func Gate(phase, route string, routeKnown bool, deltaFiles, deltaLines, maxFiles, maxLines int, reviewerAvailable bool) GateDecision {
 	if phase == "operation" || (phase == "plan" && route == "plan_standard") {
 		reason := PhaseOperation
@@ -198,7 +198,7 @@ func buildCommand(request Request) ([]string, error) {
 }
 
 func reviewPrompt(path string) string {
-	return "You are Reviewer-1. Read and review only the JSON packet at the exact path below. Do not inspect unrelated files, infer hidden reasoning, or accept an implementer narrative. Return only the supplied JSON schema. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. The normal absence of orchestrator validation evidence is not by itself grounds for UNCERTAIN; report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_PATH=" + path
+	return "You are the reviewer. Read and review only the JSON packet at the exact path below. Do not inspect unrelated files, infer hidden reasoning, or accept an implementer narrative. Return only the supplied JSON schema. Use NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE only when the complete diff and supplied contract establish no material issue. Use UNCERTAIN when the diff or context needed to assess the diff is insufficient. The normal absence of orchestrator validation evidence is not by itself grounds for UNCERTAIN; report validation UNKNOWN without inferring that validation ran.\n\nREVIEW_PACKET_PATH=" + path
 }
 
 func canonicalJSON(value any) ([]byte, error) {
