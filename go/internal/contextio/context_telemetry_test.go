@@ -108,7 +108,7 @@ func TestContextTelemetryPromptReplacesUnstoppedPriorRead(t *testing.T) {
 		t.Fatalf("prompt response %q: %v", output, err)
 	}
 	hook := response["hookSpecificOutput"].(map[string]any)
-	if hook["hookEventName"] != "UserPromptSubmit" || hook["additionalContext"] != "The user mentioned planning; offer /purser:plan once in this session if you have not already." {
+	if hook["hookEventName"] != "UserPromptSubmit" || hook["additionalContext"] != "Before drafting any plan yourself, ask the user whether to run /purser:plan (the coder writes it, saving your tokens); do not write the plan in chat first." {
 		t.Fatalf("planning context = %#v", hook)
 	}
 	turn, reason := loadTurn(filepath.Join(state, "context_io", "turns", sessionKey(session)+".json"))

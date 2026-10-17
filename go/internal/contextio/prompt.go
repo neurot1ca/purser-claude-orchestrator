@@ -10,7 +10,9 @@ import (
 )
 
 var planningWord = regexp.MustCompile(`(?i)\b(?:plans?|planning|planned|planla\w*|planı\w*|planın\w*|plan[ıiuü]\w*)\b`)
-var planCommand = regexp.MustCompile(`(?i)^\s*/purser:plan(?:\s|$)`)
+var planToken = regexp.MustCompile(`(?i)/purser:plan\b`)
+
+const planningHintText = "Before drafting any plan yourself, ask the user whether to run /purser:plan (the coder writes it, saving your tokens); do not write the plan in chat first."
 
 func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 	recordPromptTurn(event, processStart)
@@ -41,7 +43,7 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 			languageLine, injectPlan := contextInjections(statePath, session, language, planningHint(event["prompt"]), true)
 			planLine := ""
 			if injectPlan {
-				planLine = "The user mentioned planning; offer /purser:plan once in this session if you have not already."
+				planLine = planningHintText
 			}
 			state := readAdvisorState(statePath, session)
 			lifecycle := lifecycleGuidance(state)
@@ -60,7 +62,7 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 	languageLine := languageInstruction(language)
 	planLine := ""
 	if planningHint(event["prompt"]) {
-		planLine = "The user mentioned planning; offer /purser:plan once in this session if you have not already."
+		planLine = planningHintText
 	}
 	additional := joinContext(languageLine, planLine)
 	if additional == "" {
@@ -100,7 +102,11 @@ func RecordAdviceWritten(event map[string]any, output []byte) {
 
 func planningHint(value any) bool {
 	prompt, ok := value.(string)
-	return ok && !planCommand.MatchString(prompt) && planningWord.MatchString(prompt)
+	if !ok {
+		return false
+	}
+	prompt = systemReminder.ReplaceAllString(prompt, " ")
+	return !planToken.MatchString(prompt) && planningWord.MatchString(prompt)
 }
 
 func recordPromptTurn(event map[string]any, processStart time.Time) {

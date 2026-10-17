@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## Unreleased
+
+- **Fixed:** the planning hint now tells Claude to ask before drafting a plan itself, and no longer fires on host-injected reminders that name /purser:plan.
+
 ## 0.1.171 — 2026-10-17
 
 - **Added:** the plugin ships the Purser logo as its icon.
