@@ -39,7 +39,7 @@
           "workspace-write"
         ],
         "cwd": "fixture-repo",
-        "stdin": "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
+        "stdin": "Micro-repair request: The reviewer flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
         "timeout": 45,
         "env_sentinel": "present"
       }
@@ -69,7 +69,7 @@
           "workspace-write"
         ],
         "cwd": "fixture-repo",
-        "stdin": "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
+        "stdin": "Micro-repair request: The reviewer flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
         "timeout": 45,
         "env_sentinel": "present"
       }
@@ -99,7 +99,7 @@
           "workspace-write"
         ],
         "cwd": "fixture-repo",
-        "stdin": "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
+        "stdin": "Micro-repair request: The reviewer flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
         "timeout": 45,
         "env_sentinel": "present"
       }
@@ -129,7 +129,7 @@
           "workspace-write"
         ],
         "cwd": "fixture-repo",
-        "stdin": "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
+        "stdin": "Micro-repair request: The reviewer flagged the following issues in your previous diff:\n- F1: mechanical fix\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
         "timeout": 45,
         "env_sentinel": "present"
       }
@@ -159,7 +159,7 @@
           "workspace-write"
         ],
         "cwd": "fixture-repo",
-        "stdin": "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n- F: ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
+        "stdin": "Micro-repair request: The reviewer flagged the following issues in your previous diff:\n- F: ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\nYou are strictly restricted to modifying files within scope: src.\nPlease fix these issues directly in the worktree and ensure tests pass.",
         "timeout": 45,
         "env_sentinel": "present"
       }

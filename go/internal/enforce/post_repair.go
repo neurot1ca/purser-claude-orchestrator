@@ -119,5 +119,5 @@ func postRepairPrompt(findings []postRepairFinding, scope []string) string {
 	if len(scope) > 0 {
 		scopeText = "\nYou are strictly restricted to modifying files within scope: " + strings.Join(scope, ", ") + "."
 	}
-	return "Micro-repair request: Reviewer-1 flagged the following issues in your previous diff:\n" + bulletText + scopeText + "\nPlease fix these issues directly in the worktree and ensure tests pass."
+	return "Micro-repair request: The reviewer flagged the following issues in your previous diff:\n" + bulletText + scopeText + "\nPlease fix these issues directly in the worktree and ensure tests pass."
 }

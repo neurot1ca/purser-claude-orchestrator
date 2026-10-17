@@ -197,7 +197,7 @@
             "scope/file-1.txt",
             "scope/file-2.txt"
           ],
-          "reason": "Reviewer-1 did not receive a complete packet.",
+          "reason": "Reviewer did not receive a complete packet.",
           "reviewed": []
         },
         "findings": [
@@ -253,7 +253,7 @@
             "scope/file-1.txt",
             "scope/file-2.txt"
           ],
-          "reason": "Only delegated in-scope paths were sent to Reviewer-1.",
+          "reason": "Only delegated in-scope paths were sent to the reviewer.",
           "reviewed": [
             "scope/file-0.txt"
           ]

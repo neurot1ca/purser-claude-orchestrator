@@ -17,7 +17,7 @@ func applyPostReviewerOutcome(root string, event, pending, bundle, delta, classi
 	status := stringValue(attrs["review_status"])
 	if result != "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE" && result != "CHANGES_REQUIRED" && result != "UNCERTAIN" && result != "REVIEWER1_UNAVAILABLE" {
 		result = "UNCERTAIN"
-		bundle["findings"] = appendPostFinding(bundle["findings"], "REVIEWER_RESULT_INVALID", "Reviewer-1 returned an invalid result.")
+		bundle["findings"] = appendPostFinding(bundle["findings"], "REVIEWER_RESULT_INVALID", "Reviewer returned an invalid result.")
 	}
 	if status == "NOT_RUN_INCOMPLETE_PACKET" || bridge.Outcome == "incomplete" {
 		result = "UNCERTAIN"
@@ -44,7 +44,7 @@ func applyPostReviewerOutcome(root string, event, pending, bundle, delta, classi
 
 	findings := postReviewerFindings(attrs["findings"])
 	if code := stringValue(attrs["error_code"]); code == "REVIEWER_RESPONSE_INVALID" {
-		message := "Reviewer-1 response was invalid."
+		message := "Reviewer response was invalid."
 		if values := postReviewerFindings(attrs["findings"]); len(values) > 0 {
 			message = stringValue(values[0]["message"])
 		}
@@ -70,15 +70,15 @@ func applyPostReviewerOutcome(root string, event, pending, bundle, delta, classi
 	}
 	if jobPaths != nil {
 		var reviewed []string
-		reason := "Some job delta paths were excluded from Reviewer-1's packet."
+		reason := "Some job delta paths were excluded from the reviewer's packet."
 		if status == "NOT_RUN_INCOMPLETE_PACKET" || bridge.Outcome == "incomplete" {
-			reason = "Reviewer-1 did not receive a complete packet."
+			reason = "Reviewer did not receive a complete packet."
 		} else {
 			if classified, valid := classification["in_scope_paths"]; valid {
 				if scopePaths, valid := postStringList(classified); valid {
 					reviewed = scopePaths
 					if deltaPaths, valid := postStringList(delta["changed_paths"]); valid && !sameStringSet(reviewed, deltaPaths) {
-						reason = "Only delegated in-scope paths were sent to Reviewer-1."
+						reason = "Only delegated in-scope paths were sent to the reviewer."
 					}
 				}
 			} else if paths, valid := postStringList(delta["changed_paths"]); valid {

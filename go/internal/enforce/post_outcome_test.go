@@ -10,7 +10,7 @@ import (
 	"purser-hook/internal/review"
 )
 
-func TestPostReviewerOutcomePythonFixture(t *testing.T) {
+func TestPostReviewerOutcomeDisplayNamePythonFixture(t *testing.T) {
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "post_outcome.json")
 	data, err := os.ReadFile(path)
 	if err != nil {

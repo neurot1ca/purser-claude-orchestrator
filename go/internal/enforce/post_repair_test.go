@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestPostRepairPythonFixture(t *testing.T) {
+func TestPostRepairReviewerDisplayNamePythonFixture(t *testing.T) {
 	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/post_repair.json")
 	if err != nil {
 		t.Fatal(err)
