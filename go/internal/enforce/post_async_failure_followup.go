@@ -16,6 +16,14 @@ func PostToolUseFailureAsyncFollowup(event map[string]any, root string) map[stri
 	if root == "" {
 		return failureErrorOutput("state root is missing")
 	}
+	if _, artifactRequested := mapValue(event["tool_input"])["artifact"]; artifactRequested && strings.HasSuffix(tool, "__codex_result") {
+		// The outer failure hook binds the MCP call; verify job ownership too.
+		// A failed read must not claim or consume the worker's result.
+		if _, _, _, _, err := asyncOwned(root, event, stringValue(event["cwd"])); err != nil {
+			return failureErrorOutput(failureErrorText(err))
+		}
+		return nil
+	}
 	lock, index, pending, _, cached, err := claimAsyncResult(root, event, stringValue(event["cwd"]))
 	if err != nil {
 		diagnostic := postDiagnostic(event, err)
@@ -51,7 +59,8 @@ func PostToolUseFailureAsyncFollowup(event map[string]any, root string) map[stri
 	} else {
 		failureEvent["duration_ms"] = nil
 	}
-	response := PostToolUseFailure(failureEvent, root)
+	// This is an internal adaptation, not a new MCP event to bind again.
+	response := postSynchronousFailure(failureEvent, root)
 	if response == nil {
 		response = failureErrorOutput("WiringError: shared failure finalizer returned no response")
 	}

@@ -432,6 +432,10 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 			}
 		}
 		if response != nil && len(response) > 0 {
+			// A consumed response may have originated in PostToolUseFailure.
+			if output := mapValue(response["hookSpecificOutput"]); output != nil {
+				output["hookEventName"] = "PostToolUse"
+			}
 			board, _ := PostProjectJobBoard(root, stringValue(index["project_key"]), time.Now())
 			refreshCachedBoard(mapValue(response), board)
 			index["response"] = response

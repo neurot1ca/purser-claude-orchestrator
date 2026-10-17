@@ -34,7 +34,7 @@ func setupArtifactCall(t *testing.T, planPath string) (string, []byte) {
 	if err := os.WriteFile(filepath.Join(root, "codex_exec_mcp", "jobs", artifactTestJob+".json"), job, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "async_jobs", artifactTestJob+".json"), []byte(`{"call_key":"artifact-call"}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "async_jobs", artifactTestJob+".json"), []byte(`{"call_key":"artifact-call","stage":"CONSUMED"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	bundle, _ := json.Marshal(map[string]any{"plan_path": planPath})
@@ -86,6 +86,20 @@ func TestCodexResultArtifactRejectsJobWithoutPlan(t *testing.T) {
 	result := callArtifact(state, "plan")
 	if result["isError"] != true || !strings.Contains(artifactText(result), "valid values: none") {
 		t.Fatalf("job without plan was not rejected: %#v", result)
+	}
+}
+
+func TestCodexResultArtifactRequiresFinalization(t *testing.T) {
+	state, _ := setupArtifactCall(t, "")
+	if err := os.WriteFile(filepath.Join(state, "async_jobs", artifactTestJob+".json"), []byte(`{"call_key":"artifact-call","stage":"FINISHED"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(state, "bundle_artifacts", "artifact-call.json")); err != nil {
+		t.Fatal(err)
+	}
+	result := callArtifact(state, "plan")
+	if want := "Call codex_result without artifact first to finalize this job, then request the plan artifact."; result["isError"] != true || artifactText(result) != want {
+		t.Fatalf("unfinalized artifact response: %#v; want %q", result, want)
 	}
 }
 

@@ -28,6 +28,9 @@ func Artifact(stateRoot, jobID, artifact string) map[string]any {
 	if err != nil || callKey == "" || filepath.Base(callKey) != callKey {
 		return artifactError(jobID, "Plan artifact is unavailable")
 	}
+	if index["stage"] != "CONSUMED" && index["stage"] != "FAILED" {
+		return artifactError(jobID, "Call codex_result without artifact first to finalize this job, then request the plan artifact.")
+	}
 	var bundle map[string]any
 	bundleData, err := os.ReadFile(filepath.Join(stateRoot, "bundle_artifacts", callKey+".json"))
 	if err == nil {
