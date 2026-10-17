@@ -33,12 +33,29 @@ func PostToolUseFailure(event map[string]any, root string) (response map[string]
 	}
 	defer func() { response = appendMCPPostContext(response, "PostToolUseFailure", context) }()
 	if strings.HasSuffix(tool, "__codex_start") {
+		if consumeDeniedStart(root, event) {
+			return nil
+		}
 		return postFailureStart(event, root)
 	}
 	if strings.HasSuffix(tool, "__codex_result") || strings.HasSuffix(tool, "__codex_cancel") {
 		return PostToolUseFailureAsyncFollowup(event, root)
 	}
 	return postSynchronousFailure(event, root)
+}
+
+func consumeDeniedStart(root string, event map[string]any) bool {
+	key, err := callKey(event)
+	if err != nil {
+		return false
+	}
+	path := deniedStartPath(root, key)
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != `{"denied":true}` {
+		return false
+	}
+	_ = os.Remove(path)
+	return true
 }
 
 func postSynchronousFailure(event map[string]any, root string) (response map[string]any) {

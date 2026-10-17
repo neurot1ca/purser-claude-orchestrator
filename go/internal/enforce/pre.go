@@ -41,6 +41,7 @@ func Pre(event map[string]any, root string) (response map[string]any, failure er
 			failure = fmt.Errorf("panic: %v", recovered)
 			response = preFailure(event, root, failure, metadata)
 		}
+		recordDeniedStart(event, root, response)
 	}()
 	// Contract process tests require building the hook with -tags contracttest.
 	internal := contractFault()
@@ -62,6 +63,23 @@ func Pre(event map[string]any, root string) (response map[string]any, failure er
 		internal = err
 	}
 	return preFailure(event, root, internal, metadata), internal
+}
+
+func recordDeniedStart(event map[string]any, root string, response map[string]any) {
+	if !strings.HasSuffix(stringValue(event["tool_name"]), "__codex_start") ||
+		stringValue(mapValue(response["hookSpecificOutput"])["permissionDecision"]) != "deny" {
+		return
+	}
+	key, err := callKey(event)
+	if err != nil {
+		return
+	}
+	path := deniedStartPath(defaultPreStateRoot(root), key)
+	_ = atomicWrite(path, []byte(`{"denied":true}`))
+}
+
+func deniedStartPath(root, key string) string {
+	return filepath.Join(root, "pending", key+".denied.json")
 }
 
 func preApply(event map[string]any, runtimeRoot string) map[string]any {

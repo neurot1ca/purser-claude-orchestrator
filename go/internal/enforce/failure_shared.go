@@ -16,7 +16,7 @@ import (
 func cleanupStaleFailurePending(root string, event map[string]any, key string) {
 	defer func() { _ = recover() }()
 	current := map[string]bool{filepath.Join(root, "pending", key+".json"): true,
-		bypassPath(root, event): true}
+		bypassPath(root, event): true, deniedStartPath(root, key): true}
 	paths, err := filepath.Glob(filepath.Join(root, "pending", "*.json"))
 	if err != nil {
 		return
