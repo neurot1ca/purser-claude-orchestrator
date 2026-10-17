@@ -3,10 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
-## Unreleased
+## 0.1.172 — 2026-10-18
 
 - **Fixed:** the planning hint now tells Claude to ask before drafting a plan itself, and no longer fires on host-injected reminders that name /purser:plan.
 - **Fixed:** Claude reads plan artifacts through `codex_result` (`artifact: "plan"` or a milestone ID), so plans no longer stall on a permission prompt for reads outside the project.
+- **Fixed:** plan acceptance reads the milestone IDs at the start of a dependency line and ignores explanatory text after them, and the planner is told to write only IDs there.
 
 ## 0.1.171 — 2026-10-17
 
