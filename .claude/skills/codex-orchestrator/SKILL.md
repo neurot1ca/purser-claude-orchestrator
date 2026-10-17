@@ -58,7 +58,7 @@ invariants. A domain label alone does not decide whether design is resolved.
 An accepted map must name files, symbols, invariants, failure direction, and
 behavior, leaving no semantic choice to the worker.
 
-| Task class | Route | Model and effort |
+| Task class | Route | Default Codex model and effort |
 |---|---|---|
 | Mechanical, narrow, low-risk; status or counting | `mechanical` | `gpt-6-luna` + `high` |
 | Narrow but semantically subtle, or fully resolved implementation | `subtle` | `gpt-6-luna` + `high` |
@@ -66,6 +66,9 @@ behavior, leaving no semantic choice to the worker.
 | Consequential and unresolved; diagnosis, design, or audit must find the rule | `consequential` | `gpt-6.1-sol` + `high` |
 | Concrete escalation after a material miss, disagreement, or repeated failure | `escalated` | `gpt-6.1-sol` + `xhigh` |
 | Established runbook operation: deploy, runner control, status, fetch, packaging | `operation` | `gpt-6-luna` + `high` |
+
+Use `operation` only for steps in an established runbook. The receipt reports
+the effective model and effort; follow it when they differ from these defaults.
 
 With Claude as coder, the same routes run Haiku (mechanical, operation), Sonnet medium (subtle, normal), Opus high (consequential, plan) and Opus xhigh (escalated), always the newest model of each tier.
 
@@ -116,10 +119,15 @@ emits the dispatch receipt; Claude must not write one.
 Claude writes the first prompt line exactly in this shape:
 
 ```text
-ORCH|task=<stable-id>|phase=<implementation|operation|plan>|route=<mechanical|subtle|normal|consequential|escalated|operation|plan_standard>[|reason=<new_task|continue|route_change|reanchor|repeated_failure|user_override>][|basis=<brief-basis>][|requested=user][|scope=<repo-relative-path[,repo-relative-path...]>][|eta=<N>m]
+ORCH|task=<stable-id>|phase=<implementation|operation|plan>|route=<mechanical|subtle|normal|consequential|escalated|operation|plan_standard>[|reason=<new_task|continue|route_change|reanchor|repeated_failure|user_override|fix>][|review_findings=<F<16-hex>-<4-digits>[,...]>][|basis=<brief-basis>][|requested=user][|scope=<repo-relative-path[,repo-relative-path...]>][|eta=<N>m]
 ```
 
 `task`, `phase`, and `route` are required; `reason` and `requested` are optional.
+Use a new task ID for new work after a recorded final outcome. Use
+`reason=reanchor` for an intentional fresh start on a compatible unfinished task.
+Use `review_findings` only with `reason=fix`; include 1–20 unique references
+matching `F` plus 16 hexadecimal digits, a hyphen, and four digits, for example
+`reason=fix|review_findings=F0123456789abcdef-0001`.
 `basis` is required for `normal`, `consequential`, and `escalated`, optional otherwise.
 `scope` is required for `implementation`: bounded repository-relative paths,
 never the whole repository; omit for `operation`, optional for `plan`.
@@ -128,6 +136,7 @@ route; the hook strips it, resolves model/effort, and rejects malformed or
 inconsistent calls. Compatible recorded `codex-reply` may inherit.
 
 Put estimated duration in `eta` beside the recorded actual duration.
+Use an integer from 1 through 600, with no leading zero, such as `eta=15m`.
 
 ### Async by default
 
@@ -210,13 +219,13 @@ consequential and escalated work. Request repair only for a material defect,
 failed criterion, contract violation, or required validation gap. After repair,
 review the new delta, blocking finding, and newly affected boundaries.
 
-Workers run focused validation, never full suites. After each apply Purser
-validates the applied revision on the host and returns its summary; that is the
-full-suite evidence. When that summary is present, Claude does not run the
-suite itself: before a commit or release it reads the latest apply validation,
-and a failure without named tests is a Purser gap to report, not a reason to
-rerun. When no apply validation is returned, Claude runs the project's full
-check once before the commit.
+Workers run focused validation, never full suites. Post-apply host validation
+selects changed packages; manifest changes can select the full module. It may
+return pending, so collect the terminal result before using it as evidence.
+Before a commit or release, read the latest result and run any required full
+check its commands do not cover. Report a validation failure without named
+tests as a Purser gap. If no host validation is returned, run the project's
+full check once before the commit.
 
 ### One-turn AUDIT
 
@@ -242,6 +251,8 @@ Use `codex-reply` for follow-up or repair while the worker, diagnosis, task
 identity, route, model, and effort still hold. Start fresh for failover, stale
 diagnosis, material P0/P1 error with plausible anchoring, repeated repair
 failure, or justified model/effort change; never merely to simulate independence.
+Use a new task ID for new work after a recorded final outcome. For an intentional
+fresh start on a compatible unfinished task, set `reason=reanchor`.
 
 For authorized bounded work: initial implementation, at most two ordinary
 material repairs, then at most one justified escalated repair. Stop earlier

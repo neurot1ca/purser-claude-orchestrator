@@ -13,8 +13,9 @@ review delegated AI coding work. This file binds every worker in this repository
 
 - The hook's enforcement path must not depend on optional Go modules. An
   optional dependency failure must never take the enforcement layer down.
-- Observability never takes enforcement down. A hook internal failure fails open
-  with a visible marker and forces FULL review.
+- Fail open only for synchronous enforcement bypass and post-hook observation
+  failures; mark failures and force FULL review. Keep async admission and
+  handoff publication fail-closed when enforcement or publication fails.
 - A skipped reviewer is never represented as a passing reviewer.
 - The reviewer's model family differs from the implementer's when the project sets `[review].require_different_family = true`; otherwise any reviewer may run.
 
@@ -38,8 +39,9 @@ boundaries.
   variants or fixtures. Trivial one-liners need no test.
 
 - Run focused tests for what you change, once, green, at the end. Workers run
-  focused tests only; Purser's post-apply host validation runs the full
-  `go test ./...` and `go vet ./...`.
+  focused tests only. Post-apply host validation selects changed packages (or
+  the full module for manifest changes) and may be pending; collect its
+  terminal result. Run any required full check not covered by its commands.
 - End implementation reports with the single `VALIDATION:` JSON line the hook
   requests.
 - Test scratch goes under the git-ignored `.tmp/`, never inside
