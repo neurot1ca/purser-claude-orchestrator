@@ -291,13 +291,58 @@ func TestMCPProtocolErrorsMalformedAndNotifications(t *testing.T) {
 	}
 	var out bytes.Buffer
 	s := &mcpServer{out: &out}
-	s.handle([]byte("{not json}"))
+	s.handle([]byte("{not json}\r\n"))
 	s.handle([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
 	s.handle([]byte(`{"jsonrpc":"2.0","id":null,"method":"ping"}`))
 	s.handle([]byte(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":12}}`))
 	s.handle([]byte(`{"jsonrpc":"2.0","id":23,"method":"ping"}`))
-	if want := `{"jsonrpc":"2.0","id":23,"result":{}}` + "\n"; out.String() != want {
+	want := `{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}` + "\n" + `{"jsonrpc":"2.0","id":23,"result":{}}` + "\n"
+	if out.String() != want {
 		t.Fatalf("malformed/notification handling: %q", out.String())
+	}
+}
+
+func TestMCPInjectedFieldsOmittedButStillAcceptedAtRuntime(t *testing.T) {
+	var tools []struct {
+		Name        string `json:"name"`
+		InputSchema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"inputSchema"`
+	}
+	if err := json.Unmarshal([]byte(mcpSchemas), &tools); err != nil {
+		t.Fatal(err)
+	}
+	injected := []string{"call", "taskId", "route", "jobModel", "jobEffort", "jobLabel", "jobPhase", "readinessCriteria", "readinessGrounded", "readinessAgent", "readinessModel"}
+	for _, tool := range tools {
+		fields := []string(nil)
+		switch tool.Name {
+		case "codex_start":
+			fields = injected
+		case "codex_apply":
+			fields = []string{"sessionId"}
+		default:
+			continue
+		}
+		for _, field := range fields {
+			if _, exists := tool.InputSchema.Properties[field]; exists {
+				t.Errorf("%s still advertises injected field %s", tool.Name, field)
+			}
+		}
+	}
+
+	t.Setenv("PURSER_STATE_DIR", t.TempDir())
+	result := dispatchLocalMCPCall(context.Background(), "codex_start", map[string]any{
+		"prompt": "missing ORCH header", "call": "server-call", "taskId": "server-task", "route": "normal",
+		"jobModel": "model", "jobEffort": "high", "jobLabel": "label", "jobPhase": "implementation",
+		"readinessCriteria": map[string]any{"objective": "x", "acceptance_criteria": "y"}, "readinessGrounded": true,
+		"readinessAgent": "agy", "readinessModel": "gemini-test",
+	})
+	if result["isError"] != true {
+		t.Fatalf("invalid start unexpectedly succeeded: %v", result)
+	}
+	content, _ := result["content"].([]any)
+	if len(content) == 0 || strings.Contains(fmt.Sprint(content[0]), "unknown tool") {
+		t.Fatalf("injected arguments did not reach codex_start dispatch: %v", result)
 	}
 }
 

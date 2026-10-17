@@ -10,7 +10,7 @@ type ToolSchema = {
 
 const baseProperties = {
   prompt: { type: 'string' },
-  label: { type: 'string', description: "Short human task description in the user's language (up to 80 characters)." },
+  label: { type: 'string', description: "Task label in user's language (up to 80 characters)." },
   model: { type: 'string' },
   cwd: { type: 'string' },
   config: { type: 'object' },
@@ -22,28 +22,26 @@ const baseProperties = {
 }
 
 export const CODEX_TOOL_SCHEMAS: ToolSchema[] = [
-  { name: 'codex', description: 'Run a new Codex thread.', inputSchema: { type: 'object', properties: baseProperties, required: ['prompt'] } },
-  { name: 'codex-reply', description: 'Continue a thread created by this server.', inputSchema: { type: 'object', properties: {
+  { name: 'codex', description: 'Run a new thread synchronously; include the ORCH first line.', inputSchema: { type: 'object', properties: baseProperties, required: ['prompt'] } },
+  { name: 'codex-reply', description: 'Continue a server thread synchronously; supply its threadId.', inputSchema: { type: 'object', properties: {
     threadId: { type: 'string' },
-    prompt: { type: 'string' }, label: { type: 'string', description: "Short human task description in the user's language (up to 80 characters); may be omitted to reuse the thread label." },
+    prompt: { type: 'string' }, label: { type: 'string', description: "Task label in user's language; omitted reuses the thread label (up to 80 characters)." },
+  }, required: ['threadId', 'prompt'] } },
+  { name: 'codex_start', description: 'Start a durable job; include ORCH. Resume with mode=reply and threadId; follow next.', inputSchema: { type: 'object', properties: {
+    ...baseProperties, mode: { type: 'string', enum: ['new', 'reply'] }, worktree: { type: 'boolean' },
+    threadId: { type: 'string' }, timeoutSeconds: { type: 'number', exclusiveMinimum: 0 },
+    etaMinutes: { type: 'integer' },
   }, required: ['prompt'] } },
-  { name: 'codex_start', description: 'Start a durable Codex job.', inputSchema: { type: 'object', properties: {
-    ...baseProperties, call: { type: 'string' }, mode: { type: 'string', enum: ['new', 'reply'] }, worktree: { type: 'boolean' },
-    threadId: { type: 'string' }, timeoutSeconds: { type: 'number' }, taskId: { type: 'string' }, route: { type: 'string' },
-    etaMinutes: { type: 'integer' }, jobModel: { type: 'string' }, jobEffort: { type: 'string' }, jobLabel: { type: 'string' },
-    jobPhase: { type: 'string' }, readinessCriteria: { type: 'object' }, readinessGrounded: { type: 'boolean' },
-    readinessAgent: { type: 'string' }, readinessModel: { type: 'string' },
-  }, required: ['prompt'] } },
-  { name: 'codex_result', description: 'Read a durable Codex job.', inputSchema: { type: 'object', properties: {
+  { name: 'codex_result', description: 'Finalize a completed job and return its review bundle; follow start.next first.', inputSchema: { type: 'object', properties: {
     jobId: { type: 'string' }, adopt: { type: 'boolean', description: 'After user consent, finalize a job from an earlier session in this project.' },
   }, required: ['jobId'] } },
-  { name: 'codex_cancel', description: 'Cancel a durable Codex job.', inputSchema: { type: 'object', properties: {
+  { name: 'codex_cancel', description: 'Stop a running job or discard an unapplied finished job.', inputSchema: { type: 'object', properties: {
     jobId: { type: 'string' }, reason: { type: 'string' },
   }, required: ['jobId'] } },
-  { name: 'codex_apply', description: 'Apply a job worktree patch.', inputSchema: { type: 'object', properties: {
+  { name: 'codex_apply', description: 'Apply a reviewed job patch; acceptOnly records acceptance without applying.', inputSchema: { type: 'object', properties: {
     jobId: { type: 'string' }, resolved: { type: 'boolean', description: 'Record a hand-resolved conflict after verifying the repository.' },
-    reviewer1Valid: { type: 'integer', minimum: 0 }, reviewer1False: { type: 'integer', minimum: 0 },
-    acceptOnly: { type: 'boolean' }, sessionId: { type: 'string' }, revision: { type: 'string' },
+    reviewer1Valid: { type: 'integer', minimum: 0, description: 'Reviewer valid count.' }, reviewer1False: { type: 'integer', minimum: 0, description: 'Reviewer false count.' },
+    acceptOnly: { type: 'boolean' }, revision: { type: 'string', description: 'Reviewed changed-paths digest; required with acceptOnly.' }
   }, required: ['jobId'] } },
 ]
 
