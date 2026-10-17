@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.173 — 2026-10-18
+
+- **Fixed:** Claude finalizes a plan job before reading its plan artifact, and a failed `codex_result` call no longer makes the next one report invalid helper output.
+
 ## 0.1.172 — 2026-10-18
 
 - **Fixed:** the planning hint now tells Claude to ask before drafting a plan itself, and no longer fires on host-injected reminders that name /purser:plan.
