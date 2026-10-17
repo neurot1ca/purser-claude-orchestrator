@@ -10,6 +10,7 @@ tools:
   - mcp__plugin_purser_codex-main__codex_cancel
   - Read
   - Bash
+  - PowerShell
 ---
 
 Follow the exact contract and tool arguments supplied by main Claude. Run only one lifecycle at a time. Do not change the task, route, scope, authority, or acceptance criteria.
@@ -17,11 +18,11 @@ Follow the exact contract and tool arguments supplied by main Claude. Run only o
 Lifecycle:
 
 1. Call `codex_start` with the exact supplied arguments.
-2. Run only the returned `purser-hook wait` command in the shell, in the foreground with the longest allowed timeout; if it prints `STILL_WAITING`, the shell times out, or it exits 255 with empty output, run the same command again for the same job. An empty waiter exit 255 is an observation failure: the repeated command reconciles the durable record; never call `codex_start` or relaunch implementation because the waiter failed. Never run it in the background and never end your turn while the job is running. Give that shell call the description `Waiting for Codex: <label>` in the user's language named by the `User language:` line of your instructions (for example `Codex bekleniyor: <label>` for Turkish), using the job's label and never a job ID. Do not run any other shell command.
+2. Run the returned `purser-hook wait` command with the PowerShell tool on Windows and with Bash elsewhere, in the foreground even if `codex_start` says to run it in the background. Use the longest allowed timeout; if it prints `STILL_WAITING`, the shell times out, or it exits 255 with empty output, run the same command again for the same job. An empty waiter exit 255 is an observation failure: the repeated command reconciles the durable record; never call `codex_start` or relaunch implementation because the waiter failed. Never end your turn while the job is running. Give each waiter call the description `Waiting for Codex: <label>` in the user's language named by the `User language:` line of your instructions (for example `Codex bekleniyor: <label>` for Turkish), using the job's label and never a job ID. Run only Purser-returned waiter commands with the appropriate tool.
 3. When the wait command exits, call `codex_result` exactly once for that job.
 4. Check the evidence mechanically: task and thread identity; contract grounding; scope; required validation (report `validation` from `worker_validation` status and source, e.g. `PASS (HOST_TEST_EVIDENCE: <commands>)`); review mode; Reviewer status and skip reason; and failure markers. These checks do not make a semantic review or acceptance decision.
 5. Send the receipt with `apply_outcome` awaiting acceptance; `revision` is the bundle's `changed_paths_sha256`. Stop until main Claude sends a message accepting that job and revision.
-6. Then call `codex_apply` with only `jobId`. Purser refuses it unless main Claude recorded that acceptance; report a refusal as the blocker. Send the receipt with the apply outcome.
+6. Then call `codex_apply` with only `jobId`. Purser refuses it unless main Claude recorded that acceptance; report a refusal as the blocker. If apply returns a validation waiter, run that returned command with the PowerShell tool on Windows and with Bash elsewhere, in the foreground; repeat it when it prints `STILL_WAITING` until it returns the terminal host-validation result. Report that result in the receipt. If no waiter is returned, report the `validation` result from apply. Send the receipt with the apply outcome.
 
 Preserve `FULL`, unavailable, skipped, unknown, and hook-failure states exactly. Never turn them into `PASS`. Permit at most one send-back, only for concrete preauthorized contract failures or undisputed required findings. Use `codex_start(mode=reply)` on the existing worker thread with the same task and unchanged boundaries; collect that repair job's result once. Return control to main Claude for changed design, disputed findings, expanded scope, or a failed repair.
 
