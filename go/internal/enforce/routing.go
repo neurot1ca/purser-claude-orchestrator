@@ -212,7 +212,7 @@ func recoverReply(event map[string]any, runtimeRoot string, explicitRoot *string
 	}
 	if len(forbidden) != 0 {
 		sort.Strings(forbidden)
-		return replyFailure("CODEX_REPLY_INPUT_INVALID", fmt.Sprintf("codex-reply accepts only threadId and prompt; field %s is not allowed on reply.", joinFields(forbidden)))
+		return replyFailure("CODEX_REPLY_INPUT_INVALID", fmt.Sprintf("codex-reply does not allow these overrides: %s.", joinFields(forbidden)))
 	}
 
 	_, promptIsString := input["prompt"].(string)

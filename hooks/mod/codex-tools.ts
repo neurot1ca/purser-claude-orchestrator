@@ -24,7 +24,7 @@ const baseProperties = {
 export const CODEX_TOOL_SCHEMAS: ToolSchema[] = [
   { name: 'codex', description: 'Run a new Codex thread.', inputSchema: { type: 'object', properties: baseProperties, required: ['prompt'] } },
   { name: 'codex-reply', description: 'Continue a thread created by this server.', inputSchema: { type: 'object', properties: {
-    threadId: { type: 'string' }, conversationId: { type: 'string', description: 'Deprecated alias for threadId.' },
+    threadId: { type: 'string' },
     prompt: { type: 'string' }, label: { type: 'string', description: "Short human task description in the user's language (up to 80 characters); may be omitted to reuse the thread label." },
   }, required: ['prompt'] } },
   { name: 'codex_start', description: 'Start a durable Codex job.', inputSchema: { type: 'object', properties: {
