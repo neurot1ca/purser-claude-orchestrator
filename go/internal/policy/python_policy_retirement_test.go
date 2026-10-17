@@ -217,6 +217,12 @@ func TestPythonOrchAssertions(t *testing.T) {
 		if got := ParseOrchPrompt(orch(map[string]string{"route": route, "basis": "design boundary"}), config); !got.Valid || got.Basis == nil || *got.Basis != "design boundary" {
 			t.Errorf("basis rejected for %s: %#v", route, got)
 		}
+		if got := ParseOrchPrompt(orch(map[string]string{"route": route, "basis": "\x00", "requested": "user"}), config); !got.Valid || got.Requested == nil || *got.Requested != "user" {
+			t.Errorf("user-requested route rejected without basis for %s: %#v", route, got)
+		}
+		if got := ParseOrchPrompt(orch(map[string]string{"route": route, "basis": "\x00"}), config); got.Valid || got.Code != "SOL_ROUTE_NEEDS_BASIS" {
+			t.Errorf("route without basis or user request was not refused for %s: %#v", route, got)
+		}
 	}
 	for _, route := range []string{"subtle", "mechanical", "operation"} {
 		if got := ParseOrchPrompt(orch(map[string]string{"route": route, "basis": "\x00"}), config); !got.Valid || got.Basis != nil {

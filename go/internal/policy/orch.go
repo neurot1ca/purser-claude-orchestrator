@@ -173,7 +173,7 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 	if (values["phase"] == "plan") != (values["route"] == "plan_standard") {
 		return orchFailure(remainder, orchInvalidEnum, "The valid plan pairing is phase=plan with route=plan_standard; phase=plan cannot use other routes and route=plan_standard cannot use other phases.", values)
 	}
-	if solRoutes[values["route"]] && strings.TrimSpace(values["basis"]) == "" {
+	if solRoutes[values["route"]] && strings.TrimSpace(values["basis"]) == "" && values["requested"] != "user" {
 		route := values["route"]
 		message := fmt.Sprintf("route=%s runs the Sol model. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle instead.", route)
 		if agent, _ := config["coder_agent"].(string); agent == "opencode" || agent == "agy" || agent == "claude" {

@@ -15,11 +15,17 @@ func TestPrePlanRedirect(t *testing.T) {
 	tests := []struct {
 		name, task, phase, route, reason string
 		scope                            []string
+		requested                        bool
+		ignored                          bool
+		tracked                          bool
 		reply, completedPlan, wantDeny   bool
 	}{
 		{name: "six non-test paths allow", task: "six-paths", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go"}},
 		{name: "four paths plus tests allow", task: "four-plus-tests", phase: "implementation", route: "normal", reason: "new_task", scope: []string{"a.go", "b.go", "c.go", "d.go", "tests/test_a.py", "test_unit.py", "x_test.go"}},
 		{name: "consequential one path deny", task: "consequential", phase: "implementation", route: "consequential", reason: "new_task", scope: []string{"a.go"}, wantDeny: true},
+		{name: "tracked path redirects", task: "tracked-path", phase: "implementation", route: "consequential", reason: "new_task", scope: []string{"tracked.go"}, tracked: true, wantDeny: true},
+		{name: "user requested consequential allows", task: "user-requested", phase: "implementation", route: "consequential", reason: "new_task", scope: []string{"src/a.go"}, requested: true},
+		{name: "all ignored report allows", task: "ignored-report", phase: "implementation", route: "consequential", reason: "new_task", scope: []string{`.tmp/audit/report.md`}, ignored: true},
 		{name: "mechanical ten paths allow", task: "mechanical", phase: "implementation", route: "mechanical", reason: "new_task", scope: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}},
 		{name: "operation route allows", task: "operation-route", phase: "implementation", route: "operation", reason: "new_task", scope: []string{"a", "b", "c", "d", "e"}},
 		{name: "fix allows", task: "fix-task", phase: "implementation", route: "normal", reason: "fix", scope: []string{"a", "b", "c", "d", "e"}},
@@ -43,6 +49,19 @@ func TestPrePlanRedirect(t *testing.T) {
 			}
 			if out, err := testutil.Hide(exec.Command("git", "init", "-q", repo)).CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v %s", err, out)
+			}
+			if tc.ignored {
+				if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".tmp/\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.tracked {
+				if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package tracked\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if out, err := testutil.Hide(exec.Command("git", "-C", repo, "add", "tracked.go")).CombinedOutput(); err != nil {
+					t.Fatalf("git add: %v %s", err, out)
+				}
 			}
 			plugin, _ := filepath.Abs(filepath.Join("..", "..", ".."))
 			t.Setenv("HOME", home)
@@ -69,11 +88,15 @@ func TestPrePlanRedirect(t *testing.T) {
 			if tc.reason != "" {
 				reason = "|reason=" + tc.reason
 			}
+			requested := ""
+			if tc.requested {
+				requested = "|requested=user"
+			}
 			basis := "bounded implementation"
 			if tc.route == "consequential" {
 				basis = "design:bounded implementation"
 			}
-			prompt := fmt.Sprintf("ORCH|task=%s|phase=%s|route=%s%s|basis=%s|scope=%s\nImplement.", tc.task, tc.phase, tc.route, reason, basis, strings.Join(tc.scope, ","))
+			prompt := fmt.Sprintf("ORCH|task=%s|phase=%s|route=%s%s%s|basis=%s|scope=%s\nImplement.", tc.task, tc.phase, tc.route, reason, requested, basis, strings.Join(tc.scope, ","))
 			input["prompt"] = prompt
 			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": tool, "tool_use_id": "plan-redirect-call", "session_id": "plan-redirect-session", "cwd": repo, "tool_input": input}
 			got, err := Pre(event, state)

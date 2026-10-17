@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"purser-hook/internal/models"
 	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/policy"
+	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
 )
 
@@ -171,7 +173,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		}
 		return denyPre(route.Code, route.Message), nil
 	}
-	if !reply && pointerValue(parsed.Phase) == "implementation" && (parsed.Reason == nil || *parsed.Reason == "new_task") &&
+	if !reply && pointerValue(parsed.Requested) != "user" && pointerValue(parsed.Phase) == "implementation" && (parsed.Reason == nil || *parsed.Reason == "new_task") &&
 		*parsed.Route != "mechanical" && *parsed.Route != "operation" &&
 		!hasCompletedPlan(defaultPreStateRoot(runtimeRoot), pointerValue(parsed.TaskID)) {
 		nonTestCount := nonTestScopeCount(parsed.Scope)
@@ -179,7 +181,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		if *parsed.Route == "consequential" || *parsed.Route == "escalated" {
 			why = "route=" + *parsed.Route
 		}
-		if why != "" {
+		if why != "" && (root == nil || !allScopeIgnored(*root, parsed.Scope)) {
 			project := projectKey(root)
 			preEmit(runtimeRoot, event, root, pointerValue(parsed.TaskID), project, "PLAN_REDIRECT", map[string]any{
 				"route": *parsed.Route, "non_test_scope_count": nonTestCount,
@@ -836,6 +838,35 @@ func nonTestScopeCount(scope []string) int {
 		}
 	}
 	return count
+}
+
+func allScopeIgnored(repository string, scope []string) bool {
+	if repository == "" || len(scope) == 0 {
+		return false
+	}
+	var input strings.Builder
+	for _, item := range scope {
+		input.WriteString(filepath.ToSlash(filepath.Clean(strings.ReplaceAll(item, `\`, "/"))))
+		input.WriteByte(0)
+	}
+	cmd := exec.Command("git", "check-ignore", "-z", "--stdin")
+	cmd.Dir = repository
+	cmd.Stdin = strings.NewReader(input.String())
+	output, err := proc.Hide(cmd).Output()
+	if err != nil {
+		return false
+	}
+	ignored := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
+	if len(ignored) != len(scope) {
+		return false
+	}
+	for i, item := range scope {
+		want := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(item, `\`, "/")))
+		if ignored[i] != want {
+			return false
+		}
+	}
+	return true
 }
 
 func hasCompletedPlan(stateRoot, taskID string) bool {
