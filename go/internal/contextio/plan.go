@@ -407,6 +407,41 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 	return selected, nil
 }
 
+// PlanMilestoneSection returns a parsed milestone section and the IDs present in
+// the artifact. The parser is shared with plan dependency scheduling.
+func PlanMilestoneSection(data []byte, id string) (string, []string, error) {
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	headings := regexp.MustCompile(`(?m)^#{1,6}\s+M([0-9]+)\b[^\n]*(?:\n|$)`).FindAllStringSubmatch(text, -1)
+	accepted := make([]int, 0, len(headings))
+	for _, heading := range headings {
+		n, err := strconv.Atoi(heading[1])
+		if err != nil {
+			return "", nil, errors.New("invalid plan milestone ID")
+		}
+		accepted = append(accepted, n)
+	}
+	milestones, err := parsePlanMilestones(data, accepted)
+	if err != nil {
+		return "", nil, err
+	}
+	valid := make([]string, 0, len(milestones))
+	for _, milestone := range milestones {
+		valid = append(valid, milestone.ID)
+		if milestone.ID == id {
+			return milestone.TaskSection, validPlanIDs(milestones), nil
+		}
+	}
+	return "", valid, nil
+}
+
+func validPlanIDs(milestones []PlanMilestone) []string {
+	ids := make([]string, 0, len(milestones))
+	for _, milestone := range milestones {
+		ids = append(ids, milestone.ID)
+	}
+	return ids
+}
+
 func milestoneNumber(id string) int {
 	n, _ := strconv.Atoi(strings.TrimPrefix(id, "M"))
 	return n

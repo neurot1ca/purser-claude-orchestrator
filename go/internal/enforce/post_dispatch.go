@@ -32,6 +32,13 @@ func PostToolUse(event map[string]any, root string) (response map[string]any, fa
 	}
 	defer func() { response = appendMCPPostContext(response, "PostToolUse", context) }()
 	tool := stringValue(event["tool_name"])
+	if strings.HasSuffix(tool, "__codex_result") {
+		if input, ok := event["tool_input"].(map[string]any); ok {
+			if artifact, ok := input["artifact"].(string); ok && artifact != "" {
+				return map[string]any{}, nil
+			}
+		}
+	}
 	if tool == "mcp__codex-main__codex_apply" || strings.HasSuffix(tool, "__codex_apply") {
 		return postApply(event, defaultPreStateRoot(root)), nil
 	}

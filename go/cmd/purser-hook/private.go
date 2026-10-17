@@ -171,7 +171,8 @@ type operationInputError struct{ message string }
 func (e operationInputError) Error() string { return e.message }
 
 func dispatchOperation(ctx context.Context, tool string, args map[string]any, root string) (map[string]any, error) {
-	if tool == "codex_apply" || tool == "codex_cancel" || tool == "codex_result" {
+	_, artifactRequested := args["artifact"]
+	if tool == "codex_apply" || tool == "codex_cancel" || tool == "codex_result" && !artifactRequested {
 		defer enqueueCleanup(root)
 	}
 	launch := func(id string, generation int64, token string) error {
@@ -223,6 +224,13 @@ func dispatchOperation(ctx context.Context, tool string, args map[string]any, ro
 		id, ok := args["jobId"].(string)
 		if !ok || id == "" {
 			return nil, operationInputError{"jobId must be a nonempty string"}
+		}
+		if artifactRequested {
+			artifact, ok := args["artifact"].(string)
+			if !ok || artifact == "" {
+				return nil, operationInputError{"artifact must be plan or a milestone ID such as M1"}
+			}
+			return jobs.Artifact(root, id, artifact), nil
 		}
 		return jobs.Result(root, id, float64(time.Now().UnixNano())/1e9, jobs.ResultOptions{
 			StateRoot: root,

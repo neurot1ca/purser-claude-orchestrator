@@ -6,6 +6,7 @@ before it is published.
 ## Unreleased
 
 - **Fixed:** the planning hint now tells Claude to ask before drafting a plan itself, and no longer fires on host-injected reminders that name /purser:plan.
+- **Fixed:** Claude reads plan artifacts through `codex_result` (`artifact: "plan"` or a milestone ID), so plans no longer stall on a permission prompt for reads outside the project.
 
 ## 0.1.171 — 2026-10-17
 

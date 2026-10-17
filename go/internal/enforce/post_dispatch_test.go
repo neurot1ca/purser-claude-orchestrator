@@ -450,3 +450,13 @@ func TestPostNonReportCap(t *testing.T) {
 		})
 	}
 }
+
+func TestPostToolUsePlanArtifactSkipsResultFinalization(t *testing.T) {
+	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_result",
+		"tool_input":    map[string]any{"jobId": "job", "artifact": "plan"},
+		"tool_response": map[string]any{"structuredContent": map[string]any{"jobId": "job", "artifact": "plan text"}}}
+	response, err := PostToolUse(event, t.TempDir())
+	if err != nil || len(response) != 0 {
+		t.Fatalf("artifact result entered normal post-finalization: response=%#v err=%v", response, err)
+	}
+}

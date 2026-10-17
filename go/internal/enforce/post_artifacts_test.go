@@ -86,7 +86,7 @@ func TestCompactBundleUsesPlanArtifactWhenMultibyteSummaryExceedsByteBudget(t *t
 	bundle := map[string]any{
 		"plan_path": path, "plan_summary": summary, "findings": []any{}, "implementer_report": "",
 	}
-	notice := "Inline plan summary omitted; complete plan is available at " + path + "."
+	notice := "Inline plan summary omitted; call codex_result with artifact=\"plan\" for this jobId."
 	cap := utf8.RuneCountInString(summary) + 50
 	if utf8.RuneCountInString(summary) >= cap || len([]byte(summary)) <= cap {
 		t.Fatalf("test does not distinguish rune count from transport bytes: runes=%d bytes=%d cap=%d", utf8.RuneCountInString(summary), len([]byte(summary)), cap)
