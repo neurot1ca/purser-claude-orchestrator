@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.171 — 2026-10-17
+
+- **Added:** the plugin ships the Purser logo as its icon.
+- **Fixed:** two tests no longer fail on CI runners: the recorded-effort reply test no longer depends on the runner's model catalog, and the check deadline test accepts a deadline that expires before the check starts.
+
 ## 0.1.170 — 2026-10-17
 
 - **Added:** in a project set up with Purser, session start tells Claude to delegate code changes to the configured coder.
