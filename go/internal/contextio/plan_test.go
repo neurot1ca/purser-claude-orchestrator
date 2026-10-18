@@ -188,6 +188,14 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 	if len(state.ReadyMilestones) != 2 || state.ReadyMilestones[0].ID != "M1" || state.ReadyMilestones[1].ID != "M2" {
 		t.Fatalf("independent leaves: %+v", state)
 	}
+	for i, want := range []string{
+		"ORCH|task=graph-m1of3|phase=implementation|route=subtle|reason=new_task|scope=src/a.go",
+		"ORCH|task=graph-m2of3|phase=implementation|route=subtle|reason=new_task|scope=src/b.go",
+	} {
+		if state.ReadyMilestones[i].Orch != want {
+			t.Errorf("ready milestone %s orch = %q, want %q", state.ReadyMilestones[i].ID, state.ReadyMilestones[i].Orch, want)
+		}
+	}
 	if strings.Contains(state.Milestones[2].TaskSection, "Other material") {
 		t.Fatal("task section leaked beyond milestone")
 	}
@@ -209,6 +217,9 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 	state, err = ReadPlanForTask(root, repo, "graph")
 	if err != nil || len(state.ReadyMilestones) != 1 || state.ReadyMilestones[0].ID != "M2" {
 		t.Fatalf("linked result was offered again: %+v %v", state, err)
+	}
+	if want := "ORCH|task=graph-m2of3|phase=implementation|route=subtle|reason=new_task|scope=src/b.go"; state.ReadyMilestones[0].Orch != want {
+		t.Fatalf("status ready orch = %q, want %q", state.ReadyMilestones[0].Orch, want)
 	}
 	writeJob("independent", "graph-m2of3", "RUNNING")
 	if _, _, err := BindPlanJob(root, repo, "graph-m2of3", "independent"); err != nil {
@@ -251,6 +262,9 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 	}
 	if state.ReadyMilestones[0].ArtifactRef != state.ArtifactPath+"#M3" {
 		t.Fatal("missing artifact pointer")
+	}
+	if want := "ORCH|task=graph-m3of3|phase=implementation|route=subtle|reason=new_task|scope=src/a.go"; state.ReadyMilestones[0].Orch != want {
+		t.Fatalf("complete-milestone ready orch = %q, want %q", state.ReadyMilestones[0].Orch, want)
 	}
 	for _, value := range []string{"", "1"} {
 		repeated, err := UpdatePlan(root, repo, "graph", state.Revision, "complete-milestone", value)

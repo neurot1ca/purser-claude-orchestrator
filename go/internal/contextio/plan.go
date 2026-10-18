@@ -71,6 +71,7 @@ type PlanMilestone struct {
 type ReadyMilestone struct {
 	ID          string `json:"id"`
 	ArtifactRef string `json:"artifact_ref"`
+	Orch        string `json:"orch"`
 }
 
 type PlanPass struct {
@@ -1444,7 +1445,18 @@ nextMilestone:
 			continue
 		}
 		id := fmt.Sprintf("M%d", n)
-		ready = append(ready, ReadyMilestone{ID: id, ArtifactRef: state.ArtifactPath + "#" + id})
+		scope := ""
+		for _, milestone := range state.Milestones {
+			if milestoneNumber(milestone.ID) == n {
+				scope = strings.Join(milestone.WritePaths, ",")
+				break
+			}
+		}
+		orch := fmt.Sprintf("ORCH|task=%s-m%dof%d|phase=implementation|route=subtle|reason=new_task", state.TaskID, n, len(state.AcceptedMilestones))
+		if scope != "" {
+			orch += "|scope=" + scope
+		}
+		ready = append(ready, ReadyMilestone{ID: id, ArtifactRef: state.ArtifactPath + "#" + id, Orch: orch})
 	}
 	return ready
 }

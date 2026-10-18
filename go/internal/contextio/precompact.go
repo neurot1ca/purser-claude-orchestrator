@@ -326,9 +326,9 @@ func renderActivePlanPointer(repository string) string {
 		if len(state.Milestones) > 0 && len(state.ReadyMilestones) > 0 {
 			ready := make([]string, 0, len(state.ReadyMilestones))
 			for _, milestone := range state.ReadyMilestones {
-				ready = append(ready, milestone.ID)
+				ready = append(ready, milestone.ID+" orch="+milestone.Orch)
 			}
-			pointer = strings.TrimSuffix(pointer, ".") + "; ready: " + strings.Join(ready, ",") + "; start every listed ready pass through a separate purser:dispatcher agent, in parallel."
+			pointer = strings.TrimSuffix(pointer, ".") + "; ready: " + strings.Join(ready, "; ready: ") + "; start every listed ready pass through a separate purser:dispatcher agent, in parallel."
 		}
 		return pointer
 	}

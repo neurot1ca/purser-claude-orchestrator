@@ -107,7 +107,7 @@ func TestPlanPointerRestoresReadyGraphSiblingWhileApplyPending(t *testing.T) {
 		t.Fatalf("bind result awaiting apply: matched=%v err=%v", matched, err)
 	}
 	got := renderActivePlanPointer(repo)
-	want := "next action: apply; plan: " + state.ArtifactPath + "; ready: M2; start every listed ready pass through a separate purser:dispatcher agent, in parallel."
+	want := "next action: apply; plan: " + state.ArtifactPath + "; ready: M2 orch=ORCH|task=graph-pointer-m2of3|phase=implementation|route=subtle|reason=new_task|scope=src/b.go; start every listed ready pass through a separate purser:dispatcher agent, in parallel."
 	if !strings.Contains(got, want) {
 		t.Fatalf("graph pointer omitted independent ready sibling: want %q in %q", want, got)
 	}

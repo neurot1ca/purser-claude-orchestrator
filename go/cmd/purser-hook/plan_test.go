@@ -49,6 +49,34 @@ func TestPlanCLICompleteTargetsAppliedMilestone(t *testing.T) {
 	}
 }
 
+func TestPlanCLIAcceptReturnsReadyMilestoneOrch(t *testing.T) {
+	root, repo, artifact := planCLIFixture(t)
+	if err := os.WriteFile(artifact, []byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:**\n- src/a.go\n### M2\n**Dependency:** none\n**Write paths:**\n- src/b.go\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_STATE_DIR", root)
+	output, stderr, code := runPlanCLI(t, "accept", "--cwd", repo, "--task-id", "plan", "--artifact", artifact, "--milestones", "1,2")
+	if code != 0 || stderr != "" {
+		t.Fatalf("accept code=%d stderr=%q output=%s", code, stderr, output)
+	}
+	var result contextio.PlanState
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("decode accept output: %v: %s", err, output)
+	}
+	want := []string{
+		"ORCH|task=plan-m1of2|phase=implementation|route=subtle|reason=new_task|scope=src/a.go",
+		"ORCH|task=plan-m2of2|phase=implementation|route=subtle|reason=new_task|scope=src/b.go",
+	}
+	if len(result.ReadyMilestones) != len(want) {
+		t.Fatalf("ready milestones = %+v", result.ReadyMilestones)
+	}
+	for i, orch := range want {
+		if result.ReadyMilestones[i].Orch != orch {
+			t.Errorf("ready[%d].orch = %q, want %q", i, result.ReadyMilestones[i].Orch, orch)
+		}
+	}
+}
+
 func TestPlanMilestoneArguments(t *testing.T) {
 	values, err := parseMilestones("1, 3,5")
 	if err != nil || len(values) != 3 || values[0] != 1 || values[1] != 3 || values[2] != 5 {

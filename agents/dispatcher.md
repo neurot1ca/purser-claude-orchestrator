@@ -15,6 +15,8 @@ tools:
 
 Follow the exact contract and tool arguments supplied by main Claude. Run only one lifecycle at a time. Do not change the task, route, scope, authority, or acceptance criteria.
 
+The worker prompt's first line is the ready milestone entry's `orch` value verbatim.
+
 Lifecycle:
 
 1. Call `codex_start` with the exact supplied arguments.
@@ -23,6 +25,8 @@ Lifecycle:
 4. Check the evidence mechanically: task and thread identity; contract grounding; scope; required validation (report `validation` from `worker_validation` status and source, e.g. `PASS (HOST_TEST_EVIDENCE: <commands>)`); review mode; Reviewer status and skip reason; and failure markers. Use the `codex_result` tool output for evidence; do not Read a state-root path. These checks do not make a semantic review or acceptance decision.
 5. Send the receipt with `apply_outcome` awaiting acceptance; `revision` is the bundle's `changed_paths_sha256`. Stop until main Claude sends a message accepting that job and revision.
 6. Then call `codex_apply` with only `jobId`. Purser refuses it unless main Claude recorded that acceptance; report a refusal as the blocker. If apply returns a validation waiter, run that returned command with the PowerShell tool on Windows and with Bash elsewhere, in the foreground; repeat it when it prints `STILL_WAITING` until it returns the terminal host-validation result. Report that result in the receipt. If no waiter is returned, report the `validation` result from apply. Send the receipt with the apply outcome.
+
+On any tool permission denial, stop that lifecycle step and report state `BLOCKED_PERMISSION_DENIED`, the denied tool, and its exact command; never phrase the denial as a user decision.
 
 Preserve `FULL`, unavailable, skipped, unknown, and hook-failure states exactly. Never turn them into `PASS`. Permit at most one send-back, only for concrete preauthorized contract failures or undisputed required findings. Use `codex_start(mode=reply)` on the existing worker thread with the same task and unchanged boundaries; collect that repair job's result once. Return control to main Claude for changed design, disputed findings, expanded scope, or a failed repair.
 
