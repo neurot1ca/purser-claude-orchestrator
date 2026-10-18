@@ -197,7 +197,7 @@ The Go module is `purser-hook`; contributions follow the repository's developmen
 
 ## What Purser does on your machine
 
-Purser runs locally and has no server of its own.
+Purser runs locally and has no server of its own. The [privacy policy](PRIVACY.md) sums up what it reads, sends and stores.
 
 It runs a bundled Go binary, `purser-hook`, built for your operating system and architecture. Claude Code hooks and Purser's MCP server start it. It also runs the coder CLIs you set up in `/purser:init`: Codex, OpenCode, agy, Cursor or Claude. Workers run in the background and open no windows.
 
