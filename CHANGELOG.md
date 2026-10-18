@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.175 — 2026-10-18
+
+- **Fixed:** each ready plan milestone now carries its ORCH line, so parallel milestone jobs are no longer refused at start, and a dispatcher reports a permission denial as a fixed state instead of a question for the user.
+
 ## 0.1.174 — 2026-10-18
 
 - **Fixed:** Claude reads the full review bundle through `codex_result` instead of reading Purser state files directly, so no outside-directory permission prompt appears.
