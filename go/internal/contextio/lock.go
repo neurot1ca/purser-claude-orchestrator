@@ -20,7 +20,16 @@ func lockFile(path string, blocking bool) (func() error, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	deadline := time.Now().Add(10 * time.Second)
+	var f *os.File
+	var err error
+	for {
+		f, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+		if err == nil || !retryableLockOpenError(err) || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +40,6 @@ func lockFile(path string, blocking bool) (func() error, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if err = TryLock(f); err == nil {
 			return unlockFile(f), nil

@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
-var errAsyncClaimed = errors.New("async result is already being finalized")
+var errAsyncClaimLock = errors.New("async result claim lock unavailable")
 
 // claimAsyncResult mirrors the lock, post-lock ownership revalidation, and
 // cached CONSUMED response branch of codex._async_post_followup.
@@ -20,21 +21,31 @@ func claimAsyncResult(root string, event map[string]any, repoRoot string) (*os.F
 	if err = os.MkdirAll(filepath.Dir(claimPath), 0700); err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	lock, err := os.OpenFile(claimPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
-	if runtime.GOOS == "windows" {
-		if info, statErr := lock.Stat(); statErr != nil {
-			_ = lock.Close()
-			return nil, nil, nil, nil, nil, statErr
-		} else if info.Size() == 0 {
-			_, _ = lock.WriteAt([]byte{'0'}, 0)
+	deadline := time.Now().Add(10 * time.Second)
+	var lock *os.File
+	for {
+		lock, err = os.OpenFile(claimPath, os.O_CREATE|os.O_RDWR, 0600)
+		if err == nil && runtime.GOOS == "windows" {
+			if info, statErr := lock.Stat(); statErr != nil {
+				err = statErr
+			} else if info.Size() == 0 {
+				_, err = lock.WriteAt([]byte{'0'}, 0)
+			}
 		}
-	}
-	if err = lockTaskUsageFile(lock); err != nil {
-		_ = lock.Close()
-		return nil, nil, nil, nil, nil, errAsyncClaimed
+		if err == nil {
+			err = lockTaskUsageFile(lock)
+			if err == nil {
+				break
+			}
+		}
+		if lock != nil {
+			_ = lock.Close()
+			lock = nil
+		}
+		if !time.Now().Before(deadline) {
+			return nil, nil, nil, nil, nil, errors.Join(errAsyncClaimLock, err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	release := func(cause error) (*os.File, map[string]any, map[string]any, map[string]any, any, error) {
 		releaseTaskUsageLock(lock)

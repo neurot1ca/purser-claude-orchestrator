@@ -4,6 +4,7 @@ package contextio
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strconv"
 	"syscall"
@@ -43,6 +44,10 @@ func unlock(f *os.File) error {
 
 func TryLock(f *os.File) error { return tryLock(f) }
 func Unlock(f *os.File) error  { return unlock(f) }
+
+func retryableLockOpenError(err error) bool {
+	return errors.Is(err, syscall.ERROR_ACCESS_DENIED) || errors.Is(err, syscall.Errno(32)) || errors.Is(err, syscall.Errno(33))
+}
 
 type fileIDInfo struct {
 	Volume uint64

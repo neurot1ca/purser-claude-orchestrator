@@ -395,6 +395,30 @@ func TestFailedReleaseWritePreservesPriorRecord(t *testing.T) {
 	}
 }
 
+func TestConcurrentReleasesOfDifferentOwnersBothSucceed(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	for _, owner := range []string{"one", "two"} {
+		if got := store.Acquire(owner, "task-"+owner, []string{"scope/" + owner}, AcquireOptions{}, 100); got.Code != "LEASE_ACQUIRED" {
+			t.Fatalf("acquire %s: %#v", owner, got)
+		}
+	}
+	start := make(chan struct{})
+	results := make(chan Result, 2)
+	for i, owner := range []string{"one", "two"} {
+		go func(owner string, now float64) {
+			<-start
+			results <- store.Release(owner, now)
+		}(owner, float64(101+i))
+	}
+	close(start)
+	for range 2 {
+		if got := <-results; got.Code != "LEASE_RELEASED" {
+			t.Fatalf("concurrent release: %#v", got)
+		}
+	}
+}
+
 func TestFailedReconcileWritePreservesPriorRecord(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "scope_leases.json")

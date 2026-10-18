@@ -1,6 +1,8 @@
 package enforce
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -69,10 +71,6 @@ func TestPostAsyncClaimPythonFixture(t *testing.T) {
 						t.Fatalf("fresh Windows claim lock marker = %q, n=%d, err=%v; want %q", marker, n, readErr, "0")
 					}
 				}
-				_, _, _, _, _, blockedErr := claimAsyncResult(state, input, repo)
-				if !errors.Is(blockedErr, errAsyncClaimed) || want["concurrent_blocked"] != true {
-					t.Fatalf("concurrent claim error = %v, blocked=%v", blockedErr, want["concurrent_blocked"])
-				}
 				if cached != nil || gotIndex["stage"] != want["stage"] {
 					t.Fatalf("claim result stage=%v cached=%#v, want %v", gotIndex["stage"], cached, want["stage"])
 				}
@@ -120,6 +118,70 @@ func TestPostAsyncClaimPythonFixture(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConcurrentAsyncResultsForDifferentJobsBothConsume(t *testing.T) {
+	state := t.TempDir()
+	repo := filepath.Join(state, "repo")
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := execGitInit(repo); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	project := projectKey(&repo)
+	type result struct {
+		bundle map[string]any
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for _, name := range []string{"one", "two"} {
+		call := "codex async fixture " + name
+		jobID := sha256Hex(call)
+		event := map[string]any{"tool_name": "mcp__plugin_purser_codex-main__codex_result", "session_id": "session-" + name,
+			"tool_use_id": "result-" + name, "tool_input": map[string]any{"jobId": jobID}}
+		origin := map[string]any{"tool_name": "mcp__codex-main__codex", "session_id": "session-" + name, "tool_use_id": "origin-" + name}
+		key, err := callKey(origin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		index := map[string]any{"call": call, "call_key": key, "jobId": jobID, "project_key": project, "session_id": "session-" + name, "stage": "FINISHED"}
+		pending := map[string]any{"async_call": call, "baseline": map[string]any{}, "job_id": jobID, "project_key": project,
+			"session_id": "session-" + name, "task_id": "task-" + name, "tool_use_id": "origin-" + name}
+		writeAsyncFixtureObject(t, filepath.Join(state, "async_jobs"), jobID, index)
+		writeAsyncFixtureObject(t, filepath.Join(state, "pending"), key, pending)
+		go func(event map[string]any, jobID string) {
+			<-start
+			lock, claimed, _, _, cached, claimErr := claimAsyncResult(state, event, repo)
+			if claimErr == nil {
+				bundle := map[string]any{"job": jobID, "result": "review bundle"}
+				claimErr = consumeAsyncResult(filepath.Join(state, "async_jobs", jobID+".json"), claimed, "bundle.json", bundle)
+				releaseTaskUsageLock(lock)
+				_ = lock.Close()
+				if cached != nil {
+					claimErr = errors.New("unexpected cached response")
+				}
+				if claimErr == nil {
+					results <- result{bundle: bundle}
+					return
+				}
+			}
+			results <- result{err: claimErr}
+		}(event, jobID)
+	}
+	close(start)
+	for range 2 {
+		got := <-results
+		if got.err != nil || got.bundle["result"] != "review bundle" {
+			t.Fatalf("result consumption failed: %#v", got)
+		}
+	}
+}
+
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func execGitInit(repo string) ([]byte, error) {
