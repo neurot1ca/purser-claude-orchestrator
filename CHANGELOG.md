@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.176 — 2026-10-18
+
+- **Fixed:** a plan accepted before a `git reset` or branch switch that left its base commit out of HEAD's history is treated as stale, so it no longer surfaces in hooks and a new plan can be accepted over it.
+
 ## 0.1.175 — 2026-10-18
 
 - **Fixed:** each ready plan milestone now carries its ORCH line, so parallel milestone jobs are no longer refused at start, and a dispatcher reports a permission denial as a fixed state instead of a question for the user.
