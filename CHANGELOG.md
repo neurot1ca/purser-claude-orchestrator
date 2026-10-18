@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.177 — 2026-10-18
+
+- **Fixed:** parallel milestone results collected at the same moment no longer fail as already consumed or with an uncertain lease release; the claim waits for its lock, and lock files retry Windows sharing violations.
+
 ## 0.1.176 — 2026-10-18
 
 - **Fixed:** a plan accepted before a `git reset` or branch switch that left its base commit out of HEAD's history is treated as stale, so it no longer surfaces in hooks and a new plan can be accepted over it.
