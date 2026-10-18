@@ -439,7 +439,29 @@ func runGit(repository string, args ...string) (string, error) {
 	command.Dir = repository
 	proc.ConfigureNoWindow(command)
 	output, err := command.Output()
+	if ctx.Err() != nil {
+		return string(output), ctx.Err()
+	}
 	return string(output), err
+}
+
+func refreshPlanStale(state *PlanState, repository string) bool {
+	if state == nil || state.staleChecked {
+		return state != nil && state.Stale
+	}
+	state.staleChecked = true
+	if state.BaseHead == "" {
+		state.Stale = false
+		return false
+	}
+	_, err := runGit(repository, "merge-base", "--is-ancestor", state.BaseHead, "HEAD")
+	if err == nil {
+		state.Stale = false
+		return false
+	}
+	exit, ok := err.(*exec.ExitError)
+	state.Stale = ok && exit.ExitCode() == 1
+	return state.Stale
 }
 
 func writeHandoffAtomically(path string, data []byte) error {

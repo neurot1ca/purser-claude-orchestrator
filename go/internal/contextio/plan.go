@@ -45,6 +45,8 @@ type PlanState struct {
 	ProjectKey          string           `json:"project_key"`
 	ProjectRoot         string           `json:"project_root"`
 	TaskID              string           `json:"task_id"`
+	BaseHead            string           `json:"base_head,omitempty"`
+	Stale               bool             `json:"stale,omitempty"`
 	ArtifactPath        string           `json:"artifact_path"`
 	ArtifactDigest      string           `json:"artifact_digest"`
 	AcceptedMilestones  []int            `json:"accepted_milestones"`
@@ -58,6 +60,7 @@ type PlanState struct {
 	AppliedPasses       []PlanPass       `json:"applied_passes,omitempty"`
 	Milestones          []PlanMilestone  `json:"milestones,omitempty"`
 	ReadyMilestones     []ReadyMilestone `json:"ready_milestones,omitempty"`
+	staleChecked        bool             `json:"-"`
 }
 
 type PlanMilestone struct {
@@ -569,14 +572,41 @@ func ReadPlan(root, repository string) (*PlanState, error) {
 	if err := checkPlanProjects(states, canonical); err != nil {
 		return nil, err
 	}
-	state, err := selectPlan(states, "")
-	if err != nil {
-		return nil, err
+	var active []*PlanState
+	var stale []*PlanState
+	for _, candidate := range states {
+		if candidate.CurrentMilestone == 0 {
+			continue
+		}
+		refreshPlanStale(candidate, canonical)
+		if candidate.Stale {
+			stale = append(stale, candidate)
+		} else {
+			active = append(active, candidate)
+		}
 	}
-	if err := validatePlanArtifact(state); err != nil {
-		return nil, err
+	choices := active
+	if len(choices) == 0 {
+		choices = stale
 	}
-	state.ReadyMilestones = readyMilestones(root, state, states)
+	var state *PlanState
+	if len(choices) == 1 {
+		state = choices[0]
+	} else if len(choices) > 1 {
+		return nil, errors.New("multiple unfinished plans; specify a plan task id")
+	} else {
+		return nil, errors.New("no unfinished plan; specify a plan task id")
+	}
+	if !state.Stale {
+		if err := validatePlanArtifact(state); err != nil {
+			return nil, err
+		}
+	}
+	if !state.Stale {
+		state.ReadyMilestones = readyMilestones(root, state, states)
+	} else {
+		state.ReadyMilestones = nil
+	}
 	return state, nil
 }
 
@@ -602,10 +632,17 @@ func ReadPlanForTask(root, repository, taskID string) (*PlanState, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validatePlanArtifact(state); err != nil {
-		return nil, err
+	refreshPlanStale(state, canonical)
+	if !state.Stale {
+		if err := validatePlanArtifact(state); err != nil {
+			return nil, err
+		}
 	}
-	state.ReadyMilestones = readyMilestones(root, state, states)
+	if !state.Stale {
+		state.ReadyMilestones = readyMilestones(root, state, states)
+	} else {
+		state.ReadyMilestones = nil
+	}
 	return state, nil
 }
 
@@ -643,11 +680,18 @@ func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (*P
 		if err := checkPlanProjects(states, canonical); err != nil {
 			return nil, err
 		}
+		active := states[:0]
 		for _, existing := range states {
+			refreshPlanStale(existing, canonical)
+			if existing.Stale {
+				continue
+			}
+			active = append(active, existing)
 			if existing.TaskID == taskID {
 				return nil, fmt.Errorf("active plan task id %q already exists", taskID)
 			}
 		}
+		states = active
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	} else {
@@ -658,6 +702,8 @@ func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (*P
 		return nil, err
 	}
 	state := &PlanState{Version: planSchemaVersion, Revision: 1, ProjectKey: ProjectKey(canonical), ProjectRoot: canonical, TaskID: taskID, ArtifactPath: artifactPath, ArtifactDigest: hex.EncodeToString(digest[:]), AcceptedMilestones: accepted, CurrentMilestone: accepted[0], PendingNextAction: "dispatch", Milestones: metadata}
+	state.BaseHead, _ = runGit(canonical, "rev-parse", "--verify", "HEAD")
+	state.BaseHead = strings.TrimSpace(state.BaseHead)
 	states = append(states, state)
 	state.ReadyMilestones = readyMilestones(root, state, states)
 	if err := writePlans(path, states); err != nil {
@@ -1118,6 +1164,10 @@ func ReconcilePlans(root, repository string) ([]*PlanState, error) {
 		if state.CurrentMilestone == 0 {
 			continue
 		}
+		refreshPlanStale(state, canonical)
+		if state.Stale {
+			continue
+		}
 		currentBefore := state.CurrentMilestone
 		completedBefore := len(state.CompletedMilestones)
 		if err := validatePlanArtifact(state); err != nil {
@@ -1211,6 +1261,9 @@ func PlanReadiness(root, repository, taskID string) ([]ReadyMilestone, error) {
 	}
 	if err := validatePlanArtifact(state); err != nil {
 		return nil, err
+	}
+	if refreshPlanStale(state, canonical) {
+		return nil, nil
 	}
 	return readyMilestones(root, state, states), nil
 }
@@ -1367,6 +1420,9 @@ func legacyPlanWritePaths(state *PlanState) []string {
 }
 
 func readyMilestones(root string, state *PlanState, states []*PlanState) []ReadyMilestone {
+	if refreshPlanStale(state, state.ProjectRoot) {
+		return nil
+	}
 	if state.UserStopped || state.Gate != "" {
 		return nil
 	}
@@ -1375,7 +1431,7 @@ func readyMilestones(root string, state *PlanState, states []*PlanState) []Ready
 		if earlier == state {
 			break
 		}
-		if earlier.UserStopped || earlier.Gate != "" {
+		if refreshPlanStale(earlier, earlier.ProjectRoot) || earlier.UserStopped || earlier.Gate != "" {
 			continue
 		}
 		if len(earlier.Milestones) == 0 {

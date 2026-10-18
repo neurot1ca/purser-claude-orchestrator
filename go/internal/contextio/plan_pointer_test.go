@@ -166,6 +166,81 @@ func TestPlanPointerAbsentStoppedOrCompleted(t *testing.T) {
 	})
 }
 
+func TestPlanPointerTracksAcceptanceHistory(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	gitPlanPointer(t, repo, "init", "--quiet")
+	gitPlanPointer(t, repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "parent")
+	parent := gitPlanPointer(t, repo, "rev-parse", "HEAD")
+	gitPlanPointer(t, repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "acceptance base")
+	acceptanceBase := gitPlanPointer(t, repo, "rev-parse", "HEAD")
+	artifact := filepath.Join(root, "accepted-plan.md")
+	if err := os.WriteFile(artifact, []byte("accepted plan"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	t.Setenv("PURSER_STATE_DIR", stateRoot)
+	accepted, err := AcceptPlan(stateRoot, repo, "history-plan", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.BaseHead != acceptanceBase {
+		t.Fatalf("base head = %q, want %q", accepted.BaseHead, acceptanceBase)
+	}
+	if got := renderActivePlanPointer(repo); !strings.Contains(got, "Plan history-plan:") {
+		t.Fatalf("equal-head pointer = %q, want active plan", got)
+	}
+	gitPlanPointer(t, repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "descendant")
+	if got := renderActivePlanPointer(repo); !strings.Contains(got, "Plan history-plan:") {
+		t.Fatalf("descendant pointer = %q, want active plan", got)
+	}
+	gitPlanPointer(t, repo, "reset", "--hard", parent)
+	if got := renderActivePlanPointer(repo); got != "" {
+		t.Fatalf("reset-to-base pointer = %q, want empty", got)
+	}
+	state, err := ReadPlanForTask(stateRoot, repo, "history-plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Stale || len(state.ReadyMilestones) != 0 {
+		t.Fatalf("stale status = stale:%v ready:%+v, want stale with no ready milestones", state.Stale, state.ReadyMilestones)
+	}
+	if _, err := AcceptPlan(stateRoot, repo, "replacement-plan", artifact, []int{1}); err != nil {
+		t.Fatalf("accept over stale plan: %v", err)
+	}
+}
+
+func TestPlanPointerLegacyWithoutBaseHeadRemainsActive(t *testing.T) {
+	root, repo, _, state := planPointerFixture(t, []int{1})
+	path := filepath.Join(root, "projects", state.ProjectKey, "active_plan.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "base_head") {
+		t.Fatalf("legacy plan unexpectedly has base_head: %s", data)
+	}
+	if got := renderActivePlanPointer(repo); !strings.Contains(got, "Plan plan-pointer:") {
+		t.Fatalf("legacy plan pointer = %q, want active plan", got)
+	}
+	status, err := ReadPlanForTask(root, repo, state.TaskID)
+	if err != nil || status.Stale {
+		t.Fatalf("legacy plan status = %+v, err=%v; want active", status, err)
+	}
+}
+
+func gitPlanPointer(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	output, err := testutil.Hide(exec.Command("git", append([]string{"-C", repo}, args...)...)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
+
 func TestPlanPointerReplacesJobScan(t *testing.T) {
 	source, err := os.ReadFile("precompact.go")
 	if err != nil {
