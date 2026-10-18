@@ -2,4 +2,4 @@
 addons/ponytail/ponytail.md -text
 addons/ponytail/LICENSE -text
 .claude/hooks/orchestrator/tests/** linguist-detectable=false
-assets/purser-demo.gif binary export-ignore
+assets/purser-demo.gif binary
