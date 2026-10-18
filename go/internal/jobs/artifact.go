@@ -13,7 +13,7 @@ import (
 	"purser-hook/internal/contextio"
 )
 
-// Artifact returns a plan artifact without entering the job result/finalization path.
+// Artifact returns a persisted job artifact without entering the result/finalization path.
 func Artifact(stateRoot, jobID, artifact string) map[string]any {
 	job := readJob(filepath.Join(stateRoot, "codex_exec_mcp", "jobs"), jobID)
 	if job == nil {
@@ -29,16 +29,30 @@ func Artifact(stateRoot, jobID, artifact string) map[string]any {
 		return artifactError(jobID, "Plan artifact is unavailable")
 	}
 	if index["stage"] != "CONSUMED" && index["stage"] != "FAILED" {
-		return artifactError(jobID, "Call codex_result without artifact first to finalize this job, then request the plan artifact.")
+		return artifactError(jobID, "Call codex_result without artifact first to finalize this job, then request the artifact.")
 	}
 	var bundle map[string]any
 	bundleData, err := os.ReadFile(filepath.Join(stateRoot, "bundle_artifacts", callKey+".json"))
 	if err == nil {
 		err = json.Unmarshal(bundleData, &bundle)
 	}
+	if err != nil || bundle == nil {
+		return artifactError(jobID, "Full bundle artifact is unavailable")
+	}
+	if artifact == "bundle" {
+		bundlePath, _ := bundle["full_bundle_path"].(string)
+		if bundlePath == "" || !insideBundleArtifactsDirectory(stateRoot, bundlePath) {
+			return artifactError(jobID, "Full bundle artifact path is outside the state root bundle_artifacts directory")
+		}
+		data, err := readArtifact(bundlePath)
+		if err != nil {
+			return artifactError(jobID, "Full bundle artifact is unavailable")
+		}
+		return artifactSuccess(jobID, string(data))
+	}
 	planPath, _ := bundle["plan_path"].(string)
-	if err != nil || planPath == "" {
-		return artifactError(jobID, "This job has no plan artifact; valid values: none")
+	if planPath == "" {
+		return artifactError(jobID, "This job has no plan artifact; valid values: bundle, none")
 	}
 	if !insidePlansDirectory(stateRoot, planPath) {
 		return artifactError(jobID, "Plan artifact path is outside the state root plans directory")
@@ -55,11 +69,13 @@ func Artifact(stateRoot, jobID, artifact string) map[string]any {
 		return artifactError(jobID, "Plan milestones are unavailable")
 	}
 	if section == "" {
-		values := "none"
+		values := "bundle, plan"
 		if len(valid) > 0 {
-			values = strings.Join(valid, ", ")
+			values += ", " + strings.Join(valid, ", ")
+		} else {
+			values += ", none"
 		}
-		return artifactError(jobID, "Unknown plan milestone; valid values: plan, "+values)
+		return artifactError(jobID, "Unknown artifact; valid values: "+values)
 	}
 	return artifactSuccess(jobID, section)
 }
@@ -75,7 +91,15 @@ func artifactError(jobID, message string) map[string]any {
 }
 
 func insidePlansDirectory(stateRoot, candidate string) bool {
-	base, err := filepath.Abs(filepath.Join(stateRoot, "plans"))
+	return insideArtifactDirectory(stateRoot, "plans", candidate)
+}
+
+func insideBundleArtifactsDirectory(stateRoot, candidate string) bool {
+	return insideArtifactDirectory(stateRoot, "bundle_artifacts", candidate)
+}
+
+func insideArtifactDirectory(stateRoot, directory, candidate string) bool {
+	base, err := filepath.Abs(filepath.Join(stateRoot, directory))
 	if err != nil {
 		return false
 	}

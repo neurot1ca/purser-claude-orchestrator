@@ -165,7 +165,7 @@ func TestStorePostPlanEmptySummaryIncludesArtifactPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "Plan summary is empty; complete plan is available at " + path + "."
+	want := "Plan summary is empty; retrieve the complete plan with codex_result artifact=\"plan\"."
 	if bundle["plan_summary"] != want || bundle["plan_path"] != path {
 		t.Fatalf("empty summary lacks complete plan pointer: %#v", bundle)
 	}

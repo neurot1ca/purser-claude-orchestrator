@@ -47,7 +47,7 @@ func storePostPlan(root string, event map[string]any, taskID any, report string,
 	}
 	summary := postPlanSummary(content)
 	if summary == "" && strings.TrimSpace(content) != "" {
-		summary = "Plan summary is empty; complete plan is available at " + path + "."
+		summary = "Plan summary is empty; retrieve the complete plan with codex_result artifact=\"plan\"."
 	}
 	bundle["plan_path"], bundle["plan_summary"] = path, summary
 	return path, nil

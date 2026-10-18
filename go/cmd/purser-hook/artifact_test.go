@@ -37,7 +37,7 @@ func setupArtifactCall(t *testing.T, planPath string) (string, []byte) {
 	if err := os.WriteFile(filepath.Join(root, "async_jobs", artifactTestJob+".json"), []byte(`{"call_key":"artifact-call","stage":"CONSUMED"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	bundle, _ := json.Marshal(map[string]any{"plan_path": planPath})
+	bundle, _ := json.Marshal(map[string]any{"plan_path": planPath, "full_bundle_path": filepath.Join(root, "bundle_artifacts", "artifact-call.json")})
 	if err := os.WriteFile(filepath.Join(root, "bundle_artifacts", "artifact-call.json"), bundle, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -73,18 +73,31 @@ func TestCodexResultArtifactReturnsMilestoneSection(t *testing.T) {
 	}
 }
 
-func TestCodexResultArtifactRejectsUnknownMilestone(t *testing.T) {
+func TestCodexResultArtifactRejectsUnknownValue(t *testing.T) {
 	state, _ := setupArtifactCall(t, ":inside")
-	result := callArtifact(state, "M9")
-	if result["isError"] != true || !strings.Contains(artifactText(result), "valid values: plan, M1, M2") {
+	result := callArtifact(state, "unknown")
+	if result["isError"] != true || !strings.Contains(artifactText(result), "valid values: bundle, plan, M1, M2") {
 		t.Fatalf("unknown milestone was not rejected with valid values: %#v", result)
+	}
+}
+
+func TestCodexResultArtifactReturnsFullBundle(t *testing.T) {
+	state, _ := setupArtifactCall(t, ":inside")
+	path := filepath.Join(state, "bundle_artifacts", "artifact-call.json")
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callArtifact(state, "bundle")
+	if got := artifactText(result); got != string(want) || result["isError"] == true {
+		t.Fatalf("bundle artifact = %#v, want exact persisted bundle %s", result, want)
 	}
 }
 
 func TestCodexResultArtifactRejectsJobWithoutPlan(t *testing.T) {
 	state, _ := setupArtifactCall(t, "")
 	result := callArtifact(state, "plan")
-	if result["isError"] != true || !strings.Contains(artifactText(result), "valid values: none") {
+	if result["isError"] != true || !strings.Contains(artifactText(result), "valid values: bundle, none") {
 		t.Fatalf("job without plan was not rejected: %#v", result)
 	}
 }
@@ -97,9 +110,26 @@ func TestCodexResultArtifactRequiresFinalization(t *testing.T) {
 	if err := os.Remove(filepath.Join(state, "bundle_artifacts", "artifact-call.json")); err != nil {
 		t.Fatal(err)
 	}
-	result := callArtifact(state, "plan")
-	if want := "Call codex_result without artifact first to finalize this job, then request the plan artifact."; result["isError"] != true || artifactText(result) != want {
+	result := callArtifact(state, "bundle")
+	if want := "Call codex_result without artifact first to finalize this job, then request the artifact."; result["isError"] != true || artifactText(result) != want {
 		t.Fatalf("unfinalized artifact response: %#v; want %q", result, want)
+	}
+}
+
+func TestCodexResultBundleArtifactRejectsPathOutsideStateRoot(t *testing.T) {
+	state, _ := setupArtifactCall(t, ":inside")
+	outside := filepath.Join(t.TempDir(), "bundle.json")
+	if err := os.WriteFile(outside, []byte(`{"private":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(state, "bundle_artifacts", "artifact-call.json")
+	bundle, _ := json.Marshal(map[string]any{"full_bundle_path": outside})
+	if err := os.WriteFile(bundlePath, bundle, 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := callArtifact(state, "bundle")
+	if result["isError"] != true || !strings.Contains(artifactText(result), "outside the state root bundle_artifacts directory") {
+		t.Fatalf("outside bundle path was not rejected: %#v", result)
 	}
 }
 
