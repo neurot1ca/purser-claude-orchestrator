@@ -215,6 +215,20 @@ It can submit two kinds of prompts for you. With auto-compact turned on (it stay
 
 Its PreToolUse hook checks tool calls against the Purser workflow. The hook can deny a call and tell Claude what to fix, but it never approves anything on your behalf and never changes a tool's input. Purser's MCP server applies the chosen route (model, effort and a code map line) to calls of Purser's own tools only.
 
+### What the hooks module does
+
+Reviewers of the plugin directory ask about each point below.
+
+- **Programs it starts.** `hooks/register.ts` starts only Purser's own binary, `bin/purser-hook-<os>-<arch>` inside the plugin folder. It builds that path at run time from the operating system and CPU, reading them from environment variables and falling back to `uname -s -m`. The binary then starts `git` for worktrees and diffs, and the coder CLIs you chose in `/purser:init`.
+- **Binaries.** The `bin/` binaries are built from the Go source in `go/` by `.github/workflows/release.yml`, and each release lists their checksums.
+- **What it sends and where.** The hooks module sends nothing off the machine itself. It passes hook events to the local binary on standard input. The binary's only network traffic is described above: worker briefs to your coder's provider, the models.dev model list and the daily GitHub release check.
+- **Permission hook.** The PreToolUse hook in `hooks/mod/enforcement.ts` and `hooks/register.ts` can only deny a tool call that breaks the Purser workflow, with a reason Claude can act on. Every other call passes on unchanged, so Claude Code's permission prompts and your permission mode decide as usual. It never answers "allow" and never changes a tool's input.
+- **Prompts and slash commands it submits.** These are only sent when auto-compact is on. The only slash command it runs is `/compact`, and only when the conversation is large and idle. After that it submits the fixed line "⚓ /compact ✓" so the turn resumes, and it adds a short note with the context size before and after. None of these prompts carries conversation text.
+- **Prompt hook.** The `prompt.submit` hook in `hooks/mod/autocompact.ts` only notes that you are active, so auto-compact waits. It does not change your prompt.
+- **Context it adds.** The SessionStart, UserPromptSubmit, PreCompact and Stop hooks add the handoff note, the reply-language reminder and the job board to the session context. They do not change settings, instructions, other hooks or tool descriptions.
+- **Files it writes.** The hooks module writes one file, `auto-compact.log` in Purser's state folder, which holds its last auto-compact decisions. No other tool reads or runs it.
+- **Credentials.** The plugin reads no provider tokens or API keys, because each coder CLI uses its own sign-in. The optional remote bridge, which is off unless you start it, only compares incoming requests against its own bridge token. The `GH_TOKEN` in `.github/workflows/release.yml` belongs to this repository's own release CI, and the files under `.claude/hooks/orchestrator/tests/fixtures/` are test data. The plugin runs neither.
+
 ## Telemetry
 
 Purser measures local job details such as route, model, duration, tokens, reviews, send-backs, queue waits, and stalls, and keeps the records on your machine. It uses them to update job time estimates; ETA estimates and free-model rankings learn from past runs. For more detail, it can write telemetry notes to an Obsidian vault when `PURSER_OBSIDIAN_VAULT` or `vault_root` is set to an absolute path, where you can inspect which jobs ran, how they were reviewed, and where time and tokens went.
