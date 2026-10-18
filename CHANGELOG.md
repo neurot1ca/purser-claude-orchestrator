@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.174 — 2026-10-18
+
+- **Fixed:** Claude reads the full review bundle through `codex_result` instead of reading Purser state files directly, so no outside-directory permission prompt appears.
+
 ## 0.1.173 — 2026-10-18
 
 - **Fixed:** Claude finalizes a plan job before reading its plan artifact, and a failed `codex_result` call no longer makes the next one report invalid helper output.
