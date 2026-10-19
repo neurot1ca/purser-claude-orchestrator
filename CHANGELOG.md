@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.179 — 2026-10-19
+
+- **Faster:** `init` detect prints compact agent options (about 5 KB instead of 175 KB) and probes agents concurrently; the init flow asks independent questions together.
+- **Fixed:** maintenance no longer skips its run because of active jobs in other projects; it checks only the project's own jobs.
+- **Fixed:** the job board repeats the reply language on turns started by task notifications, and new handoffs carry the known user language.
+- **Smaller:** the codex-orchestrator skill keeps a short core and loads its details from on-demand references.
 ## 0.1.178 — 2026-10-19
 
 - **Fixed:** a successful job with a large final message no longer comes back as FAILED "async result does not match successful durable job"; `codex_result` raises Claude Code's result size limit so the hook sees the full result, and the mismatch error names the failing check.
