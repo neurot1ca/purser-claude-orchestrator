@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -84,7 +85,7 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 		return nil, err
 	}
 	defer func() { _ = contextio.ClearMaintenanceActive(activePath) }()
-	if userJobs, known := activeUserJobs(state, ""); !known || userJobs {
+	if userJobs, known := activeUserJobs(state, root, ""); !known || userJobs {
 		return nil, errors.New("active or unknown user job state; maintenance skipped")
 	}
 	call, err := randomID()
@@ -110,7 +111,7 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 		return nil, err
 	}
 	for {
-		if userJobs, known := activeUserJobs(state, jobID); known && userJobs {
+		if userJobs, known := activeUserJobs(state, root, jobID); known && userJobs {
 			cancelled := structured(r.Jobs.Cancel(state, jobID))["state"] == "CANCELLED"
 			if !cancelled {
 				cancelDeadline := now().Add(timeout)
@@ -200,7 +201,7 @@ func (r Runner) clock() (func() time.Time, func(time.Duration), time.Duration, t
 	return now, sleep, poll, timeout
 }
 
-func activeUserJobs(state, exclude string) (bool, bool) {
+func activeUserJobs(state, root, exclude string) (bool, bool) {
 	dir := filepath.Join(state, "codex_exec_mcp", "jobs")
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -215,17 +216,32 @@ func activeUserJobs(state, exclude string) (bool, bool) {
 		}
 		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
 		if err != nil {
+			// Job files may be briefly locked by antivirus; without a readable
+			// project field this file cannot make this project's state unknown.
+			continue
+		}
+		var job struct {
+			State    any    `json:"state"`
+			JobID    any    `json:"jobId"`
+			CWD      string `json:"cwd"`
+			RepoRoot string `json:"repoRoot"`
+		}
+		decodeErr := json.Unmarshal(data, &job)
+		project := job.RepoRoot
+		if project == "" {
+			project = job.CWD
+		}
+		if project == "" || !sameProjectPath(project, root) {
+			continue
+		}
+		if decodeErr != nil {
 			return false, false
 		}
-		var job map[string]any
-		if json.Unmarshal(data, &job) != nil {
-			return false, false
-		}
-		status, ok := job["state"].(string)
+		status, ok := job.State.(string)
 		if !ok {
 			return false, false
 		}
-		idValue, exists := job["jobId"]
+		idValue, exists := job.JobID, job.JobID != nil
 		id, ok := idValue.(string)
 		if !exists {
 			id = strings.TrimSuffix(entry.Name(), ".json")
@@ -237,6 +253,27 @@ func activeUserJobs(state, exclude string) (bool, bool) {
 		}
 	}
 	return false, true
+}
+
+func sameProjectPath(a, b string) bool {
+	normalize := func(path string) string {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return ""
+		}
+		if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+			absolute = resolved
+		}
+		return filepath.Clean(absolute)
+	}
+	a, b = normalize(a), normalize(b)
+	if a == "" || b == "" {
+		return false
+	}
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 func replaceActive(path string, active map[string]any) error {

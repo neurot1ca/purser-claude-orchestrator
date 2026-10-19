@@ -92,7 +92,8 @@ func TestLifecycleOracle(t *testing.T) {
 			if tc.UserJob {
 				fake.onStart = func(_ string) {
 					_ = os.MkdirAll(jobsDir, 0700)
-					_ = os.WriteFile(filepath.Join(jobsDir, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json"), []byte(`{"jobId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"RUNNING"}`), 0600)
+					job, _ := json.Marshal(map[string]any{"jobId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "repoRoot": fake.started["cwd"], "state": "RUNNING"})
+					_ = os.WriteFile(filepath.Join(jobsDir, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json"), job, 0600)
 				}
 			}
 			current := time.Unix(100, 0)
@@ -124,6 +125,46 @@ func TestLifecycleOracle(t *testing.T) {
 				if fake.markerJobID != fake.jobID {
 					t.Fatalf("marker job id = %q", fake.markerJobID)
 				}
+			}
+		})
+	}
+}
+
+func TestRunScopesActiveJobsToRepository(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		project   string
+		wantError bool
+	}{
+		{name: "other project running job", project: "other"},
+		{name: "this project running job", project: "root", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state, root := t.TempDir(), t.TempDir()
+			jobsDir := filepath.Join(state, "codex_exec_mcp", "jobs")
+			if err := os.MkdirAll(jobsDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			project := t.TempDir()
+			if tc.project == "root" {
+				project = root
+			}
+			content, _ := json.Marshal(map[string]any{"state": "RUNNING", "repoRoot": project})
+			if err := os.WriteFile(filepath.Join(jobsDir, "job.json"), content, 0600); err != nil {
+				t.Fatal(err)
+			}
+			fake := &fakeJobs{results: []map[string]any{{"state": "SUCCEEDED"}}}
+			runner := Runner{Jobs: fake, CoderAgent: "codex", CoderModel: "gpt-6-luna", Sleep: func(time.Duration) {}}
+			_, err := runner.Run(state, root, "cleanup", "prompt")
+			if tc.wantError {
+				if err == nil || err.Error() != "active or unknown user job state; maintenance skipped" {
+					t.Fatalf("error = %v", err)
+				}
+				if fake.started != nil {
+					t.Fatal("maintenance started despite this project's active job")
+				}
+			} else if err != nil {
+				t.Fatalf("maintenance failed: %v", err)
 			}
 		})
 	}
@@ -162,7 +203,7 @@ func TestRunStartsWithMissingOrEmptyJobStore(t *testing.T) {
 	}
 }
 
-func TestRunSkipsCorruptJobStore(t *testing.T) {
+func TestRunSkipsUnattributableCorruptJobFile(t *testing.T) {
 	state := t.TempDir()
 	jobsDir := filepath.Join(state, "codex_exec_mcp", "jobs")
 	if err := os.MkdirAll(jobsDir, 0700); err != nil {
@@ -173,11 +214,31 @@ func TestRunSkipsCorruptJobStore(t *testing.T) {
 	}
 	fake := &fakeJobs{results: []map[string]any{{"state": "SUCCEEDED"}}}
 	runner := Runner{Jobs: fake, CoderAgent: "codex", CoderModel: "gpt-6-luna", Sleep: func(time.Duration) {}}
-	if _, err := runner.Run(state, t.TempDir(), "cleanup", "prompt"); err == nil || err.Error() != "active or unknown user job state; maintenance skipped" {
-		t.Fatalf("corrupt job store error = %v", err)
+	if _, err := runner.Run(state, t.TempDir(), "cleanup", "prompt"); err != nil {
+		t.Fatalf("unattributable corrupt job file blocked maintenance: %v", err)
+	}
+	if fake.started == nil {
+		t.Fatal("maintenance job was not started")
+	}
+}
+
+func TestRunSkipsProjectJobWithoutState(t *testing.T) {
+	state, root := t.TempDir(), t.TempDir()
+	jobsDir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	broken, _ := json.Marshal(map[string]any{"repoRoot": root})
+	if err := os.WriteFile(filepath.Join(jobsDir, "broken.json"), broken, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeJobs{results: []map[string]any{{"state": "SUCCEEDED"}}}
+	runner := Runner{Jobs: fake, CoderAgent: "codex", CoderModel: "gpt-6-luna", Sleep: func(time.Duration) {}}
+	if _, err := runner.Run(state, root, "cleanup", "prompt"); err == nil || err.Error() != "active or unknown user job state; maintenance skipped" {
+		t.Fatalf("project job without state error = %v", err)
 	}
 	if fake.started != nil {
-		t.Fatal("maintenance job started despite corrupt job state")
+		t.Fatal("maintenance job started despite unknown state for this project's job")
 	}
 }
 
