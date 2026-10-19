@@ -16,102 +16,84 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-Flow rules:
-- Every question is one `AskUserQuestion` picker, and its question text starts with ⚓. Mark an option “(recommended)” only where a step says so; never mark an option just because it is first. For dynamic model and effort listings, follow their recommendation metadata and mark nothing when none is specified. Never ask a numbered text question.
-- Speak the user's language from the first line, including in projects without Purser.
-- Start every message with ⚓ and use a receipt: a bold headline and short italic detail.
-- English is the master. Use the approved Turkish renderings below only when the user's language is Turkish; keep every question and option in one run in that language. Translate English into other languages without changing its meaning.
+Use the user's language throughout: approved Turkish below, otherwise translate English faithfully. Start every message ⚓ with bold headline and short italic detail. Questions start ⚓; use AskUserQuestion, never numbered text; at most four questions per call, only with already-fixed options. Translate recommendation marks; use only where specified. Dynamic marks require metadata. Use selected flags below for both plan/apply.
 
-Choose the concrete bundled binary for the current OS and architecture and invoke its quoted path directly: `purser-hook-windows-amd64.exe`, `purser-hook-windows-arm64.exe`, `purser-hook-darwin-amd64`, `purser-hook-darwin-arm64`, `purser-hook-linux-amd64`, or `purser-hook-linux-arm64`. Run `"${CLAUDE_PLUGIN_ROOT}/bin/<selected-binary>" init --detect --json`, passing the existing arguments unchanged.
+Choose the concrete binary from allowed-tools for the current OS/architecture; invoke its quoted path directly for all commands. First run `"${CLAUDE_PLUGIN_ROOT}/bin/<selected-binary>" init --detect --json`, passing existing arguments unchanged.
 
-1. Show installed agents and the current roles, trust, and profile state from `init --detect --json` in one ⚓ receipt. Read `maintenance_enabled`: `null` means no project choice has been saved; `true` or `false` means the user has already chosen, so do not offer maintenance again.
-2. In the user's language, show this intro as one ⚓ receipt, then say Claude Code is the orchestrator. Ask **⚓ Who writes the code?** in one `AskUserQuestion` picker. Put Codex first as “(recommended)”; offer Claude when installed; add OpenCode only when detection reports it available, labelled exactly **Free OpenCode models**, add Antigravity (agy) only when detection reports agy available, and add Cursor only when detection reports Cursor Agent CLI available. Show installed agents.
+Receipt: detected agents and roles/trust/profile. Ask maintenance/auto-compaction only when `maintenance_enabled`/`auto_compact_enabled` is null, never boolean. Show intro receipt; say Claude Code is orchestrator. Ask **⚓ Who writes the code?** alone: Codex first, “(recommended)”; offer only installed/available Claude, OpenCode as **Free OpenCode models**, Antigravity (agy), Cursor Agent CLI.
 
-   EN: ⚓ **Purser learns as it works here: it measures how long jobs really take, sharpens its estimates and shows where tokens and time can be saved.** *It runs independent jobs side by side, each in its own worktree; a job that touches files another job is changing waits its turn. When a task needs a plan, Purser proposes one first, then works through it step by step.*
+EN intro: ⚓ **Purser learns as it works here: it measures how long jobs really take, sharpens its estimates and shows where tokens and time can be saved.** *It runs independent jobs side by side, each in its own worktree; a job that touches files another job is changing waits its turn. When a task needs a plan, Purser proposes one first, then works through it step by step.*
 
-   TR: ⚓ **Purser bu projede çalıştıkça öğrenir: işlerin gerçekte ne kadar sürdüğünü ölçer, tahminlerini keskinleştirir ve token ile zamandan nerede tasarruf edilebileceğini gösterir.** *Birbirinden bağımsız işleri yan yana, her birini kendi çalışma ağacında yürütür; başka bir işin değiştirdiği dosyalara dokunacak iş sırasını bekler. Bir görev plan gerektiriyorsa Purser önce plan önerir, sonra adım adım uygular.*
+TR intro: ⚓ **Purser bu projede çalıştıkça öğrenir: işlerin gerçekte ne kadar sürdüğünü ölçer, tahminlerini keskinleştirir ve token ile zamandan nerede tasarruf edilebileceğini gösterir.** *Birbirinden bağımsız işleri yan yana, her birini kendi çalışma ağacında yürütür; başka bir işin değiştirdiği dosyalara dokunacak iş sırasını bekler. Bir görev plan gerektiriyorsa Purser önce plan önerir, sonra adım adım uygular.*
 
-   If Codex is chosen, ask in one `AskUserQuestion` picker: EN **⚓ How should Purser work?** / TR **⚓ Purser nasıl çalışsın?** Put Balanced first and mark it “(recommended)” in the user's language. Keep the same `--mode balanced|maximum|manual` choices and pass the selected flag to both `--plan` and `--apply`:
+After coder answer, Codex only: ask **⚓ How should Purser work?** / **⚓ Purser nasıl çalışsın?** alone. Balanced first, recommended; `--mode balanced|maximum|manual`.
+- EN **Balanced (recommended for the biggest savings):** *light tasks go to a fast model, hard ones to a stronger one; if a light attempt fails, Purser retries on the stronger model by itself. (You can switch to the stronger, faster model anytime with `/purser:gear-up`, and back with `/purser:gear-down`.)*
+- TR **Dengeli (yüksek tasarruf için önerilir):** *hafif işler hızlı modele, zor işler güçlü modele gider; hafif deneme başarısız olursa Purser kendiliğinden güçlü modelle yeniden dener. (`/purser:gear-up` ve `/purser:gear-down` komutlarıyla istediğin zaman daha güçlü ve hızlı modele geçip geri dönebilirsin.)*
+- EN **Maximum intelligence:** *the strongest model at the highest thinking level on every task; slower and uses quota faster.*
+- TR **Maksimum zeka:** *her işte en güçlü model, en yüksek düşünme seviyesi; daha yavaş, kotayı daha hızlı harcar.*
+- EN **I'll choose:** *you pick the coder's model and thinking level; Purser leaves them alone.*
+- TR **Kendim seçeceğim:** *kodlayıcının modelini ve düşünme seviyesini sen seçersin; Purser dokunmaz.*
 
-   - EN **Balanced (recommended for the biggest savings):** *light tasks go to a fast model, hard ones to a stronger one; if a light attempt fails, Purser retries on the stronger model by itself. (You can switch to the stronger, faster model anytime with `/purser:gear-up`, and back with `/purser:gear-down`.)*
-   - TR **Dengeli (yüksek tasarruf için önerilir):** *hafif işler hızlı modele, zor işler güçlü modele gider; hafif deneme başarısız olursa Purser kendiliğinden güçlü modelle yeniden dener. (`/purser:gear-up` ve `/purser:gear-down` komutlarıyla istediğin zaman daha güçlü ve hızlı modele geçip geri dönebilirsin.)*
-   - EN **Maximum intelligence:** *the strongest model at the highest thinking level on every task; slower and uses quota faster.*
-   - TR **Maksimum zeka:** *her işte en güçlü model, en yüksek düşünme seviyesi; daha yavaş, kotayı daha hızlı harcar.*
-   - EN **I'll choose:** *you pick the coder's model and thinking level; Purser leaves them alone.*
-   - TR **Kendim seçeceğim:** *kodlayıcının modelini ve düşünme seviyesini sen seçersin; Purser dokunmaz.*
+End coder model questions with EN **Other / just write your model choice** / TR **Diğer / model seçimini yazman yeterli**. Ask models after coder/mode answer:
+- Codex manual: `init --list-models --json --coder codex`; listed model picker, then chosen model's listed effort picker, separate calls. Reject unlisted choices; recommend only `recommended: true` model / `recommended_effort`. Flags: `--model MODEL --effort EFFORT`.
+- OpenCode/agy: detected model picker; recommend only `recommended: true`. Cursor: `init --list-models --json --coder cursor`, reduced `latest:<family>` model picker. Flag: `--model MODEL`.
+- Group `opencode/*-free` and `opencode/big-pickle` as **Free OpenCode models**; paid/provider models (including DeepSeek) separately. OpenCode: exact model, no `--mode`. agy: `agy models`, Gemini only, medium effort default.
+- Claude: no mode/model; receipt (translate): “Claude writes the code and the plans. Purser picks a tier for each task and always runs its newest model: Haiku for simple and operational work, Sonnet for ordinary work, Opus for important work and plans.”
 
-   For every coder agent's model picker, end the question with EN **Other / just write your model choice** / TR **Diğer / model seçimini yazman yeterli**. For manual mode, run `init --list-models --json --coder codex`, show only its listed models, and let the user choose one in an `AskUserQuestion` picker. Mark “(recommended)” only on a model whose listing has `recommended: true`; mark no model when none is recommended. Show the chosen model's listed efforts and let the user choose one in a picker. Mark “(recommended)” only on the effort named by that model's `recommended_effort`; mark no effort when it is null or absent. Pass the choice with `--model MODEL` and `--effort EFFORT` to both commands. Do not accept a model or effort outside the listing. If OpenCode or agy is chosen, show its detected options by model name in a picker and mark “(recommended)” only on options whose detection has `recommended: true`; mark none when none is recommended. If Cursor is chosen, run `init --list-models --json --coder cursor`, show its reduced `latest:<family>` options in one model picker, and pass the choice as `--model MODEL` to both commands. Group all `opencode/*-free` models and `opencode/big-pickle` under **Free OpenCode models**; show each paid/provider model (including DeepSeek models) as its own option. For an OpenCode coder route, pass the exact selected model as `--model MODEL` to both commands, without `--mode`. The agy options come from `agy models` and contain only Gemini models because Reviewer also runs agy. Antigravity routes use medium effort by default. If Claude is chosen, ask no mode or model question and say in one ⚓ receipt, translated to the user's language: “Claude writes the code and the plans. Purser picks a tier for each task and always runs its newest model: Haiku for simple and operational work, Sonnet for ordinary work, Opus for important work and plans.”
-3. After the coder is chosen, rerun `init --detect --json --coder CODER`, adding `--model MODEL` when a specific coder model was selected. For Codex, OpenCode, agy, or Cursor, ask in one `AskUserQuestion` picker which coder to use if the primary coder's quota runs out or it fails. Use the existing Turkish wording verbatim for Turkish users: “⚓ Ana kodlayıcının kotası dolar ya da çalışmazsa hangi kodlayıcıya geçilsin? Geçmeden önce her seferinde sana sorulur.” Translate it for other languages. Show only working coders from detection, by model name, plus “No fallback”; put “No fallback” first with no recommendation mark. Never offer a fallback for Claude as primary because its dispatch boundary is not established. On a selected fallback, pass `--fallback-agent AGENT --fallback-model MODEL` to both plan and apply; for “No fallback”, pass neither flag.
+After the coder is chosen, rerun `init --detect --json --coder CODER`, adding `--model MODEL` when a specific coder model was selected. Complete mode/model/effort choices before this call. Use its options to ask fallback (Codex/OpenCode/agy/Cursor only), reviewer and free small-job models (OpenCode detected only) together in one call.
 
-   Read `reviewer_options` from detection JSON. Ask in one `AskUserQuestion` picker:
+Fallback: EN **⚓ Which coder should take over if the primary coder runs out of quota or fails? You will be asked before each switch.** TR: “⚓ Ana kodlayıcının kotası dolar ya da çalışmazsa hangi kodlayıcıya geçilsin? Geçmeden önce her seferinde sana sorulur.” Working detected coders by model name; “No fallback” first, unmarked. Selection: `--fallback-agent AGENT --fallback-model MODEL`; No fallback: neither flag. Never offer for Claude primary.
 
-   EN: ⚓ **Who should review the coder's work (reviewer)?** *We recommend a reviewer independent of the coder and Claude. Any installed reviewer listed here can run by default; when `[review].require_different_family = true`, choose a different model family. You can turn review off or switch later with `/purser:reviewer`.* Other / just write your model choice
+Reviewer:
+EN: ⚓ **Who should review the coder's work (reviewer)?** *We recommend a reviewer independent of the coder and Claude. Any installed reviewer listed here can run by default; when `[review].require_different_family = true`, choose a different model family. You can turn review off or switch later with `/purser:reviewer`.* Other / just write your model choice
+TR: ⚓ **Kodlayıcının işini kim incelesin (inceleyici)?** *Kodlayıcıdan ve Claude'dan bağımsız bir inceleyici öneriyoruz. Varsayılan olarak kurulu herhangi bir agent inceleyebilir; `[review].require_different_family = true` ise farklı bir model ailesi seç. İncelemeyi kapatabilir veya sonra `/purser:reviewer` ile değiştirebilirsin.* Diğer / model seçimini yazman yeterli
+Show `reviewer_options` by model/effort (e.g. **gpt-6.1-sol · low**) plus Off; independent first, recommended; never recommend same-family. Off:
+- EN **Off:** *no independent review; Claude reviews alone.*
+- TR **Kapalı:** *bağımsız inceleme yok; Claude tek başına inceler.*
+Pass `--reviewer AGENT --reviewer-model MODEL`, adding `--reviewer-effort EFFORT` if provided; Off: `--reviewer none`.
 
-   TR: ⚓ **Kodlayıcının işini kim incelesin (inceleyici)?** *Kodlayıcıdan ve Claude'dan bağımsız bir inceleyici öneriyoruz. Varsayılan olarak kurulu herhangi bir agent inceleyebilir; `[review].require_different_family = true` ise farklı bir model ailesi seç. İncelemeyi kapatabilir veya sonra `/purser:reviewer` ile değiştirebilirsin.* Diğer / model seçimini yazman yeterli
+Small jobs: “Turn it on” recommended; `--opencode-mechanical` / `--no-opencode-mechanical`.
+EN: ⚓ **Free models for small chores** *Counting, status checks and summaries can run on OpenCode's free models, so they cost no quota. Each chore goes to the free model with the best record in your projects; if that model fails or is unavailable, the next one takes over. Purser scores every result (passed review and tests or not) and ranks the models by their last 20 results. When a new free model appears, Purser races it against the leader: now and then it reruns a finished chore on the new model in the background, and after five results the newcomer joins the ranking. Your work is never touched. Turn it on?*
+TR: ⚓ **Küçük işler için ücretsiz modeller** *Sayım, durum kontrolü ve özet gibi işler OpenCode'un ücretsiz modelleriyle çalışabilir, kota harcamaz. Her iş, projelerinde en iyi sonucu vermiş ücretsiz modele gider; o model başarısız olur ya da yanıt vermezse sıradaki devralır. Purser her sonucu puanlar (inceleme ve testlerden geçti mi), modelleri son 20 sonuçlarına göre sıralar. Yeni bir ücretsiz model gelince Purser onu öndeki modelle yarıştırır: ara sıra bitmiş bir işi arka planda yeni modelde tekrar çalıştırır, beş sonuçtan sonra yeni model sıralamaya girer. Senin işine hiç dokunulmaz. Açayım mı?*
 
-   Show detected `reviewer_options` by model name and effort (for example, **gpt-6.1-sol · low**), plus Off. Put an independent reviewer first as “(recommended)” in the user's language. Do not mark same-family options. Off option:
+Next call: trust project and scaffold `.orchestrator/profile.toml` (two questions; No first, unmarked; yes only: `--trust` / `--scaffold-profile`). Include Ponytail once if repo empty or UI framework in package.json or .tsx/.vue/.svelte/.html files, and no AGENTS.md/.orchestrator decision (No first, unmarked): “⚓ Building UI or web screens? Purser can switch on Ponytail: shortest working code, no needless abstractions, noticeably fewer tokens on UI work. Turn it on for this project?” Yes: copy `${CLAUDE_PLUGIN_ROOT}/addons/ponytail/ponytail.md` to `.orchestrator/ponytail.md`; add exact line to AGENTS.md (create if absent):
+> Before writing code, read `.orchestrator/ponytail.md`. The repository contract and the task's acceptance criteria outrank it.
+No: do nothing.
 
-   - EN **Off:** *no independent review; Claude reviews alone.*
-   - TR **Kapalı:** *bağımsız inceleme yok; Claude tek başına inceler.*
+After setup, before plan: one call for eligible maintenance/auto-compaction questions. Maintenance: “Turn it on” recommended; `--maintenance` / `--no-maintenance`. `<coder>` = chosen model name. Codex/agy/Claude/OpenCode free: subscription receipt; paid OpenCode: API-credit receipt.
+EN: ⚓ **Purser can keep this project tidy in the background.** *When you are idle it runs read-only scans with your coder (<coder>) on its subscription, never a paid API and never during a job:*
+- *cleanup candidates (dead code, stale files)*
+- *missing tests and the project's test coverage*
+- *a short report; nothing is changed*
+*Turn it on? You can change it anytime with `/purser:optimize`.*
+TR: ⚓ **Purser bu projeyi arka planda düzenli tutabilir.** *Sen boştayken kodlayıcınla (<coder>) aboneliği üzerinden yalnızca okuma yapan taramalar çalıştırır; ücretli API kullanmaz, iş çalışırken devreye girmez:*
+- *temizlenebilecekler (ölü kod, eskimiş dosyalar)*
+- *eksik testler ve proje test kapsaması*
+- *kısa bir rapor; hiçbir şey değiştirilmez*
+*Açayım mı? İstediğin zaman `/purser:optimize` ile değiştirebilirsin.*
+Paid OpenCode replaces first italic line with:
+EN: *When you are idle it runs read-only scans with your coder (<coder>), which uses its API credit, never during a job:*
+TR: *Sen boştayken kodlayıcınla (<coder>) yalnızca okuma yapan taramalar çalıştırır; bu, API kredisini kullanır; iş çalışırken devreye girmez:*
+After successful apply with maintenance on, immediately run synchronous `maintenance run cleanup --repo "<repository-root>"`. Read the printed report path; show finding count, top five findings/evidence in a table and full report path. On failure show error receipt and stop.
 
-   For a selected option with an effort, pass `--reviewer AGENT --reviewer-model MODEL --reviewer-effort EFFORT` to both plan and apply; otherwise pass `--reviewer AGENT --reviewer-model MODEL`. Use `--reviewer none` for Off. Keep the `--reviewer`, `--reviewer-model`, and `--reviewer-effort` flags.
-4. Only when OpenCode is detected, ask the following in one `AskUserQuestion` picker using “Turn it on” as the recommended yes option. Keep the `--opencode-mechanical` / `--no-opencode-mechanical` flags in both plan and apply.
+Auto-compaction, any coder: On first, recommended, then Off; `--auto-compact` / `--no-auto-compact`.
+EN: ⚓ **Automatic compaction** *When this conversation passes about 250K tokens, Purser saves a handoff (decisions, open work and the next step), runs /compact for you and picks the task back up by itself, so every later message costs far less. It applies to all your projects. You can turn it off anytime with `/purser:auto-compact off`.*
+TR: ⚓ **Otomatik sıkıştırma** *Sohbet yaklaşık 250 bin tokenı geçince Purser bir devir notu kaydeder (kararlar, açık işler ve sonraki adım), senin yerine /compact çalıştırır ve işe kendiliğinden kaldığı yerden devam eder; sonraki her mesaj çok daha ucuza gelir. Tüm projelerinde geçerlidir. İstediğin zaman `/purser:auto-compact off` ile kapatabilirsin.*
 
-   EN: ⚓ **Free models for small chores** *Counting, status checks and summaries can run on OpenCode's free models, so they cost no quota. Each chore goes to the free model with the best record in your projects; if that model fails or is unavailable, the next one takes over. Purser scores every result (passed review and tests or not) and ranks the models by their last 20 results. When a new free model appears, Purser races it against the leader: now and then it reruns a finished chore on the new model in the background, and after five results the newcomer joins the ranking. Your work is never touched. Turn it on?*
+Run `init --plan --coder X --reviewer AGENT` with all selected flags above. Show plan receipt: omit normal route; small chores show “Free OpenCode models” if enabled, otherwise mechanical route; mode only if chosen; trust/profile/maintenance/auto-compact/files to write as short italic lines. After plan, ask final yes/no alone: Yes first, unmarked. Skip confirmation only if plan explicitly shows no change versus detected state; otherwise require Yes before running identical options with `--apply --json` instead of `--plan`. If apply JSON has `"scope": "project"`, add EN *Roles saved for this project only.* / TR *Roller yalnızca bu proje için kaydedildi.* to final receipt.
+EN plan summary:
+> ⚓ **Purser is ready.** *Coder: {coder} · Reviewer: {reviewer} · Mode: {mode}*
+> - *Small chores → {mechanical model}*
+> - *Ordinary work → {subtle model / effort}*
+> - *Important work → {consequential model / effort}*
+> - *Plans → {plan_standard model / effort}*
+> *Shall I apply this setup?*
+TR plan summary:
+> ⚓ **Purser hazır.** *Kodlayıcı: {coder} · Reviewer: {reviewer} · Mod: {mode}*
+> - *Küçük işler → {mechanical model}*
+> - *Sıradan işler → {subtle model / effort}*
+> - *Önemli işler → {consequential model / effort}*
+> - *Planlar → {plan_standard model / effort}*
+> *Bu kurulumu uygulayayım mı?*
 
-   TR: ⚓ **Küçük işler için ücretsiz modeller** *Sayım, durum kontrolü ve özet gibi işler OpenCode'un ücretsiz modelleriyle çalışabilir, kota harcamaz. Her iş, projelerinde en iyi sonucu vermiş ücretsiz modele gider; o model başarısız olur ya da yanıt vermezse sıradaki devralır. Purser her sonucu puanlar (inceleme ve testlerden geçti mi), modelleri son 20 sonuçlarına göre sıralar. Yeni bir ücretsiz model gelince Purser onu öndeki modelle yarıştırır: ara sıra bitmiş bir işi arka planda yeni modelde tekrar çalıştırır, beş sonuçtan sonra yeni model sıralamaya girer. Senin işine hiç dokunulmaz. Açayım mı?*
-5. Ask whether to trust the current project and whether to scaffold `.orchestrator/profile.toml`, each in its own `AskUserQuestion` picker whose question text starts with ⚓. Put “No” first without a recommendation mark. Pass `--trust` and `--scaffold-profile` only if chosen.
-6. If the repo has a UI framework in `package.json`, `.tsx`, `.vue`, `.svelte`, or `.html` files, or is empty, and neither `AGENTS.md` nor `.orchestrator` records a Ponytail decision, offer once in the user's language in one ⚓ receipt and `AskUserQuestion` picker: “⚓ Building UI or web screens? Purser can switch on Ponytail: shortest working code, no needless abstractions, noticeably fewer tokens on UI work. Turn it on for this project?” Put “No” first without a recommendation mark. On yes, copy `${CLAUDE_PLUGIN_ROOT}/addons/ponytail/ponytail.md` to `.orchestrator/ponytail.md` and add this exact line to `AGENTS.md` (create it if missing):
-
-   > Before writing code, read `.orchestrator/ponytail.md`. The repository contract and the task's acceptance criteria outrank it.
-
-   On no, do nothing.
-7. When `maintenance_enabled` is `null`, for every chosen coder, after the existing setup questions and before showing the plan, ask once in the user's language with one `AskUserQuestion` picker. Use “Turn it on” as the recommended yes option and keep `--maintenance` / `--no-maintenance` in both plan and apply. For Codex, agy, Claude, and OpenCode free models, replace `<coder>` with the chosen coder model name and use the subscription/free-model receipt. For a paid OpenCode provider model, replace `<coder>` with the chosen model name and use the API-credit receipt.
-
-   EN: ⚓ **Purser can keep this project tidy in the background.** *When you are idle it runs read-only scans with your coder (<coder>) on its subscription, never a paid API and never during a job:*
-   - *cleanup candidates (dead code, stale files)*
-   - *missing tests and the project's test coverage*
-   - *a short report; nothing is changed*
-   *Turn it on? You can change it anytime with `/purser:optimize`.*
-
-   TR: ⚓ **Purser bu projeyi arka planda düzenli tutabilir.** *Sen boştayken kodlayıcınla (<coder>) aboneliği üzerinden yalnızca okuma yapan taramalar çalıştırır; ücretli API kullanmaz, iş çalışırken devreye girmez:*
-   - *temizlenebilecekler (ölü kod, eskimiş dosyalar)*
-   - *eksik testler ve proje test kapsaması*
-   - *kısa bir rapor; hiçbir şey değiştirilmez*
-   *Açayım mı? İstediğin zaman `/purser:optimize` ile değiştirebilirsin.*
-
-   For a paid OpenCode provider model, replace the first italic line in the matching language receipt with:
-
-   EN: *When you are idle it runs read-only scans with your coder (<coder>), which uses its API credit, never during a job:*
-
-   TR: *Sen boştayken kodlayıcınla (<coder>) yalnızca okuma yapan taramalar çalıştırır; bu, API kredisini kullanır; iş çalışırken devreye girmez:*
-
-   On yes, add `--maintenance` to both plan and apply; on no, add `--no-maintenance` to both. After a successful apply, if the user opted into maintenance, immediately run the bundled binary's synchronous cleanup command: `"${CLAUDE_PLUGIN_ROOT}/bin/<selected-binary>" maintenance run cleanup --repo "<repository-root>"`. It saves the report and cleanup `last-run.json` marker as part of the run, so the scheduler will not rerun cleanup for 56 hours. Read the report path printed by the command and present its findings in the same concise form as the SessionStart maintenance notice: finding count, the top five findings and evidence in a table, and the full report path (the full report retains any remaining findings). If the command fails, show the error in one ⚓ receipt and stop setup.
-8. Only when `auto_compact_enabled` is `null`, regardless of coder, ask once in the user's language with one `AskUserQuestion` picker. Put On first and mark it “(recommended)” in the user's language, followed by Off. Keep `--auto-compact` / `--no-auto-compact` in both plan and apply; if it is `true` or `false`, do not ask again.
-
-   EN: ⚓ **Automatic compaction** *When this conversation passes about 250K tokens, Purser saves a handoff (decisions, open work and the next step), runs /compact for you and picks the task back up by itself, so every later message costs far less. It applies to all your projects. You can turn it off anytime with `/purser:auto-compact off`.*
-   TR: ⚓ **Otomatik sıkıştırma** *Sohbet yaklaşık 250 bin tokenı geçince Purser bir devir notu kaydeder (kararlar, açık işler ve sonraki adım), senin yerine /compact çalıştırır ve işe kendiliğinden kaldığı yerden devam eder; sonraki her mesaj çok daha ucuza gelir. Tüm projelerinde geçerlidir. İstediğin zaman `/purser:auto-compact off` ile kapatabilirsin.*
-9. Run the bundled binary's `init --plan --coder X --reviewer AGENT`, adding the selected `--mode MODE` and manual `--model MODEL --effort EFFORT` only when Codex was chosen, or coder `--model MODEL` only when OpenCode, agy, or Cursor was chosen. For a selected Reviewer model, add `--reviewer-model MODEL` and `--reviewer-effort EFFORT` when that option has an effort; use `--reviewer none` when Off was selected. Pass the selected mechanical-route flag when OpenCode was detected. Add `--trust` and `--scaffold-profile` only if chosen. Include the selected maintenance flag for every chosen coder and the selected auto-compact flag when step 8 asked. Build a short summary from the `--plan` output and show it in one ⚓ receipt. Do not show the `normal` route. For small chores, show “Free OpenCode models” if step 4 was enabled; otherwise show the plan's mechanical route. Include the mode line only when a mode was chosen. Put other plan lines (trust, profile scaffold, maintenance, auto-compact, files to write) below as one short italic line each. Ask for confirmation in one yes/no `AskUserQuestion` picker, with Yes first and no recommendation mark. Only after yes, run the same options with `--apply --json` instead of `--plan`. After a successful apply, when its JSON acknowledgement has `"scope": "project"`, add this italic line to the final ⚓ receipt in the user's language: EN *Roles saved for this project only.* / TR *Roller yalnızca bu proje için kaydedildi.*
-
-   EN summary:
-
-   > ⚓ **Purser is ready.** *Coder: {coder} · Reviewer: {reviewer} · Mode: {mode}*
-   > - *Small chores → {mechanical model}*
-   > - *Ordinary work → {subtle model / effort}*
-   > - *Important work → {consequential model / effort}*
-   > - *Plans → {plan_standard model / effort}*
-   > *Shall I apply this setup?*
-
-   TR summary:
-
-   > ⚓ **Purser hazır.** *Kodlayıcı: {coder} · Reviewer: {reviewer} · Mod: {mode}*
-   > - *Küçük işler → {mechanical model}*
-   > - *Sıradan işler → {subtle model / effort}*
-   > - *Önemli işler → {consequential model / effort}*
-   > - *Planlar → {plan_standard model / effort}*
-   > *Bu kurulumu uygulayayım mı?*
-
-10. Run `/purser:check` and show its result in one ⚓ receipt.
-11. Offer `/purser:optimize` in one sentence as an ⚓ receipt; do not run it automatically.
-
-Never edit `~/.orchestrator/config.toml` or `.orchestrator/profile.toml` by hand. If detection or planning fails, show the error in one ⚓ receipt and stop setup.
+After apply run `/purser:check` and show result in one ⚓ receipt. Offer `/purser:optimize` in one sentence as ⚓ receipt; do not run automatically. Never hand-edit `~/.orchestrator/config.toml` or `.orchestrator/profile.toml`. If detection or planning fails, show error in one ⚓ receipt and stop.
