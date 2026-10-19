@@ -40,9 +40,26 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	job := asyncJob(root, index)
 	value := firstCodexResult(event["tool_response"])
 	thread, content := stringValue(value["threadId"]), stringValue(value["content"])
-	if job == nil || job["state"] != "SUCCEEDED" || thread == "" || thread != job["threadId"] ||
-		value["jobId"] != index["jobId"] || value["state"] != "SUCCEEDED" || codexResponseIsError(event["tool_response"]) {
-		return nil, errors.New("async result does not match successful durable job")
+	if job == nil {
+		return nil, errors.New("durable job missing or identity mismatch")
+	}
+	if job["state"] != "SUCCEEDED" {
+		return nil, fmt.Errorf("durable job state %v", job["state"])
+	}
+	if thread == "" {
+		return nil, errors.New("result threadId is empty")
+	}
+	if thread != job["threadId"] {
+		return nil, errors.New("thread mismatch")
+	}
+	if value["jobId"] != index["jobId"] {
+		return nil, errors.New("result jobId mismatch")
+	}
+	if value["state"] != "SUCCEEDED" {
+		return nil, fmt.Errorf("result state %v", value["state"])
+	}
+	if codexResponseIsError(event["tool_response"]) {
+		return nil, errors.New("result envelope flagged isError")
 	}
 	if gap, ok := job["liveness"].(map[string]any); ok {
 		if seconds, ok := gap["longestSilentGapSeconds"].(float64); ok && seconds >= 0 {

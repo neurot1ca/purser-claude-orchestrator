@@ -53,6 +53,15 @@ func TestFinishAsyncSuccessKeepsStringMapFindings(t *testing.T) {
 	t.Fatalf("async finding missing from bundle: %#v", findings)
 }
 
+func TestFinishAsyncSuccessRejectsThreadMismatch(t *testing.T) {
+	state, repo, event, index, pending, original, _, resolved, loaded := newAsyncSuccessCase(t, "thread_mismatch")
+	mapValue(mapValue(event["tool_response"])["structuredContent"])["threadId"] = "other-thread"
+	_, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil, nil, 8000, 1200, time.Second)
+	if err == nil || err.Error() != "thread mismatch" {
+		t.Fatalf("diagnostic = %v, want thread mismatch", err)
+	}
+}
+
 func TestPostAsyncDiscardedCancelReturnsOnlyReceipt(t *testing.T) {
 	state, repo, event, index, _, _, job, _, _ := newAsyncSuccessCase(t, "discarded_cancel")
 	event["tool_name"] = "mcp__codex-main__codex_cancel"

@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,8 +21,134 @@ import (
 
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/jobs"
+	"purser-hook/internal/lease"
+	"purser-hook/internal/ledger"
 	"purser-hook/internal/waiter"
 )
+
+func TestCodexResultLargePostBundle(t *testing.T) {
+	parent := filepath.Join("..", "..", "..", ".tmp")
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.MkdirTemp(parent, "large-result-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _ = filepath.Abs(root)
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, "src"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path string, value any) {
+		t.Helper()
+		data, ok := value.([]byte)
+		if !ok {
+			data, err = json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(repo, "src", "file.go"), []byte("package src\n"))
+	write(filepath.Join(repo, ".gitignore"), []byte(".tmp/\n"))
+	gitMCPTest(t, repo, "init", "-q")
+	gitMCPTest(t, repo, "add", "--all")
+	gitMCPTest(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture")
+	baseline := ledger.CaptureBaseline(repo, []string{"src"}, 1)
+	report := strings.Repeat("report\n", 10236) // 71,652 bytes, matching the incident's size.
+	write(filepath.Join(repo, ".tmp", "notes.md"), []byte(report))
+	sum := sha256.Sum256([]byte("large-result-call"))
+	jobID := hex.EncodeToString(sum[:])
+	sum = sha256.Sum256([]byte("session\x00origin"))
+	key := hex.EncodeToString(sum[:])
+	write(filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".output"), []byte(report))
+	write(filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json"), map[string]any{
+		"jobId": jobID, "call": "large-result-call", "state": "SUCCEEDED", "exitCode": 0,
+		"threadId": "large-thread", "repoRoot": repo, "finishedAt": float64(time.Now().Unix()), "outputFile": jobID + ".output", "decisionRecorded": true,
+	})
+	write(filepath.Join(root, "async_jobs", jobID+".json"), map[string]any{
+		"jobId": jobID, "call": "large-result-call", "call_key": key, "project_key": "fixture", "session_id": "session", "stage": "READY",
+	})
+	write(filepath.Join(root, "pending", key+".json"), map[string]any{
+		"task_id": "large-result", "phase": "implementation", "scope": []string{"src"}, "baseline": baseline,
+		"tool_use_id": "origin", "job_id": jobID, "async_call": "large-result-call", "session_id": "session", "project_key": "fixture",
+		"repo_root": repo, "lease_owner": key, "route": "normal", "agent": "agy", "model": "fixture", "task_contract_grounded": true,
+	})
+	if result := lease.New(filepath.Join(root, "projects", "fixture")).Acquire(key, "large-result", []string{"src"}, lease.AcquireOptions{}, float64(time.Now().Unix())); result.Status != "OK" {
+		t.Fatal(result)
+	}
+	t.Setenv("PURSER_TEST_DISABLE_CHILD_LAUNCH", "1")
+	result, err := dispatchOperation(context.Background(), "codex_result", map[string]any{"jobId": jobID}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire bytes.Buffer
+	server := mcpServer{out: &wire}
+	server.send(rpcReply{"2.0", json.RawMessage("1"), result, nil})
+	var reply struct{ Result map[string]any }
+	if err := json.Unmarshal(wire.Bytes(), &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Result["isError"] != false {
+		t.Fatalf("bridge flagged successful job: %#v", reply.Result["isError"])
+	}
+	data, err := json.Marshal(reply.Result["structuredContent"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Replay the incident's over-limit client response. Claude's per-tool size
+	// annotation bypasses early persistence, leaving PostToolUse the complete JSON.
+	hasResultSizeAnnotation := false
+	var tools []struct {
+		Name string
+		Meta map[string]float64 `json:"_meta"`
+	}
+	if err := json.Unmarshal([]byte(mcpSchemas), &tools); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools {
+		if tool.Name == "codex_result" && tool.Meta["anthropic/maxResultSizeChars"] > 0 {
+			hasResultSizeAnnotation = true
+		}
+	}
+	hookResponse := string(data)
+	if !hasResultSizeAnnotation {
+		path := filepath.Join(root, "persisted-result.json")
+		write(path, data)
+		hookResponse = fmt.Sprintf("Error: result (%d characters) exceeds maximum allowed tokens. Output has been saved to %s.\nFormat: JSON\n", len(data), path)
+	}
+	post, err := enforce.PostToolUse(map[string]any{
+		"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_result", "tool_use_id": "result", "session_id": "session", "cwd": repo,
+		"tool_input": map[string]any{"jobId": jobID}, "tool_response": hookResponse,
+	}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := post["hookSpecificOutput"].(map[string]any)["updatedToolOutput"].([]any)[0].(map[string]any)["text"].(string)
+	var bundle map[string]any
+	if err := json.Unmarshal([]byte(output), &bundle); err != nil {
+		t.Fatal(err)
+	}
+	path, ok := bundle["full_bundle_path"].(string)
+	if !ok {
+		t.Fatalf("Post did not produce a success bundle: %s", output)
+	}
+	full, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(full, &bundle) != nil {
+		t.Fatalf("full bundle unavailable: %v", err)
+	}
+	if bundle["implementer_report"] != report || bundle["thread_id"] != "large-thread" || bundle["delta_files"] != float64(0) {
+		t.Fatal("full bundle lost report, thread identity or zero-delta result")
+	}
+}
 
 func TestMCPMonitorFailureServesProtocolUnbound(t *testing.T) {
 	owner, err := waiter.PinOwner(os.Getpid())
