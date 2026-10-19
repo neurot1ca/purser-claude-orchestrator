@@ -9,7 +9,7 @@ import (
 )
 
 var stopRetryJobID = regexp.MustCompile(`^[0-9a-f]{64}$`)
-var stopRetryDenial = regexp.MustCompile(`(?is)(?:classifier.{0,60}(?:no verdict|den(?:y|ied))|(?:permission|policy).{0,60}den(?:y|ied)|den(?:y|ied).{0,60}(?:permission|classifier|policy))`)
+var stopRetryDenial = regexp.MustCompile(`(?is)(?:classifier.{0,60}(?:no verdict|unavailable)|(?:no verdict|unavailable).{0,60}classifier)`)
 var stopRetryJobSanitize = regexp.MustCompile(`(?i)[0-9a-f]{64}`)
 
 type stopRetryCall struct {
@@ -17,7 +17,7 @@ type stopRetryCall struct {
 	result   map[string]any
 }
 
-// codexRetryReason finds a retryable async result or classifier denial in the
+// codexRetryReason finds a retryable async result or classifier no-verdict in the
 // transcript segment beginning after latestUser.
 func codexRetryReason(records []map[string]any, latestUser int, repository string) string {
 	if latestUser < -1 || latestUser >= len(records) || repository == "" {

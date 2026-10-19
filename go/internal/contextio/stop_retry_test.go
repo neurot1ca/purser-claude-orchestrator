@@ -69,6 +69,37 @@ func TestPythonStopRetryGoldenParity(t *testing.T) {
 	}
 }
 
+func TestStopRetryDoesNotRetryAutoModeDenial(t *testing.T) {
+	repository := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repository, 0700); err != nil {
+		t.Fatal(err)
+	}
+	denial := "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Auto-Mode Bypass]. ..."
+	records := []map[string]any{
+		{"type": "user", "message": map[string]any{"content": "Continue."}},
+		{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": "call-1", "name": "mcp__plugin_purser_codex-main__codex_apply", "input": map[string]any{}}}}},
+		{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call-1", "is_error": true, "content": denial}}}},
+	}
+	if got := codexRetryReason(records, 0, repository); got != "" {
+		t.Fatalf("auto-mode denial produced Stop retry text: %q", got)
+	}
+}
+
+func TestStopRetryRetriesClassifierNoVerdict(t *testing.T) {
+	repository := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repository, 0700); err != nil {
+		t.Fatal(err)
+	}
+	records := []map[string]any{
+		{"type": "user", "message": map[string]any{"content": "Continue."}},
+		{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": "call-1", "name": "mcp__plugin_purser_codex-main__codex_apply", "input": map[string]any{}}}}},
+		{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call-1", "is_error": true, "content": "classifier no verdict"}}}},
+	}
+	if got, want := codexRetryReason(records, 0, repository), "Retry the denied codex_apply call."; got != want {
+		t.Fatalf("codexRetryReason = %q, want %q", got, want)
+	}
+}
+
 func TestStopRetrySkipsTerminalFailedAsyncIndex(t *testing.T) {
 	repository := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(repository, 0700); err != nil {
