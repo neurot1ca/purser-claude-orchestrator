@@ -3,6 +3,7 @@ package initsetup
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -243,6 +244,38 @@ func TestDetectAcceptsCodexModelWithoutModeOrEffort(t *testing.T) {
 	var detected map[string]any
 	if err := json.Unmarshal(output.Bytes(), &detected); err != nil {
 		t.Fatalf("invalid detect output %q: %v", output.String(), err)
+	}
+}
+
+func TestCompactDetectionBoundsCatalogsAndPayload(t *testing.T) {
+	models := make([]any, 2000)
+	options := make([]any, 2000)
+	reviewerOptions := make([]map[string]any, 2000)
+	for i := range models {
+		id := fmt.Sprintf("provider/large-model-%04d", i)
+		models[i] = id
+		options[i] = map[string]any{"label": id, "models": []string{id}, "recommended": i == 900}
+		reviewerOptions[i] = map[string]any{"agent": "opencode", "model": id, "label": id, "family": "provider"}
+	}
+	agent := map[string]any{"available": true, "path": "/tools/opencode", "version": "1.2.3", "models": models, "options": options}
+	detected := map[string]any{"agents": map[string]any{"opencode": agent}, "reviewer_options": reviewerOptions}
+	compactDetection(detected)
+	raw, err := json.Marshal(detected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) >= 8*1024 {
+		t.Fatalf("compact detection is %d bytes, want under 8192", len(raw))
+	}
+	if _, exists := agent["models"]; exists || agent["model_count"] != 2000 {
+		t.Fatalf("full model catalog was not summarized: %#v", agent)
+	}
+	gotOptions := agent["options"].([]any)
+	if len(gotOptions) != detectOptionLimit || gotOptions[0].(map[string]any)["recommended"] != true {
+		t.Fatalf("picker options = %#v", gotOptions)
+	}
+	if got := len(detected["reviewer_options"].([]map[string]any)); got != detectOptionLimit {
+		t.Fatalf("reviewer options = %d, want %d", got, detectOptionLimit)
 	}
 }
 

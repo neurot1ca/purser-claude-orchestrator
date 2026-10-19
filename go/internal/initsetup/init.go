@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"purser-hook/internal/contextio"
@@ -190,6 +191,7 @@ func Run(stdout, stderr io.Writer, args []string) int {
 		if e != nil {
 			return printError(stderr, e)
 		}
+		compactDetection(value)
 		return writeIndented(stdout, value)
 	}
 	if o.list {
@@ -279,43 +281,68 @@ func detect(home, root string) (map[string]any, error) {
 		return nil, err
 	}
 	providers := loadProviders(home)
+	type detection struct {
+		name   string
+		agent  map[string]any
+		models []map[string]any
+		reason string
+	}
+	names := []string{"codex", "claude", "opencode", "agy", "cursor"}
+	results := make(chan detection, len(names))
+	var probes sync.WaitGroup
+	for _, name := range names {
+		probes.Add(1)
+		go func(name string) {
+			defer probes.Done()
+			if name == "cursor" {
+				a := cursorAgent()
+				models, _ := a["models"].([]string)
+				if len(models) > 0 {
+					a["options"] = cursorModelOptions(models)
+					a["models"] = stringsToAny(models)
+				}
+				results <- detection{name: name, agent: a}
+				return
+			}
+			a := agent(name)
+			if name == "claude" {
+				results <- detection{name: name, agent: a}
+				return
+			}
+			listing := discoverModels(name, providers)
+			results <- detection{name: name, agent: a, models: listing.models, reason: listing.reason}
+		}(name)
+	}
+	probes.Wait()
+	close(results)
 	agents := map[string]any{}
 	modelSets := map[string][]map[string]any{}
-	for _, name := range []string{"codex", "claude", "opencode", "agy", "cursor"} {
-		if name == "cursor" {
-			a := cursorAgent()
-			if a["available"] == true {
-				models, _ := a["models"].([]string)
-				a["options"] = cursorModelOptions(models)
-				a["models"] = stringsToAny(models)
-				agents[name] = a
-			}
+	for result := range results {
+		name, a := result.name, result.agent
+		if name == "cursor" && a["available"] != true {
 			continue
 		}
-		a := agent(name)
-		if name == "claude" {
-			agents[name] = a
-			continue
-		}
-		listing := discoverModels(name, providers)
-		markModelRecommendations(listing.models, routeRecommendations())
-		modelSets[name] = listing.models
-		if name == "codex" {
-			a["models"] = stringsFromModels(listing.models)
-			a["options"] = modelOptions(name, listing.models)
-		}
-		if name == "agy" {
-			a["models"] = stringsFromModels(listing.models)
-			if len(listing.models) > 0 {
+		if name != "cursor" && name != "claude" {
+			listing := discovered{models: result.models, reason: result.reason}
+			markModelRecommendations(listing.models, routeRecommendations())
+			modelSets[name] = listing.models
+			if name == "codex" {
+				a["models"] = stringsFromModels(listing.models)
 				a["options"] = modelOptions(name, listing.models)
 			}
-		}
-		if name == "opencode" {
-			a["models"] = stringsFromModels(listing.models)
-			if len(listing.models) > 0 {
-				a["options"] = modelOptions(name, listing.models)
-			} else {
-				a["reason"] = listing.reason
+			if name == "agy" {
+				a["models"] = stringsFromModels(listing.models)
+				if len(listing.models) > 0 {
+					a["options"] = modelOptions(name, listing.models)
+				}
+			}
+			if name == "opencode" {
+				a["models"] = stringsFromModels(listing.models)
+				if len(listing.models) > 0 {
+					a["options"] = modelOptions(name, listing.models)
+				} else {
+					a["reason"] = listing.reason
+				}
 			}
 		}
 		agents[name] = a
@@ -374,6 +401,88 @@ func detect(home, root string) (map[string]any, error) {
 		}
 	}
 	return map[string]any{"agents": agents, "reviewer_options": reviewerOptions, "roles": defaultMap(roles), "trusted": trusted, "profile_exists": exists(filepath.Join(root, ".orchestrator", "profile.toml")), "maintenance_enabled": maintenanceEnabled, "auto_compact_enabled": autoCompactEnabled}, nil
+}
+
+const detectOptionLimit = 5
+
+func compactDetection(detected map[string]any) {
+	agents, _ := detected["agents"].(map[string]any)
+	for _, value := range agents {
+		if agent, ok := value.(map[string]any); ok {
+			compactAgentDetection(agent)
+		}
+	}
+	if options, ok := detected["reviewer_options"].([]map[string]any); ok {
+		detected["reviewer_options"] = compactReviewerOptions(options)
+	}
+}
+
+func compactAgentDetection(agent map[string]any) {
+	models, _ := agent["models"].([]any)
+	if values, ok := agent["models"].([]string); ok {
+		models = stringsToAny(values)
+	}
+	if _, exists := agent["models"]; exists {
+		agent["model_count"] = len(models)
+		delete(agent, "models")
+	}
+	options, _ := agent["options"].([]any)
+	if len(options) > 0 {
+		agent["option_count"] = len(options)
+		selected := make([]any, 0, detectOptionLimit)
+		for _, option := range options {
+			m, _ := option.(map[string]any)
+			if m != nil && m["recommended"] == true {
+				selected = append(selected, compactOption(m))
+				break
+			}
+		}
+		for _, option := range options {
+			if len(selected) >= detectOptionLimit {
+				break
+			}
+			m, _ := option.(map[string]any)
+			if m == nil || m["recommended"] == true {
+				continue
+			}
+			selected = append(selected, compactOption(m))
+		}
+		agent["options"] = selected
+	}
+}
+
+func compactOption(option map[string]any) map[string]any {
+	copy := make(map[string]any, len(option))
+	for key, value := range option {
+		if key == "models" {
+			if models, ok := value.([]string); ok && len(models) > detectOptionLimit {
+				copy[key] = models[:detectOptionLimit]
+				copy["model_count"] = len(models)
+				continue
+			}
+			if models, ok := value.([]any); ok && len(models) > detectOptionLimit {
+				copy[key] = models[:detectOptionLimit]
+				copy["model_count"] = len(models)
+				continue
+			}
+		}
+		copy[key] = value
+	}
+	return copy
+}
+
+func compactReviewerOptions(options []map[string]any) []map[string]any {
+	counts := map[string]int{}
+	out := make([]map[string]any, 0, len(options))
+	for _, option := range options {
+		name := asString(option["agent"])
+		if counts[name] >= detectOptionLimit {
+			continue
+		}
+		counts[name]++
+		out = append(out, option)
+	}
+	return out
 }
 
 func codexReviewerOptions(models []map[string]any) []map[string]any {

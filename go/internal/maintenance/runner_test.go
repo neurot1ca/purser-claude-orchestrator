@@ -141,6 +141,46 @@ func TestRunStartsConfiguredOpenCodeAgentAndOperationModel(t *testing.T) {
 	}
 }
 
+func TestRunStartsWithMissingOrEmptyJobStore(t *testing.T) {
+	for _, emptyDir := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing", true: "empty"}[emptyDir], func(t *testing.T) {
+			state := t.TempDir()
+			if emptyDir {
+				if err := os.MkdirAll(filepath.Join(state, "codex_exec_mcp", "jobs"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fake := &fakeJobs{results: []map[string]any{{"state": "SUCCEEDED"}}}
+			runner := Runner{Jobs: fake, CoderAgent: "codex", CoderModel: "gpt-6-luna", Sleep: func(time.Duration) {}}
+			if _, err := runner.Run(state, t.TempDir(), "cleanup", "prompt"); err != nil {
+				t.Fatalf("maintenance did not start: %v", err)
+			}
+			if fake.started == nil {
+				t.Fatal("maintenance job was not started")
+			}
+		})
+	}
+}
+
+func TestRunSkipsCorruptJobStore(t *testing.T) {
+	state := t.TempDir()
+	jobsDir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobsDir, "broken.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeJobs{results: []map[string]any{{"state": "SUCCEEDED"}}}
+	runner := Runner{Jobs: fake, CoderAgent: "codex", CoderModel: "gpt-6-luna", Sleep: func(time.Duration) {}}
+	if _, err := runner.Run(state, t.TempDir(), "cleanup", "prompt"); err == nil || err.Error() != "active or unknown user job state; maintenance skipped" {
+		t.Fatalf("corrupt job store error = %v", err)
+	}
+	if fake.started != nil {
+		t.Fatal("maintenance job started despite corrupt job state")
+	}
+}
+
 func TestRunnerUsesProjectCoderConfiguration(t *testing.T) {
 	root := t.TempDir()
 	repository := filepath.Join(root, "repo")
