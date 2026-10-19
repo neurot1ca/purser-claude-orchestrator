@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.180 — 2026-10-19
+
+- **Fixed:** `codex_apply` for a revision main Claude accepted now gets an explicit allow decision, so auto mode no longer blocks the dispatcher's apply.
+- **Fixed:** the Stop hook asks for a retry only when the permission classifier gave no verdict, not after a reasoned denial.
 ## 0.1.179 — 2026-10-19
 
 - **Faster:** `init` detect prints compact agent options (about 5 KB instead of 175 KB) and probes agents concurrently; the init flow asks independent questions together.
