@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.178 — 2026-10-19
+
+- **Fixed:** a successful job with a large final message no longer comes back as FAILED "async result does not match successful durable job"; `codex_result` raises Claude Code's result size limit so the hook sees the full result, and the mismatch error names the failing check.
+- **Docs:** README section on what the hooks module starts, sends, decides and writes; privacy policy; plugin directory listing fields; demo GIF.
+
 ## 0.1.177 — 2026-10-18
 
 - **Fixed:** parallel milestone results collected at the same moment no longer fail as already consumed or with an uncertain lease release; the claim waits for its lock, and lock files retry Windows sharing violations.
