@@ -100,8 +100,11 @@ func TestPreApplyAcceptanceGate(t *testing.T) {
 	job["reviewedSnapshot"] = snapshot
 	job["acceptance"] = map[string]any{"revision": revision, "sessionId": "session-main", "acceptedAt": "now"}
 	writeJSON()
-	if allowed := decision(event(input, "agent-1")); allowed["permissionDecision"] == "deny" {
-		t.Fatalf("matching acceptance did not allow subagent apply: %#v", allowed)
+	if allowed := decision(event(input, "agent-1")); allowed["permissionDecision"] != "allow" || allowed["permissionDecisionReason"] != "Purser: main Claude accepted this revision" {
+		t.Fatalf("matching acceptance did not explicitly allow subagent apply: %#v", allowed)
+	}
+	if allowed := decision(event(input, nil)); allowed["permissionDecision"] != "allow" || allowed["permissionDecisionReason"] != "Purser: main Claude accepted this revision" {
+		t.Fatalf("matching acceptance did not explicitly allow main-Claude apply: %#v", allowed)
 	}
 	if err := os.WriteFile(filepath.Join(worktree, "new.txt"), []byte("drift\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -109,8 +112,8 @@ func TestPreApplyAcceptanceGate(t *testing.T) {
 	if denied := decision(event(input, "agent-1")); denied["permissionDecisionReason"] != "main Claude has not accepted this revision" {
 		t.Fatalf("old revision acceptance survived drift: %#v", denied)
 	}
-	if allowed := decision(event(input, nil)); allowed["permissionDecision"] == "deny" {
-		t.Fatalf("foreground apply without acceptance was gated: %#v", allowed)
+	if undecided := decision(event(input, nil)); len(undecided) != 0 {
+		t.Fatalf("foreground apply without acceptance received a decision: %#v", undecided)
 	}
 }
 

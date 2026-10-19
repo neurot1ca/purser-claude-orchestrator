@@ -120,11 +120,12 @@ func preApply(event map[string]any, runtimeRoot string) map[string]any {
 		updated["sessionId"] = sessionID
 		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated}}
 	}
-	if subagent {
-		if _, valid, _ := applyRevision(stateRoot, jobID, stringValue(event["session_id"])); !valid {
-			return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse",
-				"permissionDecision": "deny", "permissionDecisionReason": "main Claude has not accepted this revision"}}
-		}
+	if _, valid, _ := applyRevision(stateRoot, jobID, stringValue(event["session_id"])); valid {
+		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse",
+			"permissionDecision": "allow", "permissionDecisionReason": "Purser: main Claude accepted this revision"}}
+	} else if subagent {
+		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse",
+			"permissionDecision": "deny", "permissionDecisionReason": "main Claude has not accepted this revision"}}
 	}
 	return map[string]any{}
 }
