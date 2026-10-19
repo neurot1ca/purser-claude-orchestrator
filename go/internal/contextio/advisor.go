@@ -447,7 +447,8 @@ func updateAdvisorHandoff(repository string, records []map[string]any, context i
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
-		content = []byte("# Purser handoff\n## Goal\nUser language: <the language the user writes in>\n## State\n## Decisions\n## Next\n## Open risks\n## Files to load\n<!-- PURSER:STATE:START -->\n<!-- PURSER:STATE:END -->\n")
+		template := "# Purser handoff\n## Goal\nUser language: <the language the user writes in>\n## State\n## Decisions\n## Next\n## Open risks\n## Files to load\n<!-- PURSER:STATE:START -->\n<!-- PURSER:STATE:END -->\n"
+		content = []byte(FillHandoffLanguage(template, KnownUserLanguage(stateRoot(), "")))
 	}
 	lines := []string{"as of " + time.Now().UTC().Format("2006-01-02T15:04Z"), fmt.Sprintf("Context tokens: %d [transcript]", context), fmt.Sprintf("Triggers: %s [transcript]", strings.Join(triggers, ", ")), "Last Codex calls:"}
 	_, calls := compactionTranscriptFacts(records)

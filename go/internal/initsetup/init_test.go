@@ -651,6 +651,28 @@ func TestSecondApplyIsNoopAndKeepsExistingHandoff(t *testing.T) {
 	}
 }
 
+func TestApplyCreatesHandoffWithKnownUserLanguage(t *testing.T) {
+	_, _, restore := initTestEnvironment(t)
+	defer restore()
+	state := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", state)
+	if err := os.WriteFile(filepath.Join(state, "user-language.json"), []byte(`{"language":"Turkish"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--apply", "--coder", "claude", "--reviewer", "none", "--trust"}
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, args); code != 0 {
+		t.Fatal("apply failed")
+	}
+	handoff := filepath.Join(state, "projects", contextio.ProjectKey(mustCwd()), "telemetry", "purser-handoff.md")
+	content, err := os.ReadFile(handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "User language: Turkish") || strings.Contains(string(content), "<the language the user writes in>") {
+		t.Fatalf("handoff language not filled: %s", content)
+	}
+}
+
 func TestTrustOnlyGlobalChangeReportsAppliedThenNoChanges(t *testing.T) {
 	_, _, restore := initTestEnvironment(t)
 	defer restore()

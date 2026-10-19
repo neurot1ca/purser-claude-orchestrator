@@ -1235,7 +1235,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 			fmt.Fprintf(out, "Create %s:\n%s", profilePath, scaffold)
 		}
 		if !exists(handoff) {
-			fmt.Fprintf(out, "Create %s:\n%s", handoff, handoffTemplate)
+			fmt.Fprintf(out, "Create %s:\n%s", handoff, contextio.FillHandoffLanguage(handoffTemplate, contextio.KnownUserLanguage(stateRootPath(), "")))
 		}
 		if bytes.Equal(original, changed) && scaffold == nil && exists(handoff) {
 			fmt.Fprintln(out, "No changes.")
@@ -1278,7 +1278,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	}
 	handoffCreated := false
 	if !exists(handoff) {
-		if e = atomicWrite(handoff, []byte(handoffTemplate), true); e == nil {
+		if e = atomicWrite(handoff, []byte(contextio.FillHandoffLanguage(handoffTemplate, contextio.KnownUserLanguage(stateRootPath(), ""))), true); e == nil {
 			handoffCreated = true
 		} else if !os.IsExist(e) {
 			return printError(errOut, e)

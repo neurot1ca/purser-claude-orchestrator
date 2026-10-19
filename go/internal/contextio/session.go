@@ -631,6 +631,33 @@ func HandoffUserLanguage(content string) string {
 	return ""
 }
 
+// KnownUserLanguage resolves a language from handoff content or the saved project state.
+func KnownUserLanguage(root, handoffContent string) string {
+	if language := HandoffUserLanguage(handoffContent); language != "" {
+		return language
+	}
+	return lastUserLanguage(root)
+}
+
+// ProjectLanguageInstruction returns the existing reply instruction when a project language is known.
+func ProjectLanguageInstruction(root, projectKey string) string {
+	handoffPath := filepath.Join(root, "projects", projectKey, "telemetry", "purser-handoff.md")
+	content, _ := os.ReadFile(handoffPath)
+	language := KnownUserLanguage(root, string(content))
+	if language == "" || strings.EqualFold(language, "English") {
+		return ""
+	}
+	return languageInstruction(language)
+}
+
+// FillHandoffLanguage replaces the template placeholder only when language is known.
+func FillHandoffLanguage(template, language string) string {
+	if language == "" {
+		return template
+	}
+	return strings.ReplaceAll(template, "<the language the user writes in>", language)
+}
+
 func usableUserLanguage(language string) bool {
 	language = strings.TrimSpace(language)
 	if language == "" || strings.HasPrefix(language, "<") {

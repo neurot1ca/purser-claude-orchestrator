@@ -115,12 +115,64 @@ func TestPostApplyGuidanceUsesModelContext(t *testing.T) {
 }
 
 func TestRefreshCachedBoardReplacesStaleSnapshot(t *testing.T) {
-	response := map[string]any{"hookSpecificOutput": map[string]any{"additionalContext": "review summary\nPurser jobs:\n> | queued behind old-holder |\nlater guidance"}}
-	refreshCachedBoard(response, "Purser jobs:\n> | current board |")
+	response := map[string]any{"hookSpecificOutput": map[string]any{"additionalContext": "review summary\nPurser jobs:\n> | queued behind old-holder |\nReply to the user in German.\nlater guidance"}}
+	refreshCachedBoard(response, "Purser jobs:\n> | current board |\nReply to the user in Turkish.")
 	context := stringValue(mapValue(response["hookSpecificOutput"])["additionalContext"])
 	if strings.Contains(context, "old-holder") || !strings.Contains(context, "current board") ||
-		!strings.Contains(context, "review summary") || !strings.Contains(context, "later guidance") {
+		!strings.Contains(context, "review summary") || !strings.Contains(context, "later guidance") ||
+		strings.Contains(context, "Reply to the user in German.") || strings.Count(context, "Reply to the user in Turkish.") != 1 {
 		t.Fatalf("refreshed context = %q", context)
+	}
+}
+
+func TestPostProjectJobBoardAddsKnownLanguageInstruction(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	tests := []struct {
+		name, language, source, want string
+	}{
+		{name: "Turkish handoff", language: "Turkish", source: "handoff", want: "Reply to the user in Turkish."},
+		{name: "Turkish saved language", language: "Turkish", source: "saved", want: "Reply to the user in Turkish."},
+		{name: "English", language: "English", source: "handoff"},
+		{name: "unknown"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			write := func(path string, value any) {
+				data, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write(filepath.Join(root, "async_jobs", "job.json"), map[string]any{"project_key": "fixture", "jobId": id, "call": "call-1"})
+			write(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), map[string]any{"jobId": id, "call": "call-1", "state": "RUNNING", "label": "task"})
+			if tc.language != "" && tc.source == "handoff" {
+				if err := os.MkdirAll(filepath.Join(root, "projects", "fixture", "telemetry"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "projects", "fixture", "telemetry", "purser-handoff.md"), []byte("## Goal\nUser language: "+tc.language+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if tc.language != "" {
+				if err := os.WriteFile(filepath.Join(root, "user-language.json"), []byte(`{"language":"`+tc.language+`"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			board, _ := PostProjectJobBoard(root, "fixture", time.Unix(1800000000, 0))
+			if tc.want != "" && !strings.Contains(board, tc.want) {
+				t.Fatalf("board=%q want instruction %q", board, tc.want)
+			}
+			if tc.want == "" && (strings.Contains(board, "Reply to the user in") || strings.Contains(board, "Reply in the language")) {
+				t.Fatalf("board=%q has an instruction for English or unknown language", board)
+			}
+		})
 	}
 }
 

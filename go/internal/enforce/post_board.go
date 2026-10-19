@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 )
 
@@ -312,7 +313,11 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 	for _, row := range rendered {
 		rows = append(rows, row.line)
 	}
-	return "Purser jobs:\n" + strings.Join(rows, "\n"), ids
+	board := "Purser jobs:\n" + strings.Join(rows, "\n")
+	if instruction := contextio.ProjectLanguageInstruction(root, projectKey); instruction != "" {
+		board += "\n" + instruction
+	}
+	return board, ids
 }
 
 func boardDisplayZero(value any) bool {
@@ -337,6 +342,9 @@ func refreshCachedBoard(response map[string]any, board string) {
 		before, after := context[:i], context[i+len("Purser jobs:\n"):]
 		lines := strings.Split(after, "\n")
 		for len(lines) > 0 && strings.HasPrefix(lines[0], "> |") {
+			lines = lines[1:]
+		}
+		if len(lines) > 0 && strings.HasPrefix(lines[0], "Reply to the user in ") && strings.HasSuffix(lines[0], ".") {
 			lines = lines[1:]
 		}
 		context = strings.TrimSpace(before + strings.Join(lines, "\n"))
