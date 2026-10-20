@@ -78,11 +78,13 @@ func TestPlanCLIAcceptReturnsReadyMilestoneOrch(t *testing.T) {
 }
 
 func TestPlanMilestoneArguments(t *testing.T) {
-	values, err := parseMilestones("1, 3,5")
-	if err != nil || len(values) != 3 || values[0] != 1 || values[1] != 3 || values[2] != 5 {
-		t.Fatalf("parseMilestones = %v, %v", values, err)
+	for _, selector := range []string{"1, 2", "1,2", "M1,M2", "m1,2"} {
+		values, err := parseMilestones(selector)
+		if err != nil || len(values) != 2 || values[0] != 1 || values[1] != 2 {
+			t.Fatalf("parseMilestones(%q) = %v, %v", selector, values, err)
+		}
 	}
-	for _, invalid := range []string{"", "0", "1,x", "-1"} {
+	for _, invalid := range []string{"", "0", "1,x", "-1", "M", "Mx", "M0", "M-1", "1,", ",1", "1,,2"} {
 		if _, err := parseMilestones(invalid); err == nil {
 			t.Errorf("parseMilestones(%q) succeeded", invalid)
 		}

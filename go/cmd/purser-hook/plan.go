@@ -76,7 +76,7 @@ func parseMilestones(raw string) ([]int, error) {
 	parts := strings.Split(raw, ",")
 	values := make([]int, 0, len(parts))
 	for _, part := range parts {
-		value, err := strconv.Atoi(strings.TrimSpace(part))
+		value, err := strconv.Atoi(strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(part)), "M"))
 		if err != nil || value < 1 {
 			return nil, fmt.Errorf("invalid accepted milestone %q", part)
 		}

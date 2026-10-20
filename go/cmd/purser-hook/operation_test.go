@@ -312,7 +312,7 @@ func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 
 func TestHostEntryPointReportsExplicitErrorStatus(t *testing.T) {
 	binary := buildPurserHook(t)
-	state := t.TempDir()
+	state := filepath.Join(t.TempDir(), "host state")
 	dir := filepath.Join(state, "codex_exec_mcp", "jobs")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -329,7 +329,7 @@ func TestHostEntryPointReportsExplicitErrorStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := testutil.Hide(exec.Command(binary, "host", dir, jobID, "1", token))
-	command.Env = append(os.Environ(), "PURSER_STATE_DIR="+state)
+	command.Env = append(os.Environ(), "PURSER_STATE_DIR="+state, "PURSER_TEST_DISABLE_CHILD_LAUNCH=1")
 	output, err := command.Output()
 	if err == nil {
 		t.Fatalf("host unexpectedly returned success: %s", output)
@@ -337,5 +337,8 @@ func TestHostEntryPointReportsExplicitErrorStatus(t *testing.T) {
 	var status map[string]any
 	if json.Unmarshal(output, &status) != nil || status["status"] != "error" {
 		t.Fatalf("host error status missing: %q", output)
+	}
+	if _, err := os.Stat(filepath.Join(state, "cleanup")); !os.IsNotExist(err) {
+		t.Fatalf("host scheduled cleanup despite child launch being disabled: %v", err)
 	}
 }
