@@ -190,7 +190,7 @@
       "expected": {
         "claude_review_mode": "FULL",
         "reviewer1_result": "UNCERTAIN",
-        "reviewer1_skipped_reason": null,
+        "reviewer1_skipped_reason": "REVIEWER1_INCOMPLETE",
         "reviewer1_scope": {
           "omitted": [
             "scope/file-0.txt",
