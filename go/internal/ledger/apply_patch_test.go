@@ -34,6 +34,37 @@ func TestApplyJobPatchLeavesNewFileIntentToAdd(t *testing.T) {
 	}
 }
 
+func TestApplyIntentToAddExplicitPathCommitCharacterization(t *testing.T) {
+	root := gitTempDir(t)
+	for name, content := range map[string]string{
+		"tracked.txt":   "base\n",
+		"unrelated.txt": "base unrelated\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitApplyPatchTest(t, root, "init", "-q")
+	gitApplyPatchTest(t, root, "add", "tracked.txt", "unrelated.txt")
+	gitApplyPatchTest(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base")
+	if err := os.WriteFile(filepath.Join(root, "unrelated.txt"), []byte("staged unrelated\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gitApplyPatchTest(t, root, "add", "unrelated.txt")
+	patch := "diff --git a/tracked.txt b/tracked.txt\n--- a/tracked.txt\n+++ b/tracked.txt\n@@ -1 +1 @@\n-base\n+patched\n" +
+		"diff --git \"a/new file.txt\" \"b/new file.txt\"\nnew file mode 100644\n--- /dev/null\n+++ \"b/new file.txt\"\n@@ -0,0 +1 @@\n+new content\n"
+	if result := ApplyJobPatch(root, patch); result["applied"] != true {
+		t.Fatalf("patch failed: %#v", result)
+	}
+	gitApplyPatchTest(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "x", "--", ":(literal)tracked.txt", ":(literal)new file.txt")
+	if got, err := exec.Command("git", "-C", root, "show", "HEAD:new file.txt").Output(); err != nil || string(got) != "new content\n" {
+		t.Fatalf("committed new file = %q, error %v; want new content", got, err)
+	}
+	if got := gitApplyPatchOutput(t, root, "status", "--short", "--", "unrelated.txt"); !strings.Contains(got, "M ") {
+		t.Fatalf("unrelated pre-staged path changed after explicit-path commit: %q", got)
+	}
+}
+
 func gitApplyPatchTest(t *testing.T, root string, args ...string) {
 	t.Helper()
 	cmd := testutil.Hide(exec.Command("git", args...))

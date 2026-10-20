@@ -1197,6 +1197,10 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	if o.scaffold && !exists(profilePath) {
 		scaffold = []byte(profileText(root))
 	}
+	gitignorePath, addProfileIgnore, e := profileIgnorePlan(root, scaffold != nil)
+	if e != nil {
+		return printError(errOut, e)
+	}
 	handoff := filepath.Join(stateRootPath(), "projects", contextio.ProjectKey(root), "telemetry", "purser-handoff.md")
 	if o.plan {
 		planned := map[string]any{}
@@ -1266,10 +1270,13 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 		if scaffold != nil {
 			fmt.Fprintf(out, "Create %s:\n%s", profilePath, scaffold)
 		}
+		if addProfileIgnore {
+			fmt.Fprintf(out, "Add /%s to %s\n", filepath.ToSlash(filepath.Join(".orchestrator", "profile.toml")), gitignorePath)
+		}
 		if !exists(handoff) {
 			fmt.Fprintf(out, "Create %s:\n%s", handoff, contextio.FillHandoffLanguage(handoffTemplate, contextio.KnownUserLanguage(stateRootPath(), "")))
 		}
-		if bytes.Equal(original, changed) && scaffold == nil && exists(handoff) && !permissionChanged {
+		if bytes.Equal(original, changed) && scaffold == nil && !addProfileIgnore && exists(handoff) && !permissionChanged {
 			fmt.Fprintln(out, "No changes.")
 		}
 		return 0
@@ -1306,6 +1313,34 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	if scaffold != nil {
 		if e = atomicWrite(profilePath, scaffold, true); e != nil && !os.IsExist(e) {
 			return printError(errOut, e)
+		}
+	}
+	if addProfileIgnore {
+		_, stillNeeded, planErr := profileIgnorePlan(root, scaffold != nil)
+		if planErr != nil {
+			return printError(errOut, planErr)
+		}
+		if stillNeeded {
+			if e = updateLocked(gitignorePath, func(original []byte) ([]byte, error) {
+				for _, line := range strings.Split(strings.ReplaceAll(string(original), "\r\n", "\n"), "\n") {
+					if line == "/.orchestrator/profile.toml" {
+						return original, nil
+					}
+				}
+				newline := []byte("\n")
+				if bytes.Contains(original, []byte("\r\n")) {
+					newline = []byte("\r\n")
+				}
+				updated := append([]byte(nil), original...)
+				if len(updated) > 0 && updated[len(updated)-1] != '\n' {
+					updated = append(updated, newline...)
+				}
+				updated = append(updated, []byte("/.orchestrator/profile.toml")...)
+				updated = append(updated, newline...)
+				return updated, nil
+			}); e != nil {
+				return printError(errOut, fmt.Errorf("adding /.orchestrator/profile.toml to %s: %w", gitignorePath, e))
+			}
 		}
 	}
 	handoffCreated := false
@@ -1357,7 +1392,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	for _, step := range skipped {
 		fmt.Fprintf(out, "Skipped %s.\n", step)
 	}
-	if rolesChanged || globalChanged || scaffold != nil || handoffCreated || permissionChanged {
+	if rolesChanged || globalChanged || scaffold != nil || addProfileIgnore || handoffCreated || permissionChanged {
 		fmt.Fprintln(out, "Applied.")
 	} else {
 		fmt.Fprintln(out, "No changes.")
@@ -1489,6 +1524,47 @@ func gitProjectRoot(root string) (string, error) {
 	}
 	return rootPath, nil
 }
+
+func profileIgnorePlan(root string, creating bool) (string, bool, error) {
+	if !creating {
+		return "", false, nil
+	}
+	repoRoot, err := gitProjectRoot(root)
+	if err != nil {
+		return "", false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := proc.Hide(exec.CommandContext(ctx, "git", "ls-files", "--error-unmatch", "--", ":(literal).orchestrator/profile.toml"))
+	cmd.Dir = repoRoot
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err == nil {
+		return filepath.Join(repoRoot, ".gitignore"), false, nil
+	} else if ctx.Err() != nil {
+		return "", false, ctx.Err()
+	} else {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return "", false, fmt.Errorf("checking whether profile is tracked: %w", err)
+		}
+	}
+	ignorePath := filepath.Join(repoRoot, ".gitignore")
+	cmd = proc.Hide(exec.CommandContext(ctx, "git", "check-ignore", "-q", "--no-index", "--", ".orchestrator/profile.toml"))
+	cmd.Dir = repoRoot
+	if err := cmd.Run(); err == nil {
+		return ignorePath, false, nil
+	} else if ctx.Err() != nil {
+		return "", false, ctx.Err()
+	} else {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return "", false, fmt.Errorf("checking whether profile is ignored: %w", err)
+		}
+	}
+	return ignorePath, true, nil
+}
+
 func claimConcise(home, project string) bool {
 	style, _ := effectiveStyle(home, project)
 	if style == "Concise" {

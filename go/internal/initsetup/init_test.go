@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -959,6 +960,132 @@ func TestExistingProfileIsNeverOverwritten(t *testing.T) {
 	after, err := os.ReadFile(profilePath)
 	if err != nil || !bytes.Equal(after, original) {
 		t.Errorf("profile = %q, error = %v; want original bytes", after, err)
+	}
+}
+
+func TestScaffoldProfileAddsGitignoreRuleAndPreservesCRLF(t *testing.T) {
+	_, root, restore := initTestEnvironment(t)
+	defer restore()
+	initProfileIgnoreRepo(t, root)
+	original := []byte("# keep\r\n/build/\r\n")
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--apply", "--coder", "codex", "--reviewer", "none", "--scaffold-profile"}
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, args); code != 0 {
+		t.Fatalf("apply returned %d", code)
+	}
+	ignorePath := filepath.Join(root, ".gitignore")
+	updated, err := os.ReadFile(ignorePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(append([]byte(nil), original...), []byte("/.orchestrator/profile.toml\r\n")...)
+	if !bytes.Equal(updated, want) {
+		t.Fatalf(".gitignore = %q, want %q", updated, want)
+	}
+	initProfileIgnoreGit(t, root, "check-ignore", "-q", "--no-index", "--", ".orchestrator/profile.toml")
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, args); code != 0 {
+		t.Fatalf("second apply returned %d", code)
+	}
+	after, err := os.ReadFile(ignorePath)
+	if err != nil || !bytes.Equal(after, updated) {
+		t.Fatalf("second apply changed .gitignore: %q, error %v", after, err)
+	}
+}
+
+func TestScaffoldProfileCoveringIgnoreRuleIsUnchanged(t *testing.T) {
+	_, root, restore := initTestEnvironment(t)
+	defer restore()
+	initProfileIgnoreRepo(t, root)
+	ignorePath := filepath.Join(root, ".gitignore")
+	original := []byte("# keep\n.orchestrator/\n")
+	if err := os.WriteFile(ignorePath, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var plan bytes.Buffer
+	if code := Run(&plan, &bytes.Buffer{}, []string{"--plan", "--coder", "codex", "--reviewer", "none", "--scaffold-profile"}); code != 0 {
+		t.Fatalf("plan returned %d", code)
+	}
+	if strings.Contains(plan.String(), "Add /.orchestrator/profile.toml to ") {
+		t.Fatalf("plan adds a redundant rule: %s", plan.String())
+	}
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, []string{"--apply", "--coder", "codex", "--reviewer", "none", "--scaffold-profile"}); code != 0 {
+		t.Fatalf("apply returned %d", code)
+	}
+	after, err := os.ReadFile(ignorePath)
+	if err != nil || !bytes.Equal(after, original) {
+		t.Fatalf("covering .gitignore changed: %q, error %v", after, err)
+	}
+	initProfileIgnoreGit(t, root, "check-ignore", "-q", "--no-index", "--", ".orchestrator/profile.toml")
+}
+
+func TestScaffoldProfilePlanIsReadOnlyAndTrackedProfileIsPreserved(t *testing.T) {
+	_, root, restore := initTestEnvironment(t)
+	defer restore()
+	initProfileIgnoreRepo(t, root)
+	var plan bytes.Buffer
+	if code := Run(&plan, &bytes.Buffer{}, []string{"--plan", "--coder", "codex", "--reviewer", "none", "--scaffold-profile"}); code != 0 {
+		t.Fatalf("plan returned %d", code)
+	}
+	if !strings.Contains(plan.String(), "Add /.orchestrator/profile.toml to ") {
+		t.Fatalf("plan omitted ignore rule: %s", plan.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".gitignore")); !os.IsNotExist(err) {
+		t.Fatalf("plan wrote .gitignore (stat error: %v)", err)
+	}
+	profilePath := filepath.Join(root, ".orchestrator", "profile.toml")
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("# tracked profile\n")
+	if err := os.WriteFile(profilePath, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	initProfileIgnoreGit(t, root, "add", ".orchestrator/profile.toml")
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, []string{"--apply", "--coder", "codex", "--reviewer", "none", "--scaffold-profile"}); code != 0 {
+		t.Fatalf("apply returned %d", code)
+	}
+	got, err := os.ReadFile(profilePath)
+	if err != nil || !bytes.Equal(got, original) {
+		t.Fatalf("tracked profile = %q, error %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".gitignore")); !os.IsNotExist(err) {
+		t.Fatalf("tracked profile caused .gitignore write (stat error: %v)", err)
+	}
+}
+
+func TestScaffoldProfileGitignoreWriteFailureIsReported(t *testing.T) {
+	_, root, restore := initTestEnvironment(t)
+	defer restore()
+	initProfileIgnoreRepo(t, root)
+	ignorePath := filepath.Join(root, ".gitignore")
+	if err := os.WriteFile(ignorePath, []byte("# preserve\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(ignorePath+".lock", 0700); err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	if code := Run(&bytes.Buffer{}, &errOut, []string{"--apply", "--coder", "codex", "--reviewer", "none", "--scaffold-profile"}); code == 0 {
+		t.Fatal("apply succeeded despite .gitignore lock failure")
+	}
+	if !strings.Contains(errOut.String(), ".gitignore") {
+		t.Fatalf("write failure was not explicit: %s", errOut.String())
+	}
+}
+
+func initProfileIgnoreRepo(t *testing.T, root string) {
+	t.Helper()
+	initProfileIgnoreGit(t, root, "init", "-q")
+}
+
+func initProfileIgnoreGit(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
 }
 
