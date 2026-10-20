@@ -20,7 +20,7 @@ Use the user's language throughout: approved Turkish below, otherwise translate 
 
 Choose the concrete binary from allowed-tools for the current OS/architecture; invoke its quoted path directly for all commands. First run `"${CLAUDE_PLUGIN_ROOT}/bin/<selected-binary>" init --detect --json`, passing existing arguments unchanged.
 
-Receipt: detected agents and roles/trust/profile. Ask maintenance/auto-compaction only when `maintenance_enabled`/`auto_compact_enabled` is null, never boolean. Show intro receipt; say Claude Code is orchestrator. Ask **⚓ Who writes the code?** alone: Codex first, “(recommended)”; offer only installed/available Claude, OpenCode as **Free OpenCode models**, Antigravity (agy), Cursor Agent CLI.
+Receipt: detected agents and roles/trust/profile. Ask maintenance/auto-compaction only when `maintenance_enabled`/`auto_compact_enabled` is null, never boolean. Ask apply permission only when `apply_permission_enabled` is null. Show intro receipt; say Claude Code is orchestrator. Ask **⚓ Who writes the code?** alone: Codex first, “(recommended)”; offer only installed/available Claude, OpenCode as **Free OpenCode models**, Antigravity (agy), Cursor Agent CLI.
 
 EN intro: ⚓ **Purser learns as it works here: it measures how long jobs really take, sharpens its estimates and shows where tokens and time can be saved.** *It runs independent jobs side by side, each in its own worktree; a job that touches files another job is changing waits its turn. When a task needs a plan, Purser proposes one first, then works through it step by step.*
 
@@ -60,7 +60,7 @@ Next call: trust project and scaffold `.orchestrator/profile.toml` (two question
 > Before writing code, read `.orchestrator/ponytail.md`. The repository contract and the task's acceptance criteria outrank it.
 No: do nothing.
 
-After setup, before plan: one call for eligible maintenance/auto-compaction questions. Maintenance: “Turn it on” recommended; `--maintenance` / `--no-maintenance`. `<coder>` = chosen model name. Codex/agy/Claude/OpenCode free: subscription receipt; paid OpenCode: API-credit receipt.
+After setup, before plan: one call for eligible maintenance/auto-compaction/apply-permission questions. Maintenance: “Turn it on” recommended; `--maintenance` / `--no-maintenance`. `<coder>` = chosen model name. Codex/agy/Claude/OpenCode free: subscription receipt; paid OpenCode: API-credit receipt.
 EN: ⚓ **Purser can keep this project tidy in the background.** *When you are idle it runs read-only scans with your coder (<coder>) on its subscription, never a paid API and never during a job:*
 - *cleanup candidates (dead code, stale files)*
 - *missing tests and the project's test coverage*
@@ -80,7 +80,11 @@ Auto-compaction, any coder: On first, recommended, then Off; `--auto-compact` / 
 EN: ⚓ **Automatic compaction** *When this conversation passes about 250K tokens, Purser saves a handoff (decisions, open work and the next step), runs /compact for you and picks the task back up by itself, so every later message costs far less. It applies to all your projects. You can turn it off anytime with `/purser:auto-compact off`.*
 TR: ⚓ **Otomatik sıkıştırma** *Sohbet yaklaşık 250 bin tokenı geçince Purser bir devir notu kaydeder (kararlar, açık işler ve sonraki adım), senin yerine /compact çalıştırır ve işe kendiliğinden kaldığı yerden devam eder; sonraki her mesaj çok daha ucuza gelir. Tüm projelerinde geçerlidir. İstediğin zaman `/purser:auto-compact off` ile kapatabilirsin.*
 
-Run `init --plan --coder X --reviewer AGENT` with all selected flags above. Show plan receipt: omit normal route; small chores show “Free OpenCode models” if enabled, otherwise mechanical route; mode only if chosen; trust/profile/maintenance/auto-compact/files to write as short italic lines. After plan, ask final yes/no alone: Yes first, unmarked. Skip confirmation only if plan explicitly shows no change versus detected state; otherwise require Yes before running identical options with `--apply --json` instead of `--plan`. If apply JSON has `"scope": "project"`, add EN *Roles saved for this project only.* / TR *Roller yalnızca bu proje için kaydedildi.* to final receipt.
+Apply permission, any coder, in the same AskUserQuestion call as maintenance/auto-compaction (never a separate form): Allow first and recommended, then Not now; `--apply-permission` / `--no-apply-permission`.
+EN: ⚓ **Let Purser apply accepted changes in auto mode?** *Claude Code's auto-mode classifier blocks `codex_apply`, the step that copies a change you accepted into your project. Allowing it adds one permission rule for that tool to your Claude Code settings. Without it, accepted changes wait for you to apply them by hand.*
+TR: ⚓ **Purser kabul ettiğin değişiklikleri oto modda uygulayabilsin mi?** *Claude Code'un oto mod sınıflandırıcısı, kabul ettiğin bir değişikliği projene kopyalayan `codex_apply` adımını engelliyor. İzin verirsen Claude Code ayarlarına yalnızca bu araç için bir izin kuralı eklenir. İzin vermezsen kabul ettiğin değişiklikler, sen elle uygulayana kadar bekler.*
+
+Run `init --plan --coder X --reviewer AGENT` with all selected flags above. Show plan receipt: omit normal route; small chores show “Free OpenCode models” if enabled, otherwise mechanical route; mode only if chosen; trust/profile/maintenance/auto-compact/apply-permission/files to write as short italic lines. After plan, ask final yes/no alone: Yes first, unmarked. Skip confirmation only if plan explicitly shows no change versus detected state; otherwise require Yes before running identical options with `--apply --json` instead of `--plan`. If apply JSON has `"scope": "project"`, add EN *Roles saved for this project only.* / TR *Roller yalnızca bu proje için kaydedildi.* to final receipt.
 EN plan summary:
 > ⚓ **Purser is ready.** *Coder: {coder} · Reviewer: {reviewer} · Mode: {mode}*
 > - *Small chores → {mechanical model}*

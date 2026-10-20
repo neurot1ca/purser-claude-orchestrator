@@ -459,6 +459,112 @@ func TestAutoCompactInit(t *testing.T) {
 	}
 }
 
+func TestApplyPermissionAddsOnceAndPreservesSettings(t *testing.T) {
+	home, _, restore := initTestEnvironment(t)
+	defer restore()
+	path := filepath.Join(contextio.ClaudeConfigDirFor(home), "settings.json")
+	original := `{"model":"keep","permissions":{"allow":["Read","Write"],"deny":["Bash"]},"other":true}`
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--apply", "--coder", "claude", "--reviewer", "agy", "--apply-permission"}
+	var plan bytes.Buffer
+	if code := Run(&plan, &bytes.Buffer{}, []string{"--plan", "--coder", "claude", "--reviewer", "agy", "--apply-permission"}); code != 0 {
+		t.Fatalf("plan returned %d: %s", code, plan.String())
+	}
+	if !strings.Contains(plan.String(), "Claude apply permission: enabled for this user") {
+		t.Fatalf("plan omitted permission change: %s", plan.String())
+	}
+	for range 2 {
+		if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, args); code != 0 {
+			t.Fatalf("apply-permission returned %d", code)
+		}
+	}
+	var unchangedPlan bytes.Buffer
+	if code := Run(&unchangedPlan, &bytes.Buffer{}, []string{"--plan", "--coder", "claude", "--reviewer", "agy", "--apply-permission"}); code != 0 {
+		t.Fatalf("unchanged plan returned %d: %s", code, unchangedPlan.String())
+	}
+	if strings.Contains(unchangedPlan.String(), "Claude apply permission:") {
+		t.Fatalf("unchanged plan reported a permission change: %s", unchangedPlan.String())
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatal(err)
+	}
+	permissions := settings["permissions"].(map[string]any)
+	allow := permissions["allow"].([]any)
+	if len(allow) != 3 || allow[0] != "Read" || allow[1] != "Write" || allow[2] != "mcp__plugin_purser_codex-main__codex_apply" || permissions["deny"].([]any)[0] != "Bash" || settings["model"] != "keep" || settings["other"] != true {
+		t.Fatalf("settings were not preserved/idempotent: %s", raw)
+	}
+	var detectedOutput bytes.Buffer
+	if code := Run(&detectedOutput, &bytes.Buffer{}, []string{"--detect", "--json"}); code != 0 {
+		t.Fatalf("detect returned %d: %s", code, detectedOutput.String())
+	}
+	var detected map[string]any
+	if err := json.Unmarshal(detectedOutput.Bytes(), &detected); err != nil || detected["apply_permission_enabled"] != true {
+		t.Fatalf("apply_permission_enabled = %#v, error %v", detected["apply_permission_enabled"], err)
+	}
+}
+
+func TestApplyPermissionRemovesOnlyExactEntry(t *testing.T) {
+	home, _, restore := initTestEnvironment(t)
+	defer restore()
+	path := filepath.Join(contextio.ClaudeConfigDirFor(home), "settings.json")
+	original := `{"permissions":{"allow":["Read","mcp__plugin_purser_codex-main__codex_applyExtra","mcp__plugin_purser_codex-main__codex_apply","Write"]},"other":true}`
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := Run(&bytes.Buffer{}, &bytes.Buffer{}, []string{"--apply", "--coder", "claude", "--reviewer", "agy", "--no-apply-permission"}); code != 0 {
+		t.Fatalf("no-apply-permission returned %d", code)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatal(err)
+	}
+	allow := settings["permissions"].(map[string]any)["allow"].([]any)
+	if len(allow) != 3 || allow[0] != "Read" || allow[1] != "mcp__plugin_purser_codex-main__codex_applyExtra" || allow[2] != "Write" || settings["other"] != true {
+		t.Fatalf("unrelated permission entries changed: %s", raw)
+	}
+	var detectedOutput bytes.Buffer
+	if code := Run(&detectedOutput, &bytes.Buffer{}, []string{"--detect", "--json"}); code != 0 {
+		t.Fatalf("detect returned %d: %s", code, detectedOutput.String())
+	}
+	var detected map[string]any
+	if err := json.Unmarshal(detectedOutput.Bytes(), &detected); err != nil || detected["apply_permission_enabled"] != nil {
+		t.Fatalf("apply_permission_enabled = %#v, error %v", detected["apply_permission_enabled"], err)
+	}
+}
+
+func TestApplyPermissionRejectsNonObjectSettings(t *testing.T) {
+	home, _, restore := initTestEnvironment(t)
+	defer restore()
+	path := filepath.Join(contextio.ClaudeConfigDirFor(home), "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`[]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	if code := Run(&bytes.Buffer{}, &errOut, []string{"--apply", "--coder", "claude", "--reviewer", "agy", "--apply-permission"}); code == 0 || !strings.Contains(errOut.String(), "Claude settings must contain a JSON object") {
+		t.Fatalf("apply-permission returned %d, error %q", code, errOut.String())
+	}
+}
+
 func TestEnableConciseUsesActiveClaudeConfigDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

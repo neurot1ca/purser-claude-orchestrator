@@ -31,8 +31,10 @@ import (
 type options struct {
 	detect, list, plan, apply, concise, trust, scaffold, jsonOutput                                   bool
 	coder, model, fallbackAgent, fallbackModel, mode, effort, reviewer, reviewerModel, reviewerEffort string
-	maintenance, mechanical, autoCompact                                                              *bool
+	maintenance, mechanical, autoCompact, applyPermission                                             *bool
 }
+
+const applyPermissionTool = "mcp__plugin_purser_codex-main__codex_apply"
 
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
@@ -56,19 +58,21 @@ func Run(stdout, stderr io.Writer, args []string) int {
 	fs.StringVar(&o.reviewer, "reviewer", "", "Reviewer agent")
 	fs.StringVar(&o.reviewerModel, "reviewer-model", "", "Reviewer model")
 	fs.StringVar(&o.reviewerEffort, "reviewer-effort", "", "Reviewer effort")
-	var maintenance, noMaintenance, mechanical, noMechanical, autoCompact, noAutoCompact bool
+	var maintenance, noMaintenance, mechanical, noMechanical, autoCompact, noAutoCompact, applyPermission, noApplyPermission bool
 	fs.BoolVar(&maintenance, "maintenance", false, "enable maintenance reports")
 	fs.BoolVar(&noMaintenance, "no-maintenance", false, "disable maintenance reports")
 	fs.BoolVar(&mechanical, "opencode-mechanical", false, "enable OpenCode mechanical route")
 	fs.BoolVar(&noMechanical, "no-opencode-mechanical", false, "disable OpenCode mechanical route")
 	fs.BoolVar(&autoCompact, "auto-compact", false, "enable automatic /compact")
 	fs.BoolVar(&noAutoCompact, "no-auto-compact", false, "disable automatic /compact")
+	fs.BoolVar(&applyPermission, "apply-permission", false, "allow Purser to apply accepted changes")
+	fs.BoolVar(&noApplyPermission, "no-apply-permission", false, "remove Purser apply permission")
 	fs.BoolVar(&o.trust, "trust", false, "trust this project")
 	fs.BoolVar(&o.scaffold, "scaffold-profile", false, "create project profile")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 0 || (maintenance && noMaintenance) || (mechanical && noMechanical) || (autoCompact && noAutoCompact) {
+	if fs.NArg() != 0 || (maintenance && noMaintenance) || (mechanical && noMechanical) || (autoCompact && noAutoCompact) || (applyPermission && noApplyPermission) {
 		fmt.Fprintln(stderr, "purser:init: invalid arguments")
 		return 2
 	}
@@ -96,6 +100,14 @@ func Run(stdout, stderr io.Writer, args []string) int {
 		v := false
 		o.autoCompact = &v
 	}
+	if applyPermission {
+		v := true
+		o.applyPermission = &v
+	}
+	if noApplyPermission {
+		v := false
+		o.applyPermission = &v
+	}
 	count := 0
 	for _, yes := range []bool{o.detect, o.list, o.plan, o.apply, o.concise} {
 		if yes {
@@ -111,17 +123,17 @@ func Run(stdout, stderr io.Writer, args []string) int {
 			fmt.Fprintln(stderr, "purser:init: unsupported coder")
 			return 2
 		}
-		if !o.jsonOutput || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil || (o.model != "" && o.coder == "") {
+		if !o.jsonOutput || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil || o.applyPermission != nil || (o.model != "" && o.coder == "") {
 			fmt.Fprintln(stderr, "purser:init: --detect requires --json and accepts only optional --coder and --model")
 			return 2
 		}
 	}
-	if o.list && (!o.jsonOutput || !oneOf(o.coder, "codex", "opencode", "agy", "cursor") || o.model != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil) {
+	if o.list && (!o.jsonOutput || !oneOf(o.coder, "codex", "opencode", "agy", "cursor") || o.model != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil || o.applyPermission != nil) {
 		fmt.Fprintln(stderr, "purser:init: --list-models requires --json and --coder codex, opencode, agy, or cursor")
 		return 2
 	}
 	if o.concise {
-		if o.jsonOutput || o.coder != "" || o.model != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil {
+		if o.jsonOutput || o.coder != "" || o.model != "" || o.fallbackAgent != "" || o.fallbackModel != "" || o.mode != "" || o.effort != "" || o.reviewer != "" || o.reviewerModel != "" || o.reviewerEffort != "" || o.mechanical != nil || o.trust || o.scaffold || o.maintenance != nil || o.autoCompact != nil || o.applyPermission != nil {
 			fmt.Fprintln(stderr, "purser:init: --enable-concise-style accepts no other options")
 			return 2
 		}
@@ -379,6 +391,10 @@ func detect(home, root string) (map[string]any, error) {
 			}
 		}
 	}
+	applyPermissionEnabled := any(nil)
+	if enabled := settingsApplyPermission(filepath.Join(contextio.ClaudeConfigDirFor(home), "settings.json")); enabled {
+		applyPermissionEnabled = true
+	}
 	reviewerOptions := []map[string]any{}
 	if claude, _ := agents["claude"].(map[string]any); claude["available"] == true {
 		reviewerOptions = append(reviewerOptions, map[string]any{"agent": "claude", "model": "claude-haiku-5-5", "label": "claude-haiku-5-5", "family": "anthropic"})
@@ -400,7 +416,7 @@ func detect(home, root string) (map[string]any, error) {
 			reviewerOptions = append(reviewerOptions, entry)
 		}
 	}
-	return map[string]any{"agents": agents, "reviewer_options": reviewerOptions, "roles": defaultMap(roles), "trusted": trusted, "profile_exists": exists(filepath.Join(root, ".orchestrator", "profile.toml")), "maintenance_enabled": maintenanceEnabled, "auto_compact_enabled": autoCompactEnabled}, nil
+	return map[string]any{"agents": agents, "reviewer_options": reviewerOptions, "roles": defaultMap(roles), "trusted": trusted, "profile_exists": exists(filepath.Join(root, ".orchestrator", "profile.toml")), "maintenance_enabled": maintenanceEnabled, "auto_compact_enabled": autoCompactEnabled, "apply_permission_enabled": applyPermissionEnabled}, nil
 }
 
 const detectOptionLimit = 5
@@ -1123,6 +1139,15 @@ func contains(items []string, value string) bool {
 }
 
 func setup(out, errOut io.Writer, home, root, configPath string, o options) int {
+	settingsPath := filepath.Join(contextio.ClaudeConfigDirFor(home), "settings.json")
+	permissionChanged := false
+	if o.applyPermission != nil {
+		var e error
+		permissionChanged, e = updateApplyPermission(settingsPath, *o.applyPermission, false)
+		if e != nil {
+			return printError(errOut, e)
+		}
+	}
 	globalBefore, globalReadErr := os.ReadFile(configPath)
 	if globalReadErr != nil && !os.IsNotExist(globalReadErr) {
 		return printError(errOut, globalReadErr)
@@ -1228,6 +1253,13 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 				fmt.Fprintln(out, "Automatic /compact: disabled for this user")
 			}
 		}
+		if permissionChanged {
+			if *o.applyPermission {
+				fmt.Fprintln(out, "Claude apply permission: enabled for this user")
+			} else {
+				fmt.Fprintln(out, "Claude apply permission: disabled for this user")
+			}
+		}
 		if !bytes.Equal(original, changed) {
 			fmt.Fprint(out, unifiedInitialDiff(rolePath, string(original), string(changed)))
 		}
@@ -1237,7 +1269,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 		if !exists(handoff) {
 			fmt.Fprintf(out, "Create %s:\n%s", handoff, contextio.FillHandoffLanguage(handoffTemplate, contextio.KnownUserLanguage(stateRootPath(), "")))
 		}
-		if bytes.Equal(original, changed) && scaffold == nil && exists(handoff) {
+		if bytes.Equal(original, changed) && scaffold == nil && exists(handoff) && !permissionChanged {
 			fmt.Fprintln(out, "No changes.")
 		}
 		return 0
@@ -1304,6 +1336,12 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 			return printError(errOut, e)
 		}
 	}
+	if o.applyPermission != nil {
+		permissionChanged, e = updateApplyPermission(settingsPath, *o.applyPermission, true)
+		if e != nil {
+			return printError(errOut, e)
+		}
+	}
 	globalAfter, globalReadErr := os.ReadFile(configPath)
 	if globalReadErr != nil && !os.IsNotExist(globalReadErr) {
 		return printError(errOut, globalReadErr)
@@ -1319,7 +1357,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	for _, step := range skipped {
 		fmt.Fprintf(out, "Skipped %s.\n", step)
 	}
-	if rolesChanged || globalChanged || scaffold != nil || handoffCreated {
+	if rolesChanged || globalChanged || scaffold != nil || handoffCreated || permissionChanged {
 		fmt.Fprintln(out, "Applied.")
 	} else {
 		fmt.Fprintln(out, "No changes.")
@@ -1899,4 +1937,97 @@ func enableConcise(out, errOut io.Writer) int {
 	}
 	return 0
 }
+
+func settingsApplyPermission(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var settings map[string]any
+	if json.Unmarshal(raw, &settings) != nil || settings == nil {
+		return false
+	}
+	permissions, _ := settings["permissions"].(map[string]any)
+	allow, _ := permissions["allow"].([]any)
+	for _, entry := range allow {
+		if entry == applyPermissionTool {
+			return true
+		}
+	}
+	return false
+}
+
+func updateApplyPermission(path string, enabled, persist bool) (bool, error) {
+	old, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	settings := map[string]any{}
+	if len(old) > 0 {
+		if json.Unmarshal(old, &settings) != nil || settings == nil {
+			return false, errors.New("Claude settings must contain a JSON object")
+		}
+	}
+	permissions, exists := settings["permissions"]
+	permissionMap, ok := permissions.(map[string]any)
+	if exists && permissions != nil && !ok {
+		return false, errors.New("Claude settings permissions must be an object")
+	}
+	if !ok {
+		permissionMap = map[string]any{}
+	}
+	allowValue, allowExists := permissionMap["allow"]
+	allow, ok := allowValue.([]any)
+	if allowExists && allowValue != nil && !ok {
+		return false, errors.New("Claude settings permissions.allow must be an array")
+	}
+	if !ok {
+		allow = []any{}
+	}
+	filtered := make([]any, 0, len(allow)+1)
+	found := false
+	for _, entry := range allow {
+		if entry == applyPermissionTool {
+			if enabled && !found {
+				filtered = append(filtered, entry)
+				found = true
+			}
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	if enabled && !found {
+		filtered = append(filtered, applyPermissionTool)
+		found = true
+	}
+	if enabled == found && len(filtered) == len(allow) {
+		return false, nil
+	}
+	if enabled {
+		permissionMap["allow"] = filtered
+		settings["permissions"] = permissionMap
+	} else if exists && ok {
+		permissionMap["allow"] = filtered
+		settings["permissions"] = permissionMap
+	}
+	if !persist {
+		return true, nil
+	}
+	now, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if !bytes.Equal(old, now) {
+		return false, errors.New("Claude settings changed during the update; try again")
+	}
+	encoded, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	if err := atomicWrite(path, append(encoded, '\n'), false); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func mustCwd() string { p, _ := os.Getwd(); return p }
