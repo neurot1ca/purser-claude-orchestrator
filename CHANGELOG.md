@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.181 — 2026-10-20
+
+- **Fixed:** a hook allow does not get past Claude Code's auto-mode classifier, so `/purser:init` now offers to add the `codex_apply` permission rule to your Claude Code settings, which lets accepted changes apply in auto mode.
+
 ## 0.1.180 — 2026-10-19
 
 - **Fixed:** `codex_apply` for a revision main Claude accepted now gets an explicit allow decision, so auto mode no longer blocks the dispatcher's apply.
