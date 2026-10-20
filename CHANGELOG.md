@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.182 — 2026-10-20
+
+- **Fixed:** files under a declared `dir/**` scope are no longer flagged as out of scope, and a size-capped result keeps a preview of its changed paths instead of an empty list.
+
 ## 0.1.181 — 2026-10-20
 
 - **Fixed:** a hook allow does not get past Claude Code's auto-mode classifier, so `/purser:init` now offers to add the `codex_apply` permission rule to your Claude Code settings, which lets accepted changes apply in auto mode.
