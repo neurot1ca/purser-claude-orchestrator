@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.183 — 2026-10-20
+
+- **Fixed:** `plan accept` takes `M1`-style milestone ids, plan scopes keep their spelling, and a repair pass keeps its milestone from being offered again until it is applied.
+- **Fixed:** a restored handoff no longer shows empty template sections, and Purser no longer nudges Claude to dispatch or retry when its turn ends on a question.
+- **Fixed:** an unreadable repository HEAD is reported plainly, and async reviews keep the reviewer's provider in the result.
+- **Fixed:** init adds the generated `.orchestrator/profile.toml` to `.gitignore`.
+
 ## 0.1.182 — 2026-10-20
 
 - **Fixed:** files under a declared `dir/**` scope are no longer flagged as out of scope, and a size-capped result keeps a preview of its changed paths instead of an empty list.
