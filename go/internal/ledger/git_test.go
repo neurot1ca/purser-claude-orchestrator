@@ -94,6 +94,24 @@ func TestGitFailureIncludesBoundedStderr(t *testing.T) {
 	}
 }
 
+func TestGitBrokenHeadHasSpecializedDiagnostic(t *testing.T) {
+	root := initGitRepository(t)
+	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/missing\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runGit(root, []string{"rev-parse", "--verify", "HEAD"}, time.Second,
+		"reading HEAD", nil, nil)
+	failure, ok := err.(*inspectionError)
+	if !ok || failure.Code != "GIT_FAILED" ||
+		!strings.HasPrefix(failure.Message, "Repository HEAD cannot be read. Git failed while reading HEAD. ") ||
+		strings.Contains(failure.Message, "Git stderr:") {
+		t.Fatalf("broken HEAD diagnostic = %v", err)
+	}
+	if got := gitStderrSummary(strings.TrimPrefix(failure.Message, "Repository HEAD cannot be read. Git failed while reading HEAD. ")); got == "" {
+		t.Fatalf("broken HEAD diagnostic omitted stderr: %q", failure.Message)
+	}
+}
+
 func TestRunGitEnablesLongPaths(t *testing.T) {
 	root := t.TempDir()
 	got, err := runGit(root, []string{"config", "--get", "core.longpaths"}, time.Second,

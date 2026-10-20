@@ -27,6 +27,8 @@ func applyPostReviewerOutcome(root string, event, pending, bundle, delta, classi
 		if bundle["reviewer1_skipped_reason"] == nil {
 			bundle["reviewer1_skipped_reason"] = "REVIEWER1_UNAVAILABLE"
 		}
+	} else if status == "NOT_RUN_INCOMPLETE_PACKET" || bridge.Outcome == "incomplete" {
+		bundle["reviewer1_skipped_reason"] = "REVIEWER1_INCOMPLETE"
 	}
 	for target, source := range map[string]string{
 		"reviewer1_provider": "provider", "reviewer1_model_requested": "reviewer1_model_requested",

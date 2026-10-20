@@ -495,8 +495,48 @@ func TestAsyncSuccessReviewerKeepsHostValidationInArtifact(t *testing.T) {
 	}
 	worker := mapValue(artifact["worker_validation"])
 	if artifact["reviewer1_result"] != "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE" || artifact["reviewer1_skipped_reason"] != nil ||
+		artifact["reviewer1_provider"] != "fixture-test" || artifact["served_model_attestation"] != "fixture/actual" ||
 		worker["source"] != "HOST_TEST_EVIDENCE" || worker["status"] != "PASS" || artifact["validation"] != "PASS" || compact["validation"] != "PASS" {
 		t.Fatalf("reviewed artifact lost host validation: artifact=%#v compact validation=%v", artifact, compact["validation"])
+	}
+}
+
+func TestAsyncIncompleteReviewPacketRecordsNoExecution(t *testing.T) {
+	state, repo, event, index, pending, original, job, resolved, loaded := newAsyncSuccessCase(t, "incomplete_review_packet")
+	if err := os.WriteFile(filepath.Join(repo, "src", "file.go"), []byte("package src\n// worker delta\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+	configureNativeReviewer(t, state, &resolved, "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "PASS")
+	configPath := filepath.Join(state, "plugin", ".claude", "hooks", "orchestrator", "config.json")
+	config, err := readAsyncObject(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config["reviewer1_packet_max_bytes"] = 1
+	if err = writeAsyncObject(configPath, config); err != nil {
+		t.Fatal(err)
+	}
+	calls := filepath.Join(state, "reviewer-calls.log")
+	t.Setenv("PURser_ASYNC_REVIEW_CALLS", calls)
+	response, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := responseBundle(t, response)
+	artifact, err := readAsyncObject(stringValue(bundle["full_bundle_path"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact["reviewer1_result"] != "UNCERTAIN" || artifact["reviewer1_skipped_reason"] != "REVIEWER1_INCOMPLETE" ||
+		artifact["claude_review_mode"] != review.Full || artifact["validation"] != "UNKNOWN" {
+		t.Fatalf("incomplete review outcome=%#v", artifact)
+	}
+	if _, err = os.Stat(calls); !os.IsNotExist(err) {
+		t.Fatalf("reviewer process was invoked (stat err=%v)", err)
 	}
 }
 
@@ -847,12 +887,13 @@ func main() { if calls := os.Getenv("PURser_ASYNC_REVIEW_CALLS"); calls != "" { 
 		return
 	}
 	envelope, err := json.Marshal(map[string]any{
-		"conversation_id":  "fixture-review",
-		"status":           "success",
-		"response":         "",
-		"duration_seconds": 0.01,
-		"num_turns":        1,
-		"usage":            map[string]any{},
+		"conversation_id":          "fixture-review",
+		"status":                   "success",
+		"served_model_attestation": "fixture/actual",
+		"response":                 "",
+		"duration_seconds":         0.01,
+		"num_turns":                1,
+		"usage":                    map[string]any{},
 		"structured_output": map[string]any{
 			"result": result, "validation": validation, "findings": []any{},
 		},
@@ -888,7 +929,12 @@ func (asyncNativeReviewer) ParseEnvelope(stdout string) (map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
-	return parsed.Map(), nil
+	result := parsed.Map()
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(stdout), &envelope); err == nil && envelope["served_model_attestation"] != nil {
+		result["served_model_attestation"] = envelope["served_model_attestation"]
+	}
+	return result, nil
 }
 
 func registerAsyncNativeReviewer(t *testing.T, executable string, panicBuild bool) {

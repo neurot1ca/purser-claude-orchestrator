@@ -225,24 +225,11 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 			bundle["claude_review_mode"] = review.Full
 			bundle["findings"] = appendPostFinding(bundle["findings"], "INTERNAL_POST_ERROR", "Reviewer failed during async result review.")
 		} else {
-			attrs := result.Attributes
-			for _, key := range []string{"reviewer1_provider", "reviewer1_model_requested", "reviewer1_scope"} {
-				if v, ok := attrs[key]; ok {
-					bundle[key] = v
-				}
-			}
-			if validation, ok := attrs["validation"]; ok {
-				bundle["validation"] = postReviewerValidation(bundle, stringValue(validation))
-			}
-			bundle["reviewer1_result"] = attrs["result"]
-			for _, finding := range postReviewerFindings(attrs["findings"]) {
-				bundle["findings"] = appendPostFinding(bundle["findings"], stringValue(finding["code"]), stringValue(finding["message"]), stringValue(finding["reference"]))
-			}
-			mode := review.ReviewMode(true, routeInList(gateConfig["always_full_routes"], stringValue(pending["route"])), "", stringValue(attrs["result"]))
+			applyPostReviewerOutcome(root, event, pending, bundle, delta, mapValue(bundle["concurrent_writer"]), result,
+				true, routeInList(gateConfig["always_full_routes"], stringValue(pending["route"])))
 			if resolved.ForceFullReview || bundle["force_full_review"] == true || pending["task_contract_grounded"] != true {
-				mode.Mode = review.Full
+				bundle["claude_review_mode"] = review.Full
 			}
-			bundle["claude_review_mode"] = mode.Mode
 		}
 	} else if reason := stringValue(bundle["reviewer1_skipped_reason"]); reason != "" {
 		recordPostReviewerObservations(root, original, &repoRoot, stringValue(pending["task_id"]), pendingProjectKey(pending),

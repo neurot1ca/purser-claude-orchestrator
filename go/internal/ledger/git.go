@@ -32,6 +32,7 @@ type InspectionError = inspectionError
 func (e *inspectionError) Error() string { return e.Code + ": " + e.Message }
 
 func runGit(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
+	readingHead := len(args) == 3 && args[0] == "rev-parse" && args[1] == "--verify" && args[2] == "HEAD"
 	args = append([]string{"-c", "core.longpaths=true"}, args...)
 	commandPath := ""
 	if env != nil {
@@ -71,6 +72,12 @@ func runGit(root string, args []string, timeout time.Duration, operation string,
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			if readingHead {
+				detail := gitStderrSummary(stderr.String())
+				if detail != "" {
+					return nil, &inspectionError{"GIT_FAILED", "Repository HEAD cannot be read. Git failed while " + operation + ". " + detail}
+				}
+			}
 			message := fmt.Sprintf("Git failed with exit code %d while %s.", exitErr.ExitCode(), operation)
 			if detail := gitStderrSummary(stderr.String()); detail != "" {
 				message += " Git stderr: " + detail
