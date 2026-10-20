@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestPythonStopRetryGoldenParity(t *testing.T) {
@@ -97,6 +99,28 @@ func TestStopRetryRetriesClassifierNoVerdict(t *testing.T) {
 	}
 	if got, want := codexRetryReason(records, 0, repository), "Retry the denied codex_apply call."; got != want {
 		t.Fatalf("codexRetryReason = %q, want %q", got, want)
+	}
+}
+
+func TestStopDoesNotRetryWhenAssistantEndsWithQuestion(t *testing.T) {
+	repository := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repository, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "state")
+	t.Setenv("PURSER_STATE_DIR", root)
+	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+	for _, record := range []map[string]any{
+		{"type": "user", "message": map[string]any{"content": "Continue."}},
+		{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": "call-1", "name": "mcp__plugin_purser_codex-main__codex_apply", "input": map[string]any{}}}}},
+		{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call-1", "is_error": true, "content": "classifier no verdict"}}}},
+		{"type": "assistant", "message": map[string]any{"content": "Would you like me to retry?"}},
+	} {
+		appendPlanStopRecord(t, transcript, record)
+	}
+	output := Stop(map[string]any{"cwd": repository, "session_id": "retry-question", "transcript_path": transcript}, time.Now())
+	if strings.Contains(string(output), "Retry the denied") || strings.Contains(string(output), "Retry: call codex_result") {
+		t.Fatalf("question-ending turn received retry instruction: %q", output)
 	}
 }
 

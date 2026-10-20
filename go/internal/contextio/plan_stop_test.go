@@ -415,6 +415,36 @@ func TestPlanStopReadyBatchLifecycle(t *testing.T) {
 	}
 }
 
+func TestStopSuppressesReadyPlanDispatchOnlyForQuestionTurns(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		final      string
+		wantAdvice bool
+	}{
+		{name: "approval question", final: "Should I proceed with the approval-gated step?", wantAdvice: false},
+		{name: "ordinary continuation", final: "I will continue with the next pass.", wantAdvice: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, repo, artifact := planFixture(t)
+			t.Setenv("PURSER_STATE_DIR", root)
+			if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := AcceptPlan(root, repo, "question-plan", artifact, []int{1}); err != nil {
+				t.Fatal(err)
+			}
+			transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+			appendPlanStopRecord(t, transcript, map[string]any{"type": "user", "message": map[string]any{"content": "Continue the plan."}})
+			appendPlanStopRecord(t, transcript, map[string]any{"type": "assistant", "message": map[string]any{"content": tc.final}})
+			output := Stop(map[string]any{"cwd": repo, "session_id": "plan-stop-session", "transcript_path": transcript}, time.Now())
+			containsAdvice := strings.Contains(string(output), "start every listed ready pass")
+			if containsAdvice != tc.wantAdvice {
+				t.Fatalf("ready-plan advice present=%t, want %t: %q", containsAdvice, tc.wantAdvice, output)
+			}
+		})
+	}
+}
+
 func TestPlanStopIneligibleSiblingDoesNotSuppress(t *testing.T) {
 	for _, status := range []string{"stopped", "gated", "completed", "dispatched"} {
 		t.Run(status, func(t *testing.T) {

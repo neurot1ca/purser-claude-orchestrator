@@ -66,6 +66,20 @@ func Stop(event map[string]any, started time.Time) []byte {
 	} else if len(turn) > 0 {
 		message = turn[len(turn)-1]
 	}
+	if message == "" {
+		for i := len(records) - 1; i > latestUser; i-- {
+			if transcriptRecordType(records[i]) != "assistant" {
+				continue
+			}
+			recordMessage, _ := records[i]["message"].(map[string]any)
+			if recordMessage == nil {
+				recordMessage = records[i]
+			}
+			message = transcriptText(recordMessage["content"])
+			break
+		}
+	}
+	questionTurn := assistantEndsWithQuestion(message)
 	joined := strings.Join(turn, "\n")
 	if message != "" && !strings.Contains(joined, message) {
 		joined += "\n" + message
@@ -138,7 +152,9 @@ func Stop(event map[string]any, started time.Time) []byte {
 		if changed {
 			_ = writeAdvisorState(path, state)
 		}
-		retryReason = persistCodexRetry(path, session, codexRetryReason(records, latestUser, repository))
+		if !questionTurn {
+			retryReason = persistCodexRetry(path, session, codexRetryReason(records, latestUser, repository))
+		}
 		state = readAdvisorState(path, session)
 	}
 	var reasons []string
@@ -182,7 +198,7 @@ func Stop(event map[string]any, started time.Time) []byte {
 			if reminded != nil {
 				remindedUser, remindedUserOK = exactInteger(reminded["user_index"])
 			}
-			if readySet != "" && (!remindedUserOK || remindedUser != latestUser || str(reminded["ready_set"]) != readySet) {
+			if readySet != "" && !questionTurn && (!remindedUserOK || remindedUser != latestUser || str(reminded["ready_set"]) != readySet) {
 				state["plan_ready_set_reminded"] = map[string]any{"user_index": latestUser, "ready_set": readySet}
 				planReason = "This turn, start every listed ready pass through a separate purser:dispatcher agent, in parallel. Use normal routing and review: " + readySet
 			}

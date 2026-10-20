@@ -728,7 +728,8 @@ func restoreHandoff(source, path, content, transcriptPath string) string {
 	if err != nil || source == "startup" && (time.Since(info.ModTime()) < 0 || time.Since(info.ModTime()) >= 12*time.Hour) {
 		return ""
 	}
-	if emptyHandoff(content) {
+	content, meaningful := cleanHandoff(content)
+	if !meaningful {
 		return ""
 	}
 	if source == "compact" {
@@ -931,21 +932,64 @@ func runeTail(text string, n int) string {
 	return string(r)
 }
 
-func emptyHandoff(content string) bool {
-	template := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSuffix(handoffTemplate, "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			template[line] = true
+func cleanHandoff(content string) (string, bool) {
+	content = strings.ReplaceAll(strings.ReplaceAll(content, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if match := handoffLanguage.FindStringSubmatch(trimmed); len(match) == 2 && strings.TrimSpace(match[1]) == "<the language the user writes in>" {
+			lines[i] = ""
 		}
 	}
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !template[line] {
-			return false
+	for i, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "## ") {
+			continue
+		}
+		meaningful := false
+		inState := false
+		inRecent := false
+		for j := i + 1; j < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[j]), "## "); j++ {
+			trimmed := strings.TrimSpace(lines[j])
+			if trimmed == recentStart {
+				inRecent = true
+				continue
+			}
+			if trimmed == recentEnd {
+				inRecent = false
+				continue
+			}
+			if trimmed == stateStart {
+				inState = true
+				continue
+			}
+			if trimmed == stateEnd {
+				inState = false
+				continue
+			}
+			if !inState && !inRecent && trimmed != "" {
+				meaningful = true
+				break
+			}
+		}
+		if !meaningful {
+			lines[i] = ""
 		}
 	}
-	return true
+	meaningful := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch trimmed {
+		case "", "# Purser handoff", stateStart, stateEnd, recentStart, recentEnd, "## Goal", "## State", "## Decisions", "## Next", "## Open risks", "## Files to load":
+			continue
+		}
+		if match := handoffLanguage.FindStringSubmatch(trimmed); len(match) == 2 && strings.TrimSpace(match[1]) == "<the language the user writes in>" {
+			lines[i] = ""
+			continue
+		}
+		meaningful = true
+		break
+	}
+	return strings.Join(lines, "\n"), meaningful
 }
 
 const handoffTemplate = "# Purser handoff\n## Goal\nUser language: <the language the user writes in>\n## State\n## Decisions\n## Next\n## Open risks\n## Files to load\n<!-- PURSER:STATE:START -->\n<!-- PURSER:STATE:END -->\n"

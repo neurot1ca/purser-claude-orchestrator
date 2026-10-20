@@ -4,6 +4,11 @@ import "strings"
 
 const stopFlowReminder = "Purser: if this is not a real decision or an approval-gated action, start the next part now instead of asking; otherwise keep the question."
 
+func assistantEndsWithQuestion(message string) bool {
+	trimmed := strings.TrimRightFunc(message, isPythonWhitespace)
+	return strings.HasSuffix(trimmed, "?") || strings.HasSuffix(trimmed, "؟") || strings.HasSuffix(trimmed, "？")
+}
+
 func planCodexDispatched(records []map[string]any, latestUser int, planID string) bool {
 	if latestUser < 0 || latestUser >= len(records) || planID == "" {
 		return false
@@ -140,8 +145,7 @@ func stopFlowReason(records []map[string]any, latestUser, blockedUser int, hasRe
 			break
 		}
 	}
-	trimmed := strings.TrimRightFunc(flowMessage, isPythonWhitespace)
-	if !strings.HasSuffix(trimmed, "?") && !strings.HasSuffix(trimmed, "؟") && !strings.HasSuffix(trimmed, "？") {
+	if !assistantEndsWithQuestion(flowMessage) {
 		return "", blockedUser
 	}
 	uses := make(map[string]string)
