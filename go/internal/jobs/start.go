@@ -253,8 +253,8 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	if readyCheck(args) {
 		job["readinessCheck"] = readinessValue(args)
 	}
-	if taskID := nonemptyString(job["taskId"]); req.Mode == "new" && taskID != "" {
-		repository := nonemptyString(args["cwd"])
+	if taskID := nonemptyString(job["taskId"]); taskID != "" {
+		repository := nonemptyString(job["repoRoot"])
 		if repository != "" && contextio.ProjectRoot(map[string]any{"cwd": repository}) != "" {
 			planRepository = repository
 		}

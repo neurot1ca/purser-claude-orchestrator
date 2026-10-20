@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,152 @@ const readyPlanArtifact = `## Milestones
 ## Other material
 This must not be part of M3's task section.
 `
+
+func TestPlanScopePreservesPathSpelling(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	data := strings.ReplaceAll(readyPlanArtifact, "src/a.go", `System\Second Brain\x.md`)
+	if err := os.WriteFile(artifact, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "spelling", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := ReadPlanForTask(root, repo, "spelling")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "System/Second Brain/x.md"
+	if !reflect.DeepEqual(state.Milestones[0].WritePaths, []string{want}) || !strings.HasSuffix(state.ReadyMilestones[0].Orch, "|scope="+want) {
+		t.Fatalf("stored/output path spelling lost: %+v", state)
+	}
+}
+
+func TestPlanCaseVariantWriteOverlap(t *testing.T) {
+	_, err := parsePlanMilestones([]byte(strings.ReplaceAll(readyPlanArtifact, "src/b.go", "SRC/A.go")), []int{1, 2})
+	if (err != nil) != (runtime.GOOS == "windows") {
+		t.Fatalf("parallel case-variant overlap: %v", err)
+	}
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "earlier", artifact, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	laterArtifact := filepath.Join(filepath.Dir(artifact), "later.md")
+	if err := os.WriteFile(laterArtifact, []byte(strings.ReplaceAll(readyPlanArtifact, "src/a.go", "SRC/A.go")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	later, err := AcceptPlan(root, repo, "later", laterArtifact, []int{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsReady(later.ReadyMilestones, "M1") != (runtime.GOOS != "windows") || !containsReady(later.ReadyMilestones, "M2") {
+		t.Fatalf("cross-plan case-variant readiness: %+v", later.ReadyMilestones)
+	}
+}
+
+func TestPlanUnlinkedSuccessfulRepairBlocksOnlyOwner(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "repair", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", "unlinked.json")
+	if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, disposition := range []string{"", "discarded", "superseded"} {
+		job := map[string]any{"jobId": "unlinked", "taskId": "repair-m1of2-p1c", "state": "SUCCEEDED", "applyState": disposition, "discarded": disposition == "discarded"}
+		data, _ := json.Marshal(job)
+		if err := os.WriteFile(jobPath, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		plans, err := ReconcilePlans(root, repo)
+		if err != nil || len(plans) != 1 {
+			t.Fatalf("recovery: %+v %v", plans, err)
+		}
+		ready := plans[0].ReadyMilestones
+		if containsReady(ready, "M1") != (disposition != "") || !containsReady(ready, "M2") || len(plans[0].LinkedJobs) != 0 {
+			t.Fatalf("unlinked repair disposition %q readiness: %+v", disposition, plans[0])
+		}
+	}
+}
+
+func TestPlanJobScanReadFailureWithholdsReadiness(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "scan", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	// Reading a directory as a job file fails portably, without OS locks.
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", "unreadable.json")
+	if err := os.MkdirAll(jobPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := PlanReadiness(root, repo, "scan-m1of2")
+	if err != nil || len(ready) != 0 {
+		t.Fatalf("read failure exposed readiness: %+v %v", ready, err)
+	}
+	if err := os.Remove(jobPath); err != nil {
+		t.Fatal(err)
+	}
+	ready, err = PlanReadiness(root, repo, "scan-m1of2")
+	if err != nil || len(ready) != 2 {
+		t.Fatalf("read failure persisted after recovery: %+v %v", ready, err)
+	}
+}
+
+func TestPlanJobScanSkipsInvalidRecords(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "scan", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	jobsDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"malformed": `{`,
+		"mismatch":  `{"jobId":"other","taskId":"scan-m2of2","state":"RUNNING"}`,
+		"foreign":   `{"jobId":"foreign","taskId":"another-plan-m2of2","state":"RUNNING"}`,
+		"owned":     `{"jobId":"owned","taskId":"scan-m1of2","state":"SUCCEEDED"}`,
+	} {
+		if err := os.WriteFile(filepath.Join(jobsDir, name+".json"), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ready, err := PlanReadiness(root, repo, "scan-m1of2")
+	if err != nil || len(ready) != 1 || ready[0].ID != "M2" {
+		t.Fatalf("invalid records blocked sibling or exposed owner: %+v %v", ready, err)
+	}
+}
+
+func TestPlanReconcilePreservesUnreadableOwner(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if _, err := AcceptPlan(root, repo, "repair", artifact, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := BindPlanJob(root, repo, "repair-m1of1", "unreadable"); err != nil {
+		t.Fatal(err)
+	}
+	// The job record is still being published; a missing/read-locked record
+	// cannot establish that this durable reservation has stopped owning work.
+	if _, err := ReconcilePlanJob(root, repo); err != nil {
+		t.Fatal(err)
+	}
+	plans, err := ReconcilePlans(root, repo)
+	if err != nil || len(plans) != 1 || !reflect.DeepEqual(plans[0].LinkedJobs, []string{"unreadable"}) || len(plans[0].ReadyMilestones) != 0 {
+		t.Fatalf("uncertain owner was released: %+v %v", plans, err)
+	}
+}
 
 func TestParsePlanMilestonesBulletInlineDeclarations(t *testing.T) {
 	artifact := []byte("## Milestones\n" +

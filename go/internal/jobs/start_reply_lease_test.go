@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,72 @@ import (
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 )
+
+func TestStartReplyPlanRepairLifecycle(t *testing.T) {
+	root, repo := t.TempDir(), t.TempDir()
+	gitStart(t, repo, "init", "-q")
+	artifact := filepath.Join(root, "plan.md")
+	if err := os.WriteFile(artifact, []byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:** src/a.go\n### M2\n**Dependency:** none\n**Write paths:** src/b.go\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contextio.AcceptPlan(root, repo, "repair", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRecord(filepath.Join(root, "codex_exec_mcp", "threads"), map[string]any{"thread_id": "repair-thread", "repoRoot": repo, "cwd": repo, "config_args": []any{}}); err != nil {
+		t.Fatal(err)
+	}
+	taskID := "repair-m1of2-p1c"
+	launched := false
+	_, record, err := Start(root, map[string]any{
+		"call": "00000000-0000-4000-8000-000000000301", "prompt": "repair", "mode": "reply", "threadId": "repair-thread", "taskId": taskID,
+	}, StartOptions{StateRoot: root, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true},
+		Launch: func(jobID string, _ int64, _ string) error {
+			launched = true
+			plan, err := contextio.ReadPlanForTask(root, repo, "repair")
+			if err != nil || !reflect.DeepEqual(plan.LinkedJobs, []string{jobID}) {
+				t.Fatalf("reply not bound before launch: %+v %v", plan, err)
+			}
+			return nil
+		},
+	})
+	if err != nil || record == nil || !launched || recordMap(record)["taskId"] != taskID {
+		t.Fatalf("reply start: %+v launched=%v err=%v", record, launched, err)
+	}
+	jobID := nonemptyString(recordMap(record)["jobId"])
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
+	for _, state := range []string{"RUNNING", "SUCCEEDED"} {
+		if err := record.Set("state", state); err != nil {
+			t.Fatal(err)
+		}
+		if err := Write(jobPath, record); err != nil {
+			t.Fatal(err)
+		}
+		plan, err := contextio.ReconcilePlanJob(root, repo)
+		if err != nil || len(plan.ReadyMilestones) != 1 || plan.ReadyMilestones[0].ID != "M2" || len(plan.CompletedMilestones) != 0 {
+			t.Fatalf("reply %s readiness: %+v %v", state, plan, err)
+		}
+	}
+	if err := record.Set("applyState", "applied"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(jobPath, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := contextio.RecordPlanApply(root, repo, taskID, jobID); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := contextio.ReadPlanForTask(root, repo, "repair")
+	if err != nil || len(plan.AppliedPasses) != 1 || plan.AppliedPasses[0].TaskID != taskID || plan.AppliedPasses[0].JobID != jobID || plan.Milestones[0].ValidationState != "PENDING" || len(plan.CompletedMilestones) != 0 || len(plan.ReadyMilestones) != 1 || plan.ReadyMilestones[0].ID != "M2" {
+		t.Fatalf("applied reply escaped validation: %+v %v", plan, err)
+	}
+	if err := contextio.RecordPlanValidation(root, repo, taskID, jobID, "PASS"); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = contextio.ReadPlanForTask(root, repo, "repair")
+	if err != nil || !reflect.DeepEqual(plan.CompletedMilestones, []int{1}) {
+		t.Fatalf("validated reply did not complete: %+v %v", plan, err)
+	}
+}
 
 func TestStartClearsDueQuotaWakeForCodexImplementation(t *testing.T) {
 	root, repo := t.TempDir(), t.TempDir()

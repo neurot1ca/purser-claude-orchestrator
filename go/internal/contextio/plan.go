@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -342,9 +343,6 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 							if clean == "." || filepath.IsAbs(clean) || strings.Contains(clean, ":") || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(clean, "*?[]{}") {
 								return nil, fmt.Errorf("invalid write path for %s", m.ID)
 							}
-							if runtime.GOOS == "windows" {
-								clean = strings.ToLower(clean)
-							}
 							m.WritePaths = append(m.WritePaths, clean)
 							previousPath = clean
 						}
@@ -412,6 +410,9 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 			}
 			for _, a := range byID[n].WritePaths {
 				for _, b := range byID[other].WritePaths {
+					if runtime.GOOS == "windows" {
+						a, b = strings.ToLower(a), strings.ToLower(b)
+					}
 					if a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/") {
 						return nil, fmt.Errorf("parallel milestones M%d and M%d have incompatible write paths", n, other)
 					}
@@ -1039,7 +1040,7 @@ func milestoneForPass(state *PlanState, jobID string) int {
 	return 0
 }
 
-// ReconcilePlanJob clears a missing or failed link and recovers an applied pass
+// ReconcilePlanJob clears a terminal link and recovers an applied pass
 // if the job write landed before the plan progress write.
 func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 	path, canonical, err := planPath(root, repository)
@@ -1093,7 +1094,7 @@ func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 			readErr = json.Unmarshal(data, &job)
 		}
 		if readErr != nil || job["jobId"] != jobID {
-			changed = true
+			remaining = append(remaining, jobID)
 			continue
 		}
 		taskID, _ := job["taskId"].(string)
@@ -1183,7 +1184,7 @@ func ReconcilePlans(root, repository string) ([]*PlanState, error) {
 				readErr = json.Unmarshal(data, &job)
 			}
 			if readErr != nil || job["jobId"] != jobID {
-				planChanged = true
+				remaining = append(remaining, jobID)
 				continue
 			}
 			taskID, _ := job["taskId"].(string)
@@ -1463,6 +1464,9 @@ nextMilestone:
 			}
 			for _, a := range m.WritePaths {
 				for _, b := range earlierWritePaths {
+					if runtime.GOOS == "windows" {
+						a, b = strings.ToLower(a), strings.ToLower(b)
+					}
 					if a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/") {
 						continue nextMilestone
 					}
@@ -1483,16 +1487,26 @@ nextMilestone:
 		}
 		linked := false
 		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			if filepath.Ext(entry.Name()) != ".json" {
 				continue
 			}
-			job, ok := readSmallObject(filepath.Join(root, "codex_exec_mcp", "jobs", entry.Name()))
-			if !ok {
+			file, err := os.Open(filepath.Join(root, "codex_exec_mcp", "jobs", entry.Name()))
+			if err != nil {
+				return nil
+			}
+			data, err := io.ReadAll(io.LimitReader(file, (64<<10)+1))
+			file.Close()
+			if err != nil {
+				return nil
+			}
+			var job map[string]any
+			if len(data) > 64<<10 || json.Unmarshal(data, &job) != nil || job["jobId"] != strings.TrimSuffix(entry.Name(), ".json") {
 				continue
 			}
 			task, _ := job["taskId"].(string)
 			milestone, matches := planTaskMilestone(state.TaskID, task)
-			if matches && milestone == n && job["discarded"] != true && job["applyState"] != "applied" && job["applyState"] != "superseded" && job["state"] != "SUPERSEDED" && (job["state"] == "QUEUED" || job["state"] == "RUNNING") {
+			status, _ := job["state"].(string)
+			if matches && milestone == n && job["discarded"] != true && job["applyState"] != "applied" && job["applyState"] != "superseded" && status != "SUPERSEDED" && (status == "QUEUED" || status == "RUNNING" || status == "SUCCEEDED" && !terminalPlanJob(job, status)) {
 				linked = true
 				break
 			}
