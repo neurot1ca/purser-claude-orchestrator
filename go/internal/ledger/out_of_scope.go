@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -78,8 +79,23 @@ func DetectOutOfScopeModifications(repoRoot string, baseline map[string]any, sco
 }
 
 func pathInScope(path string, scope []string) bool {
+	path = strings.ReplaceAll(path, `\`, "/")
 	for _, item := range scope {
-		if item == "." || path == item || strings.HasPrefix(path, strings.TrimRight(item, "/")+"/") {
+		item = strings.ReplaceAll(item, `\`, "/")
+		candidate := path
+		if runtime.GOOS == "windows" {
+			candidate, item = strings.ToLower(candidate), strings.ToLower(item)
+		}
+		if item == "." || candidate == item || strings.HasPrefix(candidate, strings.TrimRight(item, "/")+"/") {
+			return true
+		}
+		if strings.HasSuffix(item, "/**") {
+			directory := strings.TrimSuffix(item, "/**")
+			if candidate == directory || strings.HasPrefix(candidate, directory+"/") {
+				return true
+			}
+		}
+		if item == "**" {
 			return true
 		}
 	}

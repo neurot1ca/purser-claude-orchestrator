@@ -85,6 +85,7 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 		}
 		compact["known_concurrent_scopes"] = map[string]any{"count": len(scopes), "task_ids": ordered}
 	}
+	changedPathsPreview := []any{}
 	paths, pathsOK := bundle["changed_paths"].([]any)
 	if strings, ok := bundle["changed_paths"].([]string); ok {
 		paths, pathsOK = make([]any, len(strings)), true
@@ -102,6 +103,7 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 		if len(preview) > 10 {
 			preview = preview[:10]
 		}
+		changedPathsPreview = preview
 		compact["changed_paths"] = preview
 		compact["changed_path_count"] = len(paths)
 		if digest, ok := bundle["changed_paths_sha256"].(string); ok && digest != "" {
@@ -195,7 +197,7 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
 	if audit, ok := bundle["audit_receipt"].(map[string]any); ok && audit["verdict"] != nil {
 		mandatory["audit_receipt"] = map[string]any{"verdict": audit["verdict"]}
 	}
-	mandatory["changed_paths"] = []any{}
+	mandatory["changed_paths"] = changedPathsPreview
 	mandatory["changed_path_count"] = compact["changed_path_count"]
 	mandatory["changed_paths_sha256"] = compact["changed_paths_sha256"]
 	mandatory["findings"] = copyFindings(bundle["findings"], intPointer(0))

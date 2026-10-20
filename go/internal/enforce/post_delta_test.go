@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -143,6 +144,86 @@ func TestAssemblePostDeltaKeepsRevisionWhenBaselineIsIncomplete(t *testing.T) {
 	}
 }
 
+func TestOutOfScopeDirGlobAllowsNestedFiles(t *testing.T) {
+	root := postDeltaRepo(t)
+	scope := []string{"System/Second Brain/Migration/**"}
+	baseline := postScopeBaseline(t, root, scope)
+	path := filepath.Join(root, "System", "Second Brain", "Migration", "Skills", "brain-setup", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("changed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := ledger.DetectOutOfScopeModifications(root, baseline, scope)
+	if result["status"] != "OK" {
+		t.Fatalf("out-of-scope inspection failed: %#v", result)
+	}
+	if got := anyStringList(result["paths"]); len(got) != 0 {
+		t.Fatalf("in-scope nested path reported outside scope: %v", got)
+	}
+}
+
+func TestOutOfScopeDirGlobStillFlagsOutsideFiles(t *testing.T) {
+	root := postDeltaRepo(t)
+	scope := []string{"System/Second Brain/Migration/**"}
+	baseline := postScopeBaseline(t, root, scope)
+	path := filepath.Join(root, "System", "Second Brain", "Other", "file.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("changed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := ledger.DetectOutOfScopeModifications(root, baseline, scope)
+	if result["status"] != "OK" {
+		t.Fatalf("out-of-scope inspection failed: %#v", result)
+	}
+	if got := anyStringList(result["paths"]); len(got) != 1 || got[0] != "System/Second Brain/Other/file.md" {
+		t.Fatalf("outside path result = %v", got)
+	}
+}
+
+func TestOutOfScopeDirGlobNormalizesSeparatorsAndWhitespace(t *testing.T) {
+	root := postDeltaRepo(t)
+	scope := []string{" System\\Second Brain\\Migration\\ "}
+	baseline := postScopeBaseline(t, root, scope)
+	path := filepath.Join(root, "System", "Second Brain", "Migration", "Skills", "brain-setup", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("changed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := ledger.DetectOutOfScopeModifications(root, baseline, scope)
+	if result["status"] != "OK" {
+		t.Fatalf("out-of-scope inspection failed: %#v", result)
+	}
+	if got := anyStringList(result["paths"]); len(got) != 0 {
+		t.Fatalf("space or separator in-scope path reported outside scope: %v", got)
+	}
+}
+
+func TestCompactBundleMandatoryFallbackKeepsChangedPathPreview(t *testing.T) {
+	paths := []any{}
+	for i := 0; i < 29; i++ {
+		paths = append(paths, fmt.Sprintf("System/Second Brain/Migration/file-%02d.md", i))
+	}
+	bundle := map[string]any{
+		"task_id": "task-overflow", "changed_paths": paths,
+		"findings": []any{}, "implementer_report": "",
+		"large_optional": strings.Repeat("x", 256),
+	}
+	compact, _, err := compactBundle(bundle, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, _ := compact["changed_paths"].([]any)
+	if compact["changed_path_count"] != 29 || len(preview) == 0 || len(preview) > 10 {
+		t.Fatalf("mandatory fallback lost changed path preview: count=%v paths=%v", compact["changed_path_count"], preview)
+	}
+}
+
 func postDeltaRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -166,6 +247,19 @@ func postDeltaRepo(t *testing.T) string {
 		t.Fatalf("git commit: %v: %s", err, out)
 	}
 	return root
+}
+
+func postScopeBaseline(t *testing.T, root string, scope []string) map[string]any {
+	t.Helper()
+	data, err := json.Marshal(ledger.CaptureBaseline(root, scope, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var baseline map[string]any
+	if err := json.Unmarshal(data, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	return baseline
 }
 
 func ledgerFilterFailure(root string) (map[string]any, error) {
