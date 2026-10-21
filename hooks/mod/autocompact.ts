@@ -199,7 +199,12 @@ export function registerAutoCompact(on) {
       if (threshold === undefined || !(await optedIn($))) return result
       const tokens = (await $.session.usage()).context.tokens
       const cacheReads = e.usage?.cache_read_input_tokens ?? 0
-      if (inferLongCache && cacheReads > 0) cacheTtlMs = LONG_CACHE_TTL_MS
+      const cacheCreation = e.usage?.cache_creation
+      if ((cacheCreation?.ephemeral_1h_input_tokens ?? 0) > 0) cacheTtlMs = LONG_CACHE_TTL_MS
+      else if (cacheTtlMs !== LONG_CACHE_TTL_MS) {
+        if ((cacheCreation?.ephemeral_5m_input_tokens ?? 0) > 0) cacheTtlMs = DEFAULT_CACHE_TTL_MS
+        else if (inferLongCache && cacheReads > 0) cacheTtlMs = LONG_CACHE_TTL_MS
+      }
       const compacting = tokens !== undefined && tokens >= threshold
       await trace($, `turn ${e.turnId}: ${tokens ?? 'no'} tokens, threshold ${threshold}, ${compacting ? 'compacting' : 'below'}`)
       if (!compacting) {

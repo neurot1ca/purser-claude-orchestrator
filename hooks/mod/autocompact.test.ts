@@ -81,6 +81,31 @@ test('the cache timer compacts at the default TTL minus its margin', async ($, o
   expect(calls.compacts).toBe(1)
 })
 
+test('a one hour cache write arms the idle timer with the long TTL', async ($, on) => {
+  const { calls, clock } = engine(on, 130_000)
+  const writes: string[] = []
+  on('fs.write', async (_$, e) => { writes.push(e.text); return { value: undefined } })
+  await $.turn.complete({ ...TURN, usage: { model: 'test', input_tokens: 0, output_tokens: 0, cache_creation: { ephemeral_1h_input_tokens: 1, ephemeral_5m_input_tokens: 0 } } })
+  expect(writes.join('\n')).toContain('idle timer armed at 130000 tokens, TTL 3600000ms')
+  await clock.advance(3_570_000)
+  expect(calls.compacts).toBe(0)
+  await clock.advance(1_000)
+  expect(calls.compacts).toBe(1)
+})
+
+test('a five minute cache write keeps the default idle timer TTL', async ($, on) => {
+  const { calls, clock } = engine(on, 130_000)
+  const writes: string[] = []
+  on('fs.write', async (_$, e) => { writes.push(e.text); return { value: undefined } })
+  await $.turn.complete({ ...TURN, usage: { model: 'test', input_tokens: 0, output_tokens: 0, cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 1 } } })
+  expect(writes.join('\n')).toContain('idle timer armed at 130000 tokens, TTL 300000ms')
+  await clock.advance(269_999)
+  expect(calls.compacts).toBe(0)
+  await clock.advance(1)
+  await clock.advance(1_000)
+  expect(calls.compacts).toBe(1)
+})
+
 test('cache creation after a long idle gap does not infer a one hour TTL', async ($, on) => {
   const { calls, clock } = engine(on, 130_000)
   await $.turn.complete(TURN)
