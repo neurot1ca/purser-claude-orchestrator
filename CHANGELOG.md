@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.186 — 2026-10-21
+
+- **Changed:** the Stop hook no longer nudges Claude to continue after it asks a question.
+
 ## 0.1.185 — 2026-10-21
 
 - **Fixed:** marketplace exports no longer stop on a leftover backup from an earlier run, and old backups are cleaned up.

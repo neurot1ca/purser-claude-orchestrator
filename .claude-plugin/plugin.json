@@ -1,6 +1,6 @@
 {
   "name": "purser",
-  "version": "0.1.185",
+  "version": "0.1.186",
   "description": "Delegates coding tasks from Claude Code to background workers while Claude keeps planning and review.",
   "author": {
     "name": "Purser"
