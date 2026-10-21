@@ -251,7 +251,18 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		if loaded.Status == ledger.OK {
 			live, _ = loaded.Record["live_thread"].(map[string]any)
 			if isStart && !reply && loaded.Record["last_outcome"] != nil && !reusable {
-				return denyPre("TASK_ALREADY_FINISHED", "This task already finished; use a fresh task id."), nil
+				message := "This task already finished; use a fresh task id."
+				outcome := mapValue(loaded.Record["last_outcome"])
+				findings, _ := outcome["findings"].([]any)
+				for _, raw := range findings {
+					if finding := mapValue(raw); finding["code"] == "IMPLEMENTATION_NO_DELTA" {
+						if threadID := stringValue(live["thread_id"]); threadID != "" {
+							message = fmt.Sprintf("This task finished with no delta; continue on the existing thread with codex_start(mode=reply, threadId=%s) to resume in its worktree.", threadID)
+						}
+						break
+					}
+				}
+				return denyPre("TASK_ALREADY_FINISHED", message), nil
 			}
 			if reusable {
 				live = nil

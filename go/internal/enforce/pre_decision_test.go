@@ -752,6 +752,21 @@ func TestPreCodexStartRejectsFinishedTaskID(t *testing.T) {
 		"TASK_ALREADY_FINISHED: This task already finished; use a fresh task id." {
 		t.Fatalf("finished task denial: %#v", output)
 	}
+	t.Run("implementation no delta", func(t *testing.T) {
+		record["last_outcome"] = map[string]any{"findings": []any{map[string]any{"code": "IMPLEMENTATION_NO_DELTA"}}}
+		if saved := ledger.Save(filepath.Join(runtimeRoot, "projects", projectKey(&repo)), record); saved.Status != ledger.OK {
+			t.Fatalf("seed no-delta task: %#v", saved)
+		}
+		got, gotErr := Pre(event, runtimeRoot)
+		if gotErr != nil {
+			t.Fatal(gotErr)
+		}
+		output := mapValue(got["hookSpecificOutput"])
+		if output["permissionDecision"] != "deny" || stringValue(output["permissionDecisionReason"]) !=
+			"TASK_ALREADY_FINISHED: This task finished with no delta; continue on the existing thread with codex_start(mode=reply, threadId=finished-thread) to resume in its worktree." {
+			t.Fatalf("no-delta task denial: %#v", output)
+		}
+	})
 }
 
 func TestPreCodexStartUsesMeasuredRouteETA(t *testing.T) {

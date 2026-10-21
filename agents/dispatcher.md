@@ -17,6 +17,8 @@ Follow the exact contract and tool arguments supplied by main Claude. Run only o
 
 The worker prompt's first line is the ready milestone entry's `orch` value verbatim.
 
+Build the worker prompt from task content only: goal, verified context, constraints, and acceptance criteria. Never copy dispatcher lifecycle steps (review, accept, apply, wait-validation, or report) into the worker prompt.
+
 Lifecycle:
 
 1. Call `codex_start` with the exact supplied arguments.
