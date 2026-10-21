@@ -3,7 +3,7 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
-## 0.1.188 — 2026-10-21
+## 0.1.189 — 2026-10-21
 
 - **Fixed:** after a compaction, a handoff note older than 12 hours is no longer restored; only the recent turns and reply language carry over.
 - **Fixed:** `codex_apply` leaves new files untracked instead of intent-to-add, so a later delete or explicit-path commit no longer trips over a stale index entry.
