@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestApplyJobPatchLeavesNewFileIntentToAdd(t *testing.T) {
+func TestApplyJobPatchLeavesNewFileUntracked(t *testing.T) {
 	root := gitTempDir(t)
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -26,11 +26,14 @@ func TestApplyJobPatchLeavesNewFileIntentToAdd(t *testing.T) {
 		t.Fatalf("new file patch failed: %#v", result)
 	}
 	status := gitApplyPatchOutput(t, root, "status", "--short", "--", "new-worker-test.go")
-	if !strings.Contains(status, "A new-worker-test.go") {
-		t.Fatalf("new file is not visible as intent-to-add: %q", status)
+	if !strings.Contains(status, "?? new-worker-test.go") {
+		t.Fatalf("new file is not visible as untracked: %q", status)
 	}
 	if cached := gitApplyPatchOutput(t, root, "diff", "--cached", "--", "new-worker-test.go"); cached != "" {
-		t.Fatalf("intent-to-add staged file contents: %q", cached)
+		t.Fatalf("new file unexpectedly appears in cached diff: %q", cached)
+	}
+	if indexed := gitApplyPatchOutput(t, root, "ls-files", "--", "new-worker-test.go"); indexed != "" {
+		t.Fatalf("new file unexpectedly appears in index: %q", indexed)
 	}
 }
 
@@ -56,6 +59,10 @@ func TestApplyIntentToAddExplicitPathCommitCharacterization(t *testing.T) {
 	if result := ApplyJobPatch(root, patch); result["applied"] != true {
 		t.Fatalf("patch failed: %#v", result)
 	}
+	if indexed := gitApplyPatchOutput(t, root, "ls-files", "--", "new file.txt"); indexed != "" {
+		t.Fatalf("applied new file unexpectedly appears in index: %q", indexed)
+	}
+	gitApplyPatchTest(t, root, "add", "--", "new file.txt")
 	gitApplyPatchTest(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "x", "--", ":(literal)tracked.txt", ":(literal)new file.txt")
 	if got, err := exec.Command("git", "-C", root, "show", "HEAD:new file.txt").Output(); err != nil || string(got) != "new content\n" {
 		t.Fatalf("committed new file = %q, error %v; want new content", got, err)
