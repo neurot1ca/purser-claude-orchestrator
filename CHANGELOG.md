@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.187 — 2026-10-21
+
+- **Fixed:** idle auto-compact no longer fires after about five minutes in sessions whose prompt cache lasts an hour.
+
 ## 0.1.186 — 2026-10-21
 
 - **Changed:** the Stop hook no longer nudges Claude to continue after it asks a question.
