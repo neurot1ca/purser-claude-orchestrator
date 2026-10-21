@@ -353,12 +353,20 @@ func TestRunChecksTimeoutKillsDescendants(t *testing.T) {
 
 func TestRunChecksSharedDeadlineAndCancellation(t *testing.T) {
 	t.Setenv("PURSER_CHECK_HELPER", "sleep")
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	deadlinePIDFile := filepath.Join(t.TempDir(), "deadline.pid")
+	deadlineScratchDir := t.TempDir()
+	t.Setenv("PURSER_CHECK_PID_FILE", deadlinePIDFile)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	got := RunChecks(t.TempDir(), []profile.Check{
-		{Name: "first", Argv: checkHelperArgv(), TimeoutSeconds: 5},
-		{Name: "second", Argv: checkHelperArgv(), TimeoutSeconds: 5},
-	}, ctx)
+	deadlineDone := make(chan []CheckResult, 1)
+	go func() {
+		deadlineDone <- RunChecks(deadlineScratchDir, []profile.Check{
+			{Name: "first", Argv: checkHelperArgv(), TimeoutSeconds: 5},
+			{Name: "second", Argv: checkHelperArgv(), TimeoutSeconds: 5},
+		}, ctx)
+	}()
+	waitCheckPID(t, deadlinePIDFile)
+	got := <-deadlineDone
 	if got[0].Status != "UNKNOWN" || !strings.HasSuffix(got[0].Tail, "\ntimed out") || got[1].Tail != "not run: deadline" {
 		t.Fatalf("deadline results %#v", got)
 	}
