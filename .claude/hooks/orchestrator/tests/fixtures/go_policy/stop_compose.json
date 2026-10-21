@@ -26,10 +26,10 @@
       }
     },
     {
-      "name": "flow-question-block",
+      "name": "flow-question-no-block",
       "expected": {
-        "decision": "block",
-        "reason": "Purser: if this is not a real decision or an approval-gated action, start the next part now instead of asking; otherwise keep the question.\n\nYour previous reply is already visible to the user: write only the lines requested above, without repeating any of its text.",
+        "decision": "allow",
+        "reason": "",
         "retry_count": 0,
         "active_completed": null,
         "active_invalidated": null,

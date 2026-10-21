@@ -232,17 +232,8 @@ func Stop(event map[string]any, started time.Time) []byte {
 		pending["blocked"] = true
 		add("fallback", fallbackGuidance(pending))
 	}
-	blockedUser := -1
-	if value, ok := exactInteger(state["flow_blocked_user"]); ok {
-		blockedUser = value
-	}
-	flow, blockedUser := stopFlowReason(records, latestUser, blockedUser, len(reasons) > 0 || retryReason != "")
-	if flow != "" {
-		state["flow_blocked_user"] = blockedUser
-		kinds["flow"] = true
-	}
-	reasons = stopReasons(retryReason, reasons, flow)
 	if retryReason != "" {
+		reasons = append([]string{retryReason}, reasons...)
 		kinds["dispatch"] = true
 	}
 	if planReason != "" {

@@ -133,7 +133,7 @@ func composeTranscript(name string) string {
 		return `{"type":"user","message":{"content":"Try Codex."}}` + "\n" +
 			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-1","name":"mcp__plugin_purser_codex-main__codex_start","input":{}}]}}` + "\n" +
 			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-1","is_error":true,"content":"classifier no verdict"}]}}` + "\n"
-	case "flow-question-block":
+	case "flow-question-no-block":
 		return `{"type":"user","message":{"content":"Continue."}}` + "\n" +
 			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"result-1","name":"mcp__plugin_purser_codex-main__codex_result","input":{}}]}}` + "\n" +
 			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"result-1","content":"Finished"}]}}` + "\n" +

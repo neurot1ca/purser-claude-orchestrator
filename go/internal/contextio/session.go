@@ -1018,7 +1018,7 @@ func readAdvisorState(path, session string) map[string]any {
 		"last_task_id": nil, "session_id": session, "notice_pending": nil,
 		"compaction_outcome_pending": nil, "receipt_pending": nil, "dispatch_pending": nil,
 		"version_pending": nil, "leader_pending": nil, "fallback_pending": nil,
-		"maintenance_pending": nil, "flow_blocked_user": nil, "codex_retry_count": 0,
+		"maintenance_pending": nil, "codex_retry_count": 0,
 		"codex_retry_pending": false, "context_prompt_count": 0, "language_injections": 0,
 		"planning_injections": 0, "last_context_language": nil, "language_after_reset": false,
 	}
