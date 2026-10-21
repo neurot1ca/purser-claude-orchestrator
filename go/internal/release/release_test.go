@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -264,8 +265,26 @@ func TestExportMarketplaceUsesCommittedTreeAndLocalManifest(t *testing.T) {
 	binDir := filepath.Dir(fakeGo)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	market := filepath.Join(t.TempDir(), "marketplace")
+	for _, name := range []string{
+		fmt.Sprintf(".purser-previous-%d", os.Getpid()),
+		fmt.Sprintf(".claude-plugin-previous-%d", os.Getpid()),
+		".claude-plugin-stage-leftover",
+	} {
+		if err := os.MkdirAll(filepath.Join(market, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := ExportMarketplace(root, "HEAD", market); err != nil {
 		t.Fatal(err)
+	}
+	for _, name := range []string{
+		fmt.Sprintf(".purser-previous-%d", os.Getpid()),
+		fmt.Sprintf(".claude-plugin-previous-%d", os.Getpid()),
+		".claude-plugin-stage-leftover",
+	} {
+		if _, err := os.Lstat(filepath.Join(market, name)); !os.IsNotExist(err) {
+			t.Errorf("leftover was not removed: %s (%v)", name, err)
+		}
 	}
 	exported := filepath.Join(market, "purser")
 	if b, err := os.ReadFile(filepath.Join(exported, "base.txt")); err != nil || string(b) != "committed\n" {

@@ -309,6 +309,7 @@ func ExportMarketplace(root, commit, marketplace string) error {
 	if err := os.MkdirAll(marketplace, 0755); err != nil {
 		return fmt.Errorf("marketplace export (prepare): %w", err)
 	}
+	sweepMarketplaceLeftovers(marketplace)
 	stage, err := os.MkdirTemp(marketplace, "purser-export-")
 	if err != nil {
 		return err
@@ -327,19 +328,15 @@ func ExportMarketplace(root, commit, marketplace string) error {
 		return err
 	}
 	manifest := map[string]any{"name": "purser-local", "description": "Local marketplace for the Purser plugin.", "owner": map[string]string{"name": "Purser"}, "plugins": []map[string]string{{"name": "purser", "source": "./purser"}}}
-	manifestStage := filepath.Join(marketplace, fmt.Sprintf(".claude-plugin-stage-%d", os.Getpid()))
-	backup := filepath.Join(marketplace, fmt.Sprintf(".purser-previous-%d", os.Getpid()))
-	backupManifest := filepath.Join(marketplace, fmt.Sprintf(".claude-plugin-previous-%d", os.Getpid()))
-	live := filepath.Join(marketplace, "purser")
-	liveManifest := filepath.Join(marketplace, ".claude-plugin")
-	for _, p := range []string{manifestStage, backup, backupManifest} {
-		if _, e := os.Lstat(p); e == nil {
-			return errors.New("stale marketplace export staging path exists")
-		}
-	}
-	if err = os.Mkdir(manifestStage, 0755); err != nil {
+	stageID := strings.TrimPrefix(filepath.Base(stage), "purser-export-")
+	manifestStage, err := os.MkdirTemp(marketplace, ".claude-plugin-stage-")
+	if err != nil {
 		return err
 	}
+	backup := filepath.Join(marketplace, ".purser-previous-"+stageID)
+	backupManifest := filepath.Join(marketplace, ".claude-plugin-previous-"+stageID)
+	live := filepath.Join(marketplace, "purser")
+	liveManifest := filepath.Join(marketplace, ".claude-plugin")
 	defer os.RemoveAll(manifestStage)
 	data, _ := json.MarshalIndent(manifest, "", "  ")
 	if err = os.WriteFile(filepath.Join(manifestStage, "marketplace.json"), append(data, '\n'), 0644); err != nil {
@@ -388,6 +385,24 @@ func ExportMarketplace(root, commit, marketplace string) error {
 	_ = os.RemoveAll(backupManifest)
 	return nil
 }
+
+func sweepMarketplaceLeftovers(marketplace string) {
+	entries, err := os.ReadDir(marketplace)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, ".purser-previous-") && !strings.HasPrefix(name, ".claude-plugin-previous-") && !strings.HasPrefix(name, ".claude-plugin-stage-") {
+			continue
+		}
+		path := filepath.Join(marketplace, name)
+		if _, err := os.Lstat(path); err == nil {
+			_ = os.RemoveAll(path)
+		}
+	}
+}
+
 func exists(p string) bool { _, e := os.Lstat(p); return e == nil }
 
 func Package(root, commit, output string) (string, error) {
