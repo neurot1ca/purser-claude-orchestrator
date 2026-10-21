@@ -870,10 +870,14 @@ func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
 	worktree := filepath.Join(root, "worktree")
+	mainCheckout := filepath.Join(root, "main-checkout")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(worktree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(mainCheckout, 0700); err != nil {
 		t.Fatal(err)
 	}
 	deadline := float64(time.Now().Add(time.Minute).UnixNano()) / 1e9
@@ -884,7 +888,7 @@ func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
 	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
 		"name": "codex", "agent": "codex", "args": map[string]any{
 			"cwd": worktree, "prompt": "hello", "config": map[string]any{
-				"sandbox_workspace_write":                map[string]any{"writable_roots": []any{"outside"}},
+				"sandbox_workspace_write":                map[string]any{"writable_roots": []any{mainCheckout}},
 				"sandbox_workspace_write.network_access": true,
 				"sandbox_workspace_write.extra":          "unsafe",
 				"unrelated":                              "preserved",
@@ -916,8 +920,8 @@ func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
 			t.Errorf("unrelated config was lost: %#v", config)
 		}
 		workspace, _ := config["sandbox_workspace_write"].(map[string]any)
-		if roots, _ := workspace["writable_roots"].([]any); len(roots) != 4 || roots[0] != worktree || roots[1] != "outside" || roots[2] != cacheDir || roots[3] != tmpDir {
-			t.Errorf("writable roots = %#v, want [%q outside %q %q]", roots, worktree, cacheDir, tmpDir)
+		if roots, _ := workspace["writable_roots"].([]any); len(roots) != 3 || roots[0] != worktree || roots[1] != cacheDir || roots[2] != tmpDir {
+			t.Errorf("writable roots = %#v, want [%q %q %q]", roots, worktree, cacheDir, tmpDir)
 		}
 		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
 	}}

@@ -718,8 +718,13 @@ func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot, jobT
 			}
 		}
 	}
-	if existing, ok := existingRoots.([]any); ok {
-		writableRoots = append(writableRoots, existing...)
+	// A job worktree is the only project path the worker may write. Caller
+	// supplied roots can include the main checkout, whose changes are not part
+	// of the worktree delta inspected after the job.
+	if len(writableRoots) == 0 {
+		if existing, ok := existingRoots.([]any); ok {
+			writableRoots = append(writableRoots, existing...)
+		}
 	}
 	if configDir, err := os.UserConfigDir(); err == nil {
 		telemetryDir := filepath.Join(configDir, "go", "telemetry")
