@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.184 — 2026-10-21
+
+- **Fixed:** Codex worktree jobs no longer keep caller-supplied writable roots, so a job cannot write to the main checkout.
+- **Fixed:** the dispatcher keeps its own review and apply steps out of worker prompts, and a task that finished with no delta points to its thread instead of asking for a new task id.
+
 ## 0.1.183 — 2026-10-20
 
 - **Fixed:** `plan accept` takes `M1`-style milestone ids, plan scopes keep their spelling, and a repair pass keeps its milestone from being offered again until it is applied.
