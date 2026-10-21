@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -404,22 +405,36 @@ func recordApplyValidationProcess(path string, pid int, identity int64) error {
 }
 
 func checkoutRevision(repo string) (string, string, error) {
-	cmd := proc.Hide(exec.Command("git", "rev-parse", "HEAD"))
-	cmd.Dir = repo
-	head, err := cmd.Output()
+	backoff := gitRetryBackoff[:]
+	for {
+		revision, snapshot, err := checkoutRevisionOnce(repo, &backoff)
+		if err == nil || !errors.Is(err, errGitIndexLocked) || !waitGitRetry(&backoff) {
+			return revision, snapshot, err
+		}
+	}
+}
+
+var errGitIndexLocked = errors.New("git index locked")
+var gitRetryBackoff = [...]time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond, 1500 * time.Millisecond}
+
+func checkoutRevisionOnce(repo string, backoff *[]time.Duration) (string, string, error) {
+	head, err := runGitWithBackoff(repo, nil, backoff, "rev-parse", "HEAD")
 	if err != nil {
 		return "", "", err
 	}
 	revision := string(bytes.TrimSpace(head))
-	cmd = proc.Hide(exec.Command("git", "rev-parse", "--git-path", "index"))
-	cmd.Dir = repo
-	index, err := cmd.Output()
+	index, err := runGitWithBackoff(repo, nil, backoff, "rev-parse", "--git-path", "index")
 	if err != nil {
 		return "", "", err
 	}
 	indexPath := string(bytes.TrimSpace(index))
 	if !filepath.IsAbs(indexPath) {
 		indexPath = filepath.Join(repo, indexPath)
+	}
+	if _, err = os.Stat(indexPath + ".lock"); err == nil {
+		return "", "", fmt.Errorf("%w: %s.lock", errGitIndexLocked, indexPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", "", err
 	}
 	indexData, err := os.ReadFile(indexPath)
 	if err != nil {
@@ -439,19 +454,59 @@ func checkoutRevision(repo string) (string, string, error) {
 		return "", "", err
 	}
 	env := replaceValidationEnv(os.Environ(), "GIT_INDEX_FILE", tempPath)
-	cmd = proc.Hide(exec.Command("git", "add", "--renormalize", "-A"))
-	cmd.Dir, cmd.Env = repo, env
-	if err = cmd.Run(); err != nil {
+	if _, err = runGitWithBackoff(repo, env, backoff, "add", "--renormalize", "-A"); err != nil {
 		return "", "", err
 	}
-	cmd = proc.Hide(exec.Command("git", "write-tree"))
-	cmd.Dir, cmd.Env = repo, env
-	tree, err := cmd.Output()
+	tree, err := runGitWithBackoff(repo, env, backoff, "write-tree")
 	if err != nil {
 		return "", "", err
 	}
 	snapshot := strings.TrimSpace(string(tree))
 	return revision, snapshot, nil
+}
+
+func runGit(repo string, env []string, args ...string) ([]byte, error) {
+	backoff := gitRetryBackoff[:]
+	return runGitWithBackoff(repo, env, &backoff, args...)
+}
+
+func waitGitRetry(backoff *[]time.Duration) bool {
+	if len(*backoff) == 0 {
+		return false
+	}
+	delay := (*backoff)[0]
+	*backoff = (*backoff)[1:]
+	time.Sleep(delay)
+	return true
+}
+
+func runGitWithBackoff(repo string, env []string, backoff *[]time.Duration, args ...string) ([]byte, error) {
+	for {
+		cmd := proc.Hide(exec.Command("git", args...))
+		cmd.Dir, cmd.Env = repo, env
+		output, err := cmd.Output()
+		if err == nil {
+			return output, nil
+		}
+		var exitErr *exec.ExitError
+		stderr := ""
+		if errors.As(err, &exitErr) {
+			stderr = strings.TrimSpace(string(exitErr.Stderr))
+		}
+		if isTransientGitLockFailure(stderr) && waitGitRetry(backoff) {
+			continue
+		}
+		if stderr == "" {
+			stderr = strings.TrimSpace(err.Error())
+		}
+		return nil, fmt.Errorf("git %s failed: %s", strings.Join(args, " "), stderr)
+	}
+}
+
+func isTransientGitLockFailure(stderr string) bool {
+	message := strings.ToLower(stderr)
+	return strings.Contains(message, ".lock") || strings.Contains(message, "cannot lock ref") ||
+		strings.Contains(message, "another git process seems to be running")
 }
 
 func replaceValidationEnv(env []string, key, value string) []string {
@@ -494,8 +549,7 @@ func validationPackageSnapshot(repo string, packages []string) (string, error) {
 	sort.Strings(ordered)
 	h := sha256.New()
 	for _, root := range ordered {
-		cmd := proc.Hide(exec.Command("git", "-C", repo, "ls-files", "-z", "--", root))
-		files, err := cmd.Output()
+		files, err := runGit(repo, nil, "ls-files", "-z", "--", root)
 		if err != nil {
 			return "", err
 		}
@@ -1285,9 +1339,7 @@ func touchesPlugin(paths []string) bool {
 }
 
 func trackedPluginTestFiles(repo string) ([]string, error) {
-	command := proc.Hide(exec.Command("git", "ls-files", "-z", "--", "*.test.ts", "*.test.tsx"))
-	command.Dir = repo
-	output, err := command.Output()
+	output, err := runGit(repo, nil, "ls-files", "-z", "--", "*.test.ts", "*.test.tsx")
 	if err != nil {
 		return nil, err
 	}

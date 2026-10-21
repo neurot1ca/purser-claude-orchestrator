@@ -155,6 +155,63 @@ func TestValidationPass(t *testing.T) {
 	}
 }
 
+func TestValidationRetriesLockedIndex(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"main.go"})
+	key := validationRepositoryKey(repo)
+	path := validationRecordPath(root, key, record.JobID)
+	if err := writeApplyValidation(path, record); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(repo, ".git", "index.lock")
+	if err := os.WriteFile(lockPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(lockPath) })
+	prior := runApplyValidationCommand
+	runApplyValidationCommand = func(string, []string, []string, time.Duration, io.Writer, *applyValidation) error { return nil }
+	t.Cleanup(func() { runApplyValidationCommand = prior })
+	go func() {
+		time.Sleep(90 * time.Millisecond)
+		_ = os.Remove(lockPath)
+	}()
+	started := time.Now()
+	if err := RunApplyValidation(root, key, record.JobID); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < 50*time.Millisecond {
+		t.Fatalf("validation did not wait for index lock: %s", elapsed)
+	}
+	got, err := readApplyValidation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "passed" {
+		t.Fatalf("validation status=%q reason=%q", got.Status, got.Reason)
+	}
+}
+
+func TestValidationGitFailureIncludesCommandAndStderr(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"main.go"})
+	key := validationRepositoryKey(repo)
+	path := validationRecordPath(root, key, record.JobID)
+	if err := writeApplyValidation(path, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/missing\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunApplyValidation(root, key, record.JobID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readApplyValidation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "launch_error" || !strings.Contains(got.Reason, "git rev-parse HEAD failed:") || !strings.Contains(got.Reason, "fatal:") {
+		t.Fatalf("validation status=%q reason=%q", got.Status, got.Reason)
+	}
+}
+
 func TestPluginValidationRunsOnlyTrackedTestFiles(t *testing.T) {
 	root, repo, record := validationFixture(t, []string{"hooks/mod/changed.ts"})
 	write(t, filepath.Join(repo, ".gitignore"), "ignored/\n")
