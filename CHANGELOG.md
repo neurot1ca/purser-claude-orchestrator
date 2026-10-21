@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.188 — 2026-10-21
+
+- **Fixed:** after a compaction, a handoff note older than 12 hours is no longer restored; only the recent turns and reply language carry over.
+
 ## 0.1.187 — 2026-10-21
 
 - **Fixed:** idle auto-compact no longer fires after about five minutes in sessions whose prompt cache lasts an hour.
