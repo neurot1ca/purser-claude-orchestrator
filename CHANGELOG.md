@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.185 — 2026-10-21
+
+- **Fixed:** marketplace exports no longer stop on a leftover backup from an earlier run, and old backups are cleaned up.
+
 ## 0.1.184 — 2026-10-21
 
 - **Fixed:** Codex worktree jobs no longer keep caller-supplied writable roots, so a job cannot write to the main checkout.
