@@ -30,6 +30,7 @@ const recentStart = "<!-- PURSER:RECENT:START -->"
 const recentEnd = "<!-- PURSER:RECENT:END -->"
 const maxHandoffContext = 6000
 const staleFinishedJobMaxAge = 24 * time.Hour
+const handoffMaxAge = 12 * time.Hour
 
 var handoffLanguage = regexp.MustCompile(`(?i)^\s*User language:\s*(.*?)\s*$`)
 var systemReminder = regexp.MustCompile(`<system-reminder>[\s\S]*?(?:</system-reminder>|\z)`)
@@ -725,8 +726,26 @@ func restoreHandoff(source, path, content, transcriptPath string) string {
 		return ""
 	}
 	info, err := os.Stat(path)
-	if err != nil || source == "startup" && (time.Since(info.ModTime()) < 0 || time.Since(info.ModTime()) >= 12*time.Hour) {
+	if err != nil {
 		return ""
+	}
+	age := time.Since(info.ModTime())
+	stale := age < 0 || age >= handoffMaxAge
+	if stale {
+		if source != "compact" {
+			return ""
+		}
+		recent, _ := recentTurns(transcriptPath)
+		if recent == "" {
+			return ""
+		}
+		language := HandoffUserLanguage(content)
+		instruction := ""
+		if language != "" && !strings.EqualFold(language, "English") {
+			instruction = "Reply to the user in " + language + "; everything else stays as the project rules say.\n"
+		}
+		footer := "Full file: " + path
+		return handoffHeader + "\n" + instruction + recentStart + "\n" + recent + "\n" + recentEnd + "\n" + footer
 	}
 	content, meaningful := cleanHandoff(content)
 	if !meaningful {
