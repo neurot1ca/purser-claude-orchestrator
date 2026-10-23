@@ -305,6 +305,9 @@ func TestPlanGraphRejectsInvalidAcceptance(t *testing.T) {
 		{"duplicate ID", strings.Replace(readyPlanArtifact, "### M2", "### M1", 1), []int{1, 2, 3}},
 		{"parallel scope", strings.Replace(readyPlanArtifact, "src/b.go", "src", 1), []int{1, 2, 3}},
 		{"unsafe path", strings.Replace(readyPlanArtifact, "src/b.go", "../outside", 1), []int{1, 2, 3}},
+		{"home-relative path", strings.Replace(readyPlanArtifact, "src/b.go", "~/outside/config.json", 1), []int{1, 2, 3}},
+		{"drive path", strings.Replace(readyPlanArtifact, "src/b.go", "C:/outside/config.json", 1), []int{1, 2, 3}},
+		{"UNC path", strings.Replace(readyPlanArtifact, "src/b.go", `\\server\share\config.json`, 1), []int{1, 2, 3}},
 		{"unbounded section", readyPlanArtifact + "### M4\n**Dependency:** none\n**Write paths:**\n- c.go\n" + strings.Repeat("x", 32769), []int{1, 2, 3, 4}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -320,6 +323,39 @@ func TestPlanGraphRejectsInvalidAcceptance(t *testing.T) {
 				t.Fatalf("acceptance wrote invalid state: %v", err)
 			}
 		})
+	}
+}
+
+func TestPlanPartialAcceptanceIgnoresUnacceptedWriteScope(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	data := []byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:** src/a.go\n### M2\n**Dependency:** none\n**Write paths:** ~/.claude/second-brain/config.json\n")
+	if err := os.WriteFile(artifact, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := AcceptPlan(root, repo, "partial", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.ReadyMilestones) != 1 || state.ReadyMilestones[0].ID != "M1" {
+		t.Fatalf("accepted readiness = %+v, want only M1", state.ReadyMilestones)
+	}
+	state, err = ReadPlanForTask(root, repo, "partial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(state.AcceptedMilestones, []int{1}) || len(state.ReadyMilestones) != 1 || state.ReadyMilestones[0].ID != "M1" {
+		t.Fatalf("reread plan = %+v, want accepted and ready M1", state)
+	}
+}
+
+func TestPlanMilestoneSectionIgnoresUnrequestedWriteScope(t *testing.T) {
+	data := []byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:** src/a.go\n### M2\n**Dependency:** none\n**Write paths:** ~/.claude/second-brain/config.json\n")
+	section, ids, err := PlanMilestoneSection(data, "M1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(section, "**Write paths:** src/a.go") || !reflect.DeepEqual(ids, []string{"M1", "M2"}) {
+		t.Fatalf("section = %q, ids = %v", section, ids)
 	}
 }
 

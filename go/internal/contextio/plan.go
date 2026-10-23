@@ -203,6 +203,10 @@ func validatePlanArtifact(state *PlanState) error {
 }
 
 func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
+	return parsePlanMilestonesMode(data, accepted, true)
+}
+
+func parsePlanMilestonesMode(data []byte, accepted []int, enforcePrerequisites bool) ([]PlanMilestone, error) {
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	headings := regexp.MustCompile(`(?m)^(#{1,6})\s+([^\n]+)(?:\n|$)`).FindAllStringSubmatchIndex(text, -1)
 	idPattern := regexp.MustCompile(`^M([0-9]+)\b`)
@@ -265,86 +269,91 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 				}
 			}
 		}
-		if declaration := pathLine.FindStringSubmatchIndex(section); declaration != nil {
-			inline := section[declaration[2]:declaration[3]]
-			lines := []string{}
-			if paths := quotedPath.FindAllStringSubmatch(inline, -1); len(paths) > 0 {
-				for _, path := range paths {
-					lines = append(lines, "- `"+path[1]+"`")
+		if containsMilestone(accepted, n) {
+			if declaration := pathLine.FindStringSubmatchIndex(section); declaration != nil {
+				inline := section[declaration[2]:declaration[3]]
+				lines := []string{}
+				if paths := quotedPath.FindAllStringSubmatch(inline, -1); len(paths) > 0 {
+					for _, path := range paths {
+						lines = append(lines, "- `"+path[1]+"`")
+					}
+				} else if strings.TrimSpace(inline) != "" {
+					lines = append(lines, "- "+inline)
+					lines = append(lines, strings.Split(section[declaration[1]:], "\n")[1:]...)
+				} else {
+					lines = strings.Split(section[declaration[1]:], "\n")[1:]
 				}
-			} else if strings.TrimSpace(inline) != "" {
-				lines = append(lines, "- "+inline)
-				lines = append(lines, strings.Split(section[declaration[1]:], "\n")[1:]...)
-			} else {
-				lines = strings.Split(section[declaration[1]:], "\n")[1:]
-			}
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
-				}
-				if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
-					break
-				}
-				if strings.HasPrefix(strings.TrimSpace(line[2:]), "**") {
-					break
-				}
-				paths := quotedPath.FindAllStringSubmatch(line, -1)
-				if len(paths) == 0 {
-					paths = [][]string{{"", strings.TrimSpace(line[2:])}}
-				}
-				previousPath := ""
-				for _, path := range paths {
-					raw := strings.ReplaceAll(path[1], `\`, "/")
-					start, braces := 0, 0
-					for i := 0; i <= len(raw); i++ {
-						if i < len(raw) {
-							switch raw[i] {
-							case '{':
-								braces++
-							case '}':
-								braces--
-								if braces < 0 {
-									return nil, fmt.Errorf("invalid write path for %s", m.ID)
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if line == "" {
+						continue
+					}
+					if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
+						break
+					}
+					if strings.HasPrefix(strings.TrimSpace(line[2:]), "**") {
+						break
+					}
+					paths := quotedPath.FindAllStringSubmatch(line, -1)
+					if len(paths) == 0 {
+						paths = [][]string{{"", strings.TrimSpace(line[2:])}}
+					}
+					previousPath := ""
+					for _, path := range paths {
+						raw := strings.ReplaceAll(path[1], `\`, "/")
+						start, braces := 0, 0
+						for i := 0; i <= len(raw); i++ {
+							if i < len(raw) {
+								switch raw[i] {
+								case '{':
+									braces++
+								case '}':
+									braces--
+									if braces < 0 {
+										return nil, fmt.Errorf("invalid write path for %s", m.ID)
+									}
 								}
 							}
-						}
-						if i != len(raw) && (raw[i] != ',' || braces != 0) {
-							continue
-						}
-						part := strings.TrimSpace(raw[start:i])
-						start = i + 1
-						if part == "" || braces != 0 {
-							return nil, fmt.Errorf("invalid write path for %s", m.ID)
-						}
-						if !strings.Contains(part, "/") && previousPath != "" {
-							part = filepath.ToSlash(filepath.Join(filepath.Dir(previousPath), part))
-						}
-						expanded := []string{part}
-						if open := strings.IndexByte(part, '{'); open >= 0 {
-							close := strings.IndexByte(part[open+1:], '}')
-							if close < 0 || strings.ContainsAny(part[open+1+close+1:], "{}") || strings.Contains(part[:open], "}") {
+							if i != len(raw) && (raw[i] != ',' || braces != 0) {
+								continue
+							}
+							part := strings.TrimSpace(raw[start:i])
+							start = i + 1
+							if part == "" || braces != 0 {
 								return nil, fmt.Errorf("invalid write path for %s", m.ID)
 							}
-							close += open + 1
-							var alternatives []string
-							for _, alternative := range strings.Split(part[open+1:close], ",") {
-								if strings.TrimSpace(alternative) == "" {
+							if !strings.Contains(part, "/") && previousPath != "" {
+								part = filepath.ToSlash(filepath.Join(filepath.Dir(previousPath), part))
+							}
+							expanded := []string{part}
+							if open := strings.IndexByte(part, '{'); open >= 0 {
+								close := strings.IndexByte(part[open+1:], '}')
+								if close < 0 || strings.ContainsAny(part[open+1+close+1:], "{}") || strings.Contains(part[:open], "}") {
 									return nil, fmt.Errorf("invalid write path for %s", m.ID)
 								}
-								alternatives = append(alternatives, part[:open]+strings.TrimSpace(alternative)+part[close+1:])
-							}
-							expanded = alternatives
-						} else if strings.ContainsAny(part, "{}") {
-							return nil, fmt.Errorf("invalid write path for %s", m.ID)
-						}
-						for _, candidate := range expanded {
-							clean := filepath.ToSlash(filepath.Clean(candidate))
-							if clean == "." || filepath.IsAbs(clean) || strings.Contains(clean, ":") || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(clean, "*?[]{}") {
+								close += open + 1
+								var alternatives []string
+								for _, alternative := range strings.Split(part[open+1:close], ",") {
+									if strings.TrimSpace(alternative) == "" {
+										return nil, fmt.Errorf("invalid write path for %s", m.ID)
+									}
+									alternatives = append(alternatives, part[:open]+strings.TrimSpace(alternative)+part[close+1:])
+								}
+								expanded = alternatives
+							} else if strings.ContainsAny(part, "{}") {
 								return nil, fmt.Errorf("invalid write path for %s", m.ID)
 							}
-							m.WritePaths = append(m.WritePaths, clean)
-							previousPath = clean
+							for _, candidate := range expanded {
+								if strings.HasPrefix(candidate, "~/") {
+									return nil, fmt.Errorf("invalid write path for %s", m.ID)
+								}
+								clean := filepath.ToSlash(filepath.Clean(candidate))
+								if clean == "." || filepath.IsAbs(clean) || strings.Contains(clean, ":") || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(clean, "*?[]{}") {
+									return nil, fmt.Errorf("invalid write path for %s", m.ID)
+								}
+								m.WritePaths = append(m.WritePaths, clean)
+								previousPath = clean
+							}
 						}
 					}
 				}
@@ -358,7 +367,7 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 	byID := map[int]PlanMilestone{}
 	for _, m := range result {
 		n := milestoneNumber(m.ID)
-		if _, duplicate := byID[n]; duplicate || depLine.FindStringSubmatch(m.TaskSection) == nil || len(m.WritePaths) == 0 {
+		if _, duplicate := byID[n]; duplicate || depLine.FindStringSubmatch(m.TaskSection) == nil || (containsMilestone(accepted, n) && len(m.WritePaths) == 0) {
 			return nil, fmt.Errorf("duplicate or incomplete milestone %s", m.ID)
 		}
 		byID[n] = m
@@ -384,7 +393,7 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 			if _, ok := byID[dep]; !ok {
 				return fmt.Errorf("milestone M%d has missing dependency M%d", n, dep)
 			}
-			if containsMilestone(accepted, n) && !containsMilestone(accepted, dep) {
+			if enforcePrerequisites && containsMilestone(accepted, n) && !containsMilestone(accepted, dep) {
 				return fmt.Errorf("milestone M%d requires unaccepted M%d", n, dep)
 			}
 			if err := visit(dep); err != nil {
@@ -432,34 +441,38 @@ func parsePlanMilestones(data []byte, accepted []int) ([]PlanMilestone, error) {
 func PlanMilestoneSection(data []byte, id string) (string, []string, error) {
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	headings := regexp.MustCompile(`(?m)^#{1,6}\s+M([0-9]+)\b[^\n]*(?:\n|$)`).FindAllStringSubmatch(text, -1)
-	accepted := make([]int, 0, len(headings))
+	allIDs := make([]int, 0, len(headings))
+	var selected int
+	selectedFound := false
 	for _, heading := range headings {
 		n, err := strconv.Atoi(heading[1])
 		if err != nil {
 			return "", nil, errors.New("invalid plan milestone ID")
 		}
-		accepted = append(accepted, n)
+		allIDs = append(allIDs, n)
+		if "M"+heading[1] == id {
+			selected = n
+			selectedFound = true
+		}
 	}
-	milestones, err := parsePlanMilestones(data, accepted)
+	var selectedIDs []int
+	if selectedFound {
+		selectedIDs = []int{selected}
+	}
+	milestones, err := parsePlanMilestonesMode(data, selectedIDs, false)
 	if err != nil {
 		return "", nil, err
 	}
-	valid := make([]string, 0, len(milestones))
+	valid := make([]string, 0, len(allIDs))
+	for _, n := range allIDs {
+		valid = append(valid, fmt.Sprintf("M%d", n))
+	}
 	for _, milestone := range milestones {
-		valid = append(valid, milestone.ID)
 		if milestone.ID == id {
-			return milestone.TaskSection, validPlanIDs(milestones), nil
+			return milestone.TaskSection, valid, nil
 		}
 	}
 	return "", valid, nil
-}
-
-func validPlanIDs(milestones []PlanMilestone) []string {
-	ids := make([]string, 0, len(milestones))
-	for _, milestone := range milestones {
-		ids = append(ids, milestone.ID)
-	}
-	return ids
 }
 
 func milestoneNumber(id string) int {
