@@ -1,10 +1,13 @@
 package ledger
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"purser-hook/internal/profile"
@@ -94,6 +97,10 @@ func copyUntracked(root, worktree string, timeout time.Duration) error {
 	if err != nil {
 		return err
 	}
+	return copyUntrackedFiles(root, worktree, raw)
+}
+
+func copyUntrackedFiles(root, worktree string, raw []byte) error {
 	for _, item := range strings.Split(string(raw), "\x00") {
 		if item == "" {
 			continue
@@ -102,12 +109,13 @@ func copyUntracked(root, worktree string, timeout time.Duration) error {
 		if !filepath.IsLocal(name) {
 			return &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git returned an unsafe untracked path."}
 		}
-		if err = copyPath(filepath.Join(root, name), filepath.Join(worktree, name), false); err != nil {
-			return err
+		if err := copyPath(filepath.Join(root, name), filepath.Join(worktree, name), false); err != nil {
+			return fmt.Errorf("copying untracked path %q: %w", item, err)
 		}
 	}
 	return nil
 }
+
 func copyProfilePath(root, worktree, raw string) error {
 	normalized := strings.ReplaceAll(raw, `\`, "/")
 	name := filepath.FromSlash(normalized)
@@ -131,6 +139,11 @@ func copyProfilePath(root, worktree, raw string) error {
 func copyPath(source, target string, recursive bool) error {
 	info, err := os.Lstat(source)
 	if err != nil {
+		// Only the initial source lookup may skip a vanished untracked path.
+		// Open/read/destination failures after this point must still fail.
+		if !recursive && (os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR)) {
+			return nil
+		}
 		return err
 	}
 	if err = os.MkdirAll(filepath.Dir(target), 0700); err != nil {
