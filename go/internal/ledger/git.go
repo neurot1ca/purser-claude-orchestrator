@@ -245,6 +245,11 @@ func statusEntries(root string, timeout time.Duration) ([]map[string]string, err
 	return parseStatus(raw)
 }
 
+// StatusEntries inspects the checkout without reading HEAD or file contents.
+func StatusEntries(root string) ([]map[string]string, error) {
+	return statusEntries(root, 10*time.Second)
+}
+
 func indexEntries(root string, paths []string, timeout time.Duration) (map[string][]string, error) {
 	result := make(map[string][]string, len(paths))
 	for _, value := range paths {

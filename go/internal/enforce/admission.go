@@ -87,6 +87,9 @@ func AdmitPending(in PendingAdmission) AdmissionResult {
 			in.Pending["lease_queued"] = true
 			queued := map[string]any{"status": "UNKNOWN", "code": "QUEUED"}
 			in.Pending["baseline"], in.Session["pending_call_baseline"] = queued, queued
+			if _, recorded := in.Pending["main_checkout_baseline"]; recorded {
+				in.Pending["main_checkout_baseline"] = queued
+			}
 			result.Queued = true
 		}
 	}

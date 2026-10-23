@@ -14,6 +14,7 @@ tools:
 ---
 
 Follow the exact contract and tool arguments supplied by main Claude. Run only one lifecycle at a time. Do not change the task, route, scope, authority, or acceptance criteria.
+Pass only the arguments main Claude supplied; never add model, sandbox, approval-policy, config, or other coder settings yourself.
 
 The worker prompt's first line is the ready milestone entry's `orch` value verbatim.
 

@@ -59,6 +59,33 @@ func TestAdmissionFixtureReplay(t *testing.T) {
 	}
 }
 
+func TestBindQueuedBaselineRefreshesMainCheckoutBaseline(t *testing.T) {
+	root := admissionTempDir(t)
+	setupAdmission(t, root, "bind")
+	pendingPath := filepath.Join(root, "pending", admissionOwner()+".json")
+	pending := admissionJSON(t, pendingPath).(map[string]any)
+	pending["main_checkout_baseline"] = map[string]any{"status": "UNKNOWN", "code": "QUEUED"}
+	if err := writeFixtureJSON(pendingPath, pending); err != nil {
+		t.Fatal(err)
+	}
+	// Changes while waiting belong to the fresh baseline, not to the worker.
+	if err := os.WriteFile(filepath.Join(root, "repo", "src", "file"), []byte("changed while queued\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := BindQueuedBaseline(root, admissionJobID())
+	if err != nil || !ready {
+		t.Fatalf("queued baseline binding: ready=%v err=%v", ready, err)
+	}
+	pending = admissionJSON(t, pendingPath).(map[string]any)
+	baseline := pending["main_checkout_baseline"].(map[string]any)
+	fingerprints, _ := baseline["fingerprints"].(map[string]any)
+	fingerprint, _ := fingerprints["src/file"].(string)
+	entries, _ := baseline["status_entries"].([]any)
+	if baseline["status"] != "OK" || baseline["truncated"] != false || fingerprint == "" || len(entries) != 1 || entries[0].(map[string]any)["path"] != "src/file" {
+		t.Fatalf("main checkout baseline did not refresh at admission: %#v", baseline)
+	}
+}
+
 func setupAdmission(t *testing.T, root, name string) {
 	t.Helper()
 	repo := filepath.Join(root, "repo")

@@ -253,6 +253,11 @@ func BindQueuedBaseline(runtimeRoot, jobID string) (bool, error) {
 	if err = pendingRecord.Set("baseline", baseline); err != nil {
 		return false, err
 	}
+	if _, recorded := pending["main_checkout_baseline"]; recorded {
+		if err = pendingRecord.Set("main_checkout_baseline", enforce.CaptureMainCheckoutBaseline(repoRoot, baseline["status_entries"])); err != nil {
+			return false, err
+		}
+	}
 	if err = Write(pendingPath, pendingRecord); err != nil {
 		return false, err
 	}

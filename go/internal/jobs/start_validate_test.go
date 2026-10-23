@@ -119,6 +119,27 @@ func TestValidateStartDefaultsMissingCWDToRepositoryRoot(t *testing.T) {
 	}
 }
 
+func TestValidateStartRejectsDangerFullAccessForWorktreeOnly(t *testing.T) {
+	args := map[string]any{
+		"call": "00000000-0000-4000-8000-000000000099", "prompt": "run", "cwd": t.TempDir(),
+		"mode": "new", "worktree": true, "sandbox": "danger-full-access",
+	}
+	_, failure := ValidateStart(args, StartValidationOptions{Agent: "codex", FixedAgent: true})
+	if failure == nil {
+		t.Fatal("danger-full-access was accepted for a worktree job")
+	}
+	result := failure["structuredContent"].(map[string]any)
+	if got, want := result["message"], "Invalid Codex launch arguments: sandbox danger-full-access is not allowed for worktree jobs"; got != want {
+		t.Fatalf("refusal message = %v, want %q", got, want)
+	}
+	args["call"] = "00000000-0000-4000-8000-000000000098"
+	args["worktree"] = false
+	request, failure := ValidateStart(args, StartValidationOptions{Agent: "codex", FixedAgent: true})
+	if failure != nil || request.Mode != "new" {
+		t.Fatalf("non-worktree danger-full-access behavior changed: request=%#v failure=%#v", request, failure)
+	}
+}
+
 func TestProjectRoleConfiguredAgentUsesResolvedRepository(t *testing.T) {
 	t.Setenv("PURSER_AGENT", "")
 	previous, err := os.Getwd()

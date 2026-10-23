@@ -96,6 +96,12 @@
         "kind": "call",
         "label": "P64 implementation",
         "lease_owner": "9f3fdaa8cd4de8fb98234529dcad60bfcba58a91bf0e68897b6e2a2c2159f732",
+        "main_checkout_baseline": {
+          "fingerprints": {},
+          "status": "OK",
+          "status_entries": [],
+          "truncated": false
+        },
         "mechanical_opencode": false,
         "model": "gpt-6-luna",
         "new_route": null,
@@ -315,6 +321,10 @@
         "label": "P64 queued",
         "lease_owner": "8cfeb5a14f7b6cbb08b21ca6ceec1ebce0dbf76e73b0ff0f4a4ad113f03f2e30",
         "lease_queued": true,
+        "main_checkout_baseline": {
+          "code": "QUEUED",
+          "status": "UNKNOWN"
+        },
         "mechanical_opencode": false,
         "model": "gpt-6-luna",
         "new_route": null,

@@ -25,6 +25,7 @@ type PendingCallInput struct {
 	ETAMinutes                                                    any
 	PreviousRoute, NewRoute                                       *string
 	ReplyCall, Queued                                             bool
+	Worktree                                                      bool
 	WorktreeReplyPath                                             *string
 	Repository                                                    *string
 	ManifestBudgetSeconds                                         float64
@@ -74,6 +75,13 @@ func BuildPendingCall(in PendingCallInput) (map[string]any, map[string]any) {
 		"reason_source": optionalString(in.ReasonSource), "previous_route": optionalString(in.PreviousRoute), "new_route": optionalString(in.NewRoute),
 		"route_adjustment_reason": optionalString(in.RouteAdjustmentReason),
 	}
+	if in.Worktree && in.Repository != nil {
+		var entries any
+		if in.WorktreeReplyPath == nil {
+			entries = baseline["status_entries"]
+		}
+		pending["main_checkout_baseline"] = CaptureMainCheckoutBaseline(*in.Repository, entries)
+	}
 	if mechanical {
 		pending["shadow_prompt"] = in.Prompt
 	}
@@ -118,6 +126,9 @@ func BuildPendingCall(in PendingCallInput) (map[string]any, map[string]any) {
 	if in.Queued {
 		queued := map[string]any{"status": "UNKNOWN", "code": "QUEUED"}
 		pending["lease_queued"], pending["baseline"] = true, queued
+		if _, recorded := pending["main_checkout_baseline"]; recorded {
+			pending["main_checkout_baseline"] = queued
+		}
 		baseline = queued
 	}
 	return baseline, pending

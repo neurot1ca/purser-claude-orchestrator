@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"os/exec"
@@ -250,6 +251,9 @@ func validateStartLaunch(a map[string]any, agent, mode, name string, opt StartVa
 	}
 	if v := a["sandbox"]; v != nil && v != "read-only" && v != "workspace-write" && v != "danger-full-access" {
 		return strconv.ErrSyntax
+	}
+	if a["worktree"] == true && a["sandbox"] == "danger-full-access" {
+		return errors.New("sandbox danger-full-access is not allowed for worktree jobs")
 	}
 	if v, ok := a["worktree"]; ok {
 		if _, ok = v.(bool); !ok {

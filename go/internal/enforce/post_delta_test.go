@@ -144,6 +144,163 @@ func TestAssemblePostDeltaKeepsRevisionWhenBaselineIsIncomplete(t *testing.T) {
 	}
 }
 
+func TestAssemblePostDeltaReportsMainCheckoutChangesDuringWorktreeJob(t *testing.T) {
+	repo := postDeltaRepo(t)
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	git(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+	mainBaseline := CaptureMainCheckoutBaseline(repo, nil)
+	worktreeBaseline := postScopeBaseline(t, worktree, []string{"scope"})
+	snapshotOut, err := testutil.Hide(exec.Command("git", "-C", worktree, "rev-parse", "HEAD^{tree}")).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "outside", "file.txt"), []byte("caller edit\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pending := map[string]any{
+		"phase": "implementation", "scope": []string{"scope"}, "baseline": worktreeBaseline, "lease_owner": "fixture-owner",
+		"worktree_path": worktree, "worktree_snapshot": strings.TrimSpace(string(snapshotOut)),
+		"main_checkout_baseline": mainBaseline,
+	}
+	bundle := baseBundle("")
+	if _, err := assemblePostDelta(repo, pending, bundle, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if bundle["force_full_review"] != true {
+		t.Fatalf("main checkout change did not force FULL review: %#v", bundle)
+	}
+	findings, _ := bundle["findings"].([]any)
+	if len(findings) != 1 {
+		t.Fatalf("unexpected findings: %#v", findings)
+	}
+	finding := findings[0].(map[string]any)
+	if finding["code"] != "MAIN_CHECKOUT_CHANGED_DURING_WORKTREE_JOB" || finding["message"] != "Main checkout changed during this worktree job: outside/file.txt. The worker may have written outside its worktree, or someone else edited these files." || finding["path_count"] != 1 || finding["truncated"] != false {
+		t.Fatalf("main checkout finding = %#v", finding)
+	}
+	if got := finding["paths"].([]string); len(got) != 1 || got[0] != "outside/file.txt" {
+		t.Fatalf("reported paths = %#v", got)
+	}
+}
+
+func TestAssemblePostDeltaLeavesBundleCleanWhenMainCheckoutUnchanged(t *testing.T) {
+	repo := postDeltaRepo(t)
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	git(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+	if err := os.WriteFile(filepath.Join(repo, "outside", "file.txt"), []byte("preexisting dirty content\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mainBaseline := CaptureMainCheckoutBaseline(repo, nil)
+	// Committing existing content must not be treated as a checkout write.
+	git(t, repo, "add", "outside/file.txt")
+	git(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "main advances")
+	worktreeBaseline := postScopeBaseline(t, worktree, []string{"scope"})
+	snapshotOut, err := testutil.Hide(exec.Command("git", "-C", worktree, "rev-parse", "HEAD^{tree}")).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := map[string]any{
+		"phase": "implementation", "scope": []string{"scope"}, "baseline": worktreeBaseline, "lease_owner": "fixture-owner",
+		"worktree_path": worktree, "worktree_snapshot": strings.TrimSpace(string(snapshotOut)),
+		"main_checkout_baseline": mainBaseline,
+	}
+	bundle := baseBundle("")
+	if _, err := assemblePostDelta(repo, pending, bundle, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if bundle["force_full_review"] != false {
+		t.Fatalf("unchanged checkout forced FULL review: %#v", bundle)
+	}
+	findings, _ := bundle["findings"].([]any)
+	for _, raw := range findings {
+		if raw.(map[string]any)["code"] == "MAIN_CHECKOUT_CHANGED_DURING_WORKTREE_JOB" || raw.(map[string]any)["code"] == "MAIN_CHECKOUT_STATUS_UNKNOWN" {
+			t.Fatalf("clean main checkout added a finding: %#v", findings)
+		}
+	}
+	if _, exists := bundle["main_checkout_changes"]; exists {
+		t.Fatalf("clean main checkout added a change field: %#v", bundle)
+	}
+}
+
+func TestAssemblePostDeltaReportsAlreadyDirtyMainCheckoutFile(t *testing.T) {
+	repo := postDeltaRepo(t)
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	git(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+	file := filepath.Join(repo, "outside", "file.txt")
+	if err := os.WriteFile(file, []byte("already dirty\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, pending := BuildPendingCall(PendingCallInput{
+		Repository: &repo, Worktree: true, Phase: "implementation", Scope: []string{"scope"}, ManifestBudgetSeconds: 1,
+	})
+	// Exercise the persisted baseline representation used by post enforcement.
+	encoded, err := json.Marshal(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &pending); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := ledger.CheckoutSnapshot(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending["worktree_path"], pending["worktree_snapshot"], pending["lease_owner"] = worktree, snapshot, "fixture-owner"
+	if err := os.WriteFile(file, []byte("already dirty, changed during the job\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bundle := baseBundle("")
+	if _, err := assemblePostDelta(repo, pending, bundle, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	findings := bundle["findings"].([]any)
+	if bundle["force_full_review"] != true || len(findings) != 1 {
+		t.Fatalf("dirty file change did not produce a FULL-review finding: %#v", bundle)
+	}
+	finding := findings[0].(map[string]any)
+	paths, _ := finding["paths"].([]string)
+	if finding["code"] != "MAIN_CHECKOUT_CHANGED_DURING_WORKTREE_JOB" || len(paths) != 1 || paths[0] != "outside/file.txt" {
+		t.Fatalf("dirty file finding = %#v", finding)
+	}
+}
+
+func TestAssemblePostDeltaTruncatedMainCheckoutBaselineIsUnknown(t *testing.T) {
+	repo := postDeltaRepo(t)
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	git(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+	for i := 0; i <= mainCheckoutPathCap; i++ {
+		if err := os.WriteFile(filepath.Join(repo, fmt.Sprintf("dirty-%03d.txt", i)), []byte("untracked\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, pending := BuildPendingCall(PendingCallInput{
+		Repository: &repo, Worktree: true, Phase: "implementation", Scope: []string{"scope"}, ManifestBudgetSeconds: 1,
+	})
+	baseline := pending["main_checkout_baseline"].(map[string]any)
+	if baseline["truncated"] != true || len(baseline["fingerprints"].(map[string]any)) != mainCheckoutPathCap || len(baseline["status_entries"].([]map[string]string)) != mainCheckoutPathCap {
+		t.Fatalf("main checkout baseline was not bounded: %#v", baseline)
+	}
+	if err := os.WriteFile(filepath.Join(repo, fmt.Sprintf("dirty-%03d.txt", mainCheckoutPathCap)), []byte("unrecorded change\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := ledger.CheckoutSnapshot(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending["worktree_path"], pending["worktree_snapshot"], pending["lease_owner"] = worktree, snapshot, "fixture-owner"
+	bundle := baseBundle("")
+	if _, err := assemblePostDelta(repo, pending, bundle, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	findings := bundle["findings"].([]any)
+	if bundle["force_full_review"] != true || len(findings) != 1 {
+		t.Fatalf("truncated baseline did not force UNKNOWN/FULL review: %#v", bundle)
+	}
+	finding := findings[0].(map[string]any)
+	if finding["code"] != "MAIN_CHECKOUT_STATUS_UNKNOWN" || finding["truncated"] != true {
+		t.Fatalf("truncated baseline finding = %#v", finding)
+	}
+}
+
 func TestOutOfScopeDirGlobAllowsNestedFiles(t *testing.T) {
 	root := postDeltaRepo(t)
 	scope := []string{"System/Second Brain/Migration/**"}

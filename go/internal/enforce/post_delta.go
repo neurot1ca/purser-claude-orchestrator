@@ -1,7 +1,12 @@
 package enforce
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"purser-hook/internal/ledger"
@@ -162,12 +167,170 @@ func assemblePostDelta(repoRoot string, pending, bundle map[string]any, protecte
 		}
 		forceFull = applyOutOfScopeResult(bundle, anomaly, protectedPaths) || forceFull
 	}
+	if _, recorded := pending["main_checkout_baseline"]; recorded && worktree != "" && phase == "implementation" {
+		forceFull = inspectMainCheckout(repoRoot, mapValue(pending["main_checkout_baseline"]), bundle) || forceFull
+	}
 	if delta["status"] != ledger.OK {
 		forceFull = true
 	}
 	bundle["force_full_review"] = forceFull
 	bundle["delta"] = delta
 	return bundle, nil
+}
+
+const mainCheckoutPathCap = 50
+
+// CaptureMainCheckoutBaseline records bounded status and file metadata for worktree jobs.
+func CaptureMainCheckoutBaseline(root string, entries any) map[string]any {
+	if entries == nil {
+		var err error
+		entries, err = ledger.StatusEntries(root)
+		if err != nil {
+			return map[string]any{"status": "UNKNOWN"}
+		}
+	}
+	statuses, ok := postStatusEntries(entries)
+	if !ok {
+		return map[string]any{"status": "UNKNOWN"}
+	}
+	paths := make([]string, 0, len(statuses))
+	for path := range statuses {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	truncated := len(paths) > mainCheckoutPathCap
+	paths = postFirst(paths, mainCheckoutPathCap)
+	recorded := make([]map[string]string, 0, len(paths))
+	fingerprints := make(map[string]any, len(paths))
+	status := ledger.OK
+	for _, path := range paths {
+		recorded = append(recorded, map[string]string{"path": path, "state": statuses[path]})
+		fingerprint, err := mainCheckoutFingerprint(root, path)
+		if err != nil {
+			status = "UNKNOWN"
+			continue
+		}
+		fingerprints[path] = fingerprint
+	}
+	return map[string]any{"status": status, "status_entries": recorded, "fingerprints": fingerprints, "truncated": truncated}
+}
+
+func mainCheckoutFingerprint(root, path string) (string, error) {
+	if !filepath.IsLocal(filepath.FromSlash(path)) {
+		return "", os.ErrInvalid
+	}
+	file := filepath.Join(root, filepath.FromSlash(path))
+	info, err := os.Lstat(file)
+	if os.IsNotExist(err) {
+		return "missing", nil
+	}
+	if err == nil && info.Size() >= 0 && !info.ModTime().IsZero() {
+		return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano()), nil
+	}
+	// Only read content when size or modification time could not be obtained.
+	reader, err := os.Open(file)
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, reader); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("sha256:%x", hash.Sum(nil)), nil
+}
+
+func inspectMainCheckout(root string, baseline, bundle map[string]any) bool {
+	baselinePaths, baselineOK := postStatusEntries(baseline["status_entries"])
+	fingerprints, fingerprintsOK := baseline["fingerprints"].(map[string]any)
+	entries, err := ledger.StatusEntries(root)
+	currentPaths, currentOK := postStatusEntries(entries)
+	truncated, truncatedOK := baseline["truncated"].(bool)
+	unknown := baseline["status"] != ledger.OK || !baselineOK || !fingerprintsOK || !truncatedOK || err != nil || !currentOK || truncated
+	changed := map[string]bool{}
+	if baselineOK && err == nil && currentOK {
+		for path, state := range currentPaths {
+			previous, recorded := baselinePaths[path]
+			if recorded && previous != state || !recorded && !truncated && truncatedOK {
+				changed[path] = true
+			}
+		}
+	}
+	for path := range baselinePaths {
+		previous, ok := fingerprints[path].(string)
+		if !ok || previous == "" {
+			unknown = true
+			continue
+		}
+		current, err := mainCheckoutFingerprint(root, path)
+		if err != nil {
+			unknown = true
+		} else if current != previous {
+			// This also catches deletion and reversion to clean. A commit that
+			// only clears status leaves this fingerprint unchanged.
+			changed[path] = true
+		}
+	}
+	paths := make([]string, 0, len(changed))
+	for path := range changed {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	if len(paths) > 0 {
+		preview := postFirst(paths, mainCheckoutPathCap)
+		message := "Main checkout changed during this worktree job: " + strings.Join(preview, ", ") + ". The worker may have written outside its worktree, or someone else edited these files."
+		bundle["findings"] = appendPostFinding(bundle["findings"], "MAIN_CHECKOUT_CHANGED_DURING_WORKTREE_JOB", message)
+		findings := bundle["findings"].([]any)
+		finding := findings[len(findings)-1].(map[string]any)
+		finding["paths"], finding["path_count"], finding["truncated"] = preview, len(paths), len(paths) > mainCheckoutPathCap
+	}
+	if unknown {
+		bundle["findings"] = appendPostFinding(bundle["findings"], "MAIN_CHECKOUT_STATUS_UNKNOWN", "Main checkout inspection is UNKNOWN; some paths could not be compared.")
+		findings := bundle["findings"].([]any)
+		findings[len(findings)-1].(map[string]any)["truncated"] = truncated
+	}
+	return unknown || len(paths) > 0
+}
+
+func postStatusEntries(value any) (map[string]string, bool) {
+	result := map[string]string{}
+	add := func(path, state string) {
+		result[path] = state
+	}
+	switch entries := value.(type) {
+	case []map[string]string:
+		for _, entry := range entries {
+			path, pathOK := entry["path"]
+			state, stateOK := entry["state"]
+			if !pathOK || !stateOK {
+				return nil, false
+			}
+			add(path, state)
+		}
+	case []any:
+		for _, raw := range entries {
+			entry, ok := raw.(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			path, pathOK := entry["path"].(string)
+			state, stateOK := entry["state"].(string)
+			if !pathOK || !stateOK {
+				return nil, false
+			}
+			add(path, state)
+		}
+	default:
+		return nil, false
+	}
+	return result, true
+}
+
+func postFirst(paths []string, limit int) []string {
+	if len(paths) > limit {
+		paths = paths[:limit]
+	}
+	return paths
 }
 
 func scopeIfImplementation(phase string, scope []string) []string {
