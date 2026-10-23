@@ -27,7 +27,7 @@ func parseNumstat(raw []byte) (map[string]int, error) {
 		added, remainder, found := strings.Cut(record, "\t")
 		deleted, path, foundPath := strings.Cut(remainder, "\t")
 		if !found || !foundPath {
-			return nil, &inspectionError{"GIT_OUTPUT_INVALID", "Git numstat output was malformed."}
+			return nil, &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git numstat output was malformed."}
 		}
 		name := decodeGitPath([]byte(path))
 		if added == "-" || deleted == "-" {
@@ -38,11 +38,11 @@ func parseNumstat(raw []byte) (map[string]int, error) {
 		}
 		add, err := strconv.Atoi(strings.TrimSpace(added))
 		if err != nil {
-			return nil, &inspectionError{"GIT_OUTPUT_INVALID", "Git numstat counts were malformed."}
+			return nil, &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git numstat counts were malformed."}
 		}
 		del, err := strconv.Atoi(strings.TrimSpace(deleted))
 		if err != nil {
-			return nil, &inspectionError{"GIT_OUTPUT_INVALID", "Git numstat counts were malformed."}
+			return nil, &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git numstat counts were malformed."}
 		}
 		counts[name] += add + del
 	}
@@ -131,5 +131,5 @@ func manifestLineCount(entry map[string]any, exists bool) (int, error) {
 		}
 		return 0, nil
 	}
-	return 0, &inspectionError{"BASELINE_INVALID", "Manifest line counts were invalid."}
+	return 0, &inspectionError{Code: "BASELINE_INVALID", Message: "Manifest line counts were invalid."}
 }

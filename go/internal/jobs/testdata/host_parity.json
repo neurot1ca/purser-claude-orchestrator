@@ -413,7 +413,7 @@
       "signalPort": "__HOST_IDENTITY__",
       "finishedAt": "__TIME__",
       "errorCode": "WORKTREE_SNAPSHOT_FAILED",
-      "message": "Worktree snapshot could not be created",
+      "message": "__SNAPSHOT_FAILURE_CAUSE__",
       "boardDisplayCount": 0
     }
   },

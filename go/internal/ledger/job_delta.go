@@ -138,7 +138,7 @@ func filterJobPaths(root string, paths []string) ([]string, error) {
 	ignored := make(map[string]bool)
 	if err != nil {
 		failure, ok := err.(*inspectionError)
-		if !ok || failure.Code != "GIT_FAILED" || failure.Message != "Git failed with exit code 1 while filtering ignored job patch paths." {
+		if !ok || failure.Code != "GIT_FAILED" || failure.ExitCode != 1 || failure.StderrTail != "" {
 			return nil, err
 		}
 	} else {

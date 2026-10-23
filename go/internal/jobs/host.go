@@ -257,19 +257,16 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		} else {
 			requested, absErr := filepath.Abs(args.Cwd)
 			if absErr != nil {
-				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", "Worktree snapshot could not be created")
+				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", fmt.Sprintf("Worktree snapshot could not be created: resolving requested directory: %v", absErr))
 			}
-			gitCommand := proc.Hide(exec.Command("git", "-C", requested, "rev-parse", "--show-toplevel"))
-			proc.ConfigureNoWindow(gitCommand)
-			rootOut, gitErr := gitCommand.Output()
-			if gitErr != nil {
-				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", "Worktree snapshot could not be created")
+			repoRoot, err = ledger.GitTopLevel(requested)
+			if err != nil {
+				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", fmt.Sprintf("Worktree snapshot could not be created: resolving Git top-level: %v", err))
 			}
-			repoRoot = strings.TrimSpace(string(rootOut))
 			relativeCWD, _ = filepath.Rel(repoRoot, requested)
 			snapshot, createErr := ledger.CreateJobWorktree(repoRoot, jobID, filepath.Join(stateRoot, "wt"))
 			if createErr != nil {
-				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", "Worktree snapshot could not be created")
+				return finishHostError(path, jobID, generation, token, "WORKTREE_SNAPSHOT_FAILED", fmt.Sprintf("Worktree snapshot could not be created: creating Git worktree snapshot: %v", createErr))
 			}
 			worktreePath = snapshot["path"]
 			threadID := ""

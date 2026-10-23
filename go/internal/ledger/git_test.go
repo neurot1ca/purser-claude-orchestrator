@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestGitPythonFixture(t *testing.T) {
@@ -75,7 +76,7 @@ func TestGitMalformedOutput(t *testing.T) {
 			t.Fatalf("malformed status = %v", err)
 		}
 	}
-	failure := &inspectionError{"GIT_OUTPUT_INVALID", "Git status output was malformed."}
+	failure := &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git status output was malformed."}
 	encoded, _ := json.Marshal(map[string]string{"code": failure.Code, "message": failure.Message})
 	fmt.Println(string(encoded))
 }
@@ -85,12 +86,53 @@ func TestGitFailureIncludesBoundedStderr(t *testing.T) {
 	_, err := runGit(root, []string{"apply", "--check", "-"}, time.Second,
 		"checking patch", []byte("not a patch\n"), nil)
 	failure, ok := err.(*inspectionError)
-	if !ok || failure.Code != "GIT_FAILED" || !strings.Contains(failure.Message, "Git stderr:") ||
+	if !ok || failure.Code != "GIT_FAILED" || failure.ExitCode != 128 || failure.StderrTail == "" || !strings.Contains(failure.Message, "stderr tail:") ||
 		!strings.Contains(failure.Message, "No valid patches") {
 		t.Fatalf("Git failure did not include stderr: %v", err)
 	}
 	if got := gitStderrSummary(strings.Repeat("x", 500)); len(got) != 400 {
 		t.Fatalf("stderr summary length = %d, want 400", len(got))
+	}
+	if got := gitStderrSummary(strings.Repeat("x", 500) + "\r\n\ttrailing-marker" + strings.Repeat("\r\n", 250)); len(got) != 400 || !strings.HasSuffix(got, " trailing-marker") {
+		t.Fatalf("stderr summary did not retain tail marker: %q", got)
+	}
+	tail := gitStderrTail{}
+	_, _ = tail.Write([]byte(strings.Repeat("x", gitStderrLimit+20) + "TAIL"))
+	if len(tail.data) != gitStderrLimit || !strings.HasSuffix(string(tail.data), "TAIL") {
+		t.Fatalf("bounded stderr tail = %d bytes, suffix %q", len(tail.data), tail.data[len(tail.data)-4:])
+	}
+	if !utf8.ValidString(gitStderrSummary(string([]byte{0xff, 'x'}))) {
+		t.Fatal("stderr summary was not valid UTF-8")
+	}
+	if got := gitStderrSummary(strings.Repeat("界", 200) + " marker"); len(got) > 400 || !utf8.ValidString(got) || !strings.HasSuffix(got, " marker") {
+		t.Fatalf("UTF-8 stderr tail = %q", got)
+	}
+}
+
+func TestFilterJobPathsHandlesNoIgnoredPaths(t *testing.T) {
+	root := initGitRepository(t)
+	_, err := runGit(root, []string{"check-ignore", "--no-index", "-z", "--stdin"}, time.Second, "filtering ignored job patch paths", []byte("not-ignored.txt\x00"), nil)
+	failure, ok := err.(*inspectionError)
+	if !ok || failure.Code != "GIT_FAILED" || failure.ExitCode != 1 || failure.StderrTail != "" {
+		t.Fatalf("check-ignore exit metadata = %#v", err)
+	}
+	paths, err := filterJobPaths(root, []string{"not-ignored.txt"})
+	if err != nil || !reflect.DeepEqual(paths, []string{"not-ignored.txt"}) {
+		t.Fatalf("no ignored paths = %q, %v", paths, err)
+	}
+}
+
+func TestRunGitTimeoutAndStartFailureIncludeCauses(t *testing.T) {
+	root := t.TempDir()
+	_, timeoutErr := runGit(root, []string{"status"}, 0, "reading repository status", nil, nil)
+	timeoutFailure, ok := timeoutErr.(*inspectionError)
+	if !ok || timeoutFailure.ExitCode != 0 || !strings.Contains(timeoutErr.Error(), `git "-c" "core.longpaths=true" "status"`) || !strings.Contains(timeoutErr.Error(), "context deadline exceeded") {
+		t.Fatalf("timeout diagnostic = %v", timeoutErr)
+	}
+	_, startErr := runGit(root, []string{"status"}, time.Second, "reading repository status", nil, map[string]string{"PATH": ""})
+	startFailure, ok := startErr.(*inspectionError)
+	if !ok || startFailure.ExitCode != 0 || !strings.Contains(startErr.Error(), "executable not found") || !strings.Contains(startErr.Error(), `"status"`) {
+		t.Fatalf("start diagnostic = %v", startErr)
 	}
 }
 
@@ -103,11 +145,12 @@ func TestGitBrokenHeadHasSpecializedDiagnostic(t *testing.T) {
 		"reading HEAD", nil, nil)
 	failure, ok := err.(*inspectionError)
 	if !ok || failure.Code != "GIT_FAILED" ||
-		!strings.HasPrefix(failure.Message, "Repository HEAD cannot be read. Git failed while reading HEAD. ") ||
-		strings.Contains(failure.Message, "Git stderr:") {
+		!strings.HasPrefix(failure.Message, "Repository HEAD cannot be read. Git failed while reading HEAD (git ") ||
+		!strings.Contains(failure.Message, `"rev-parse" "--verify" "HEAD"`) || !strings.Contains(failure.Message, "exit code 128") ||
+		strings.Contains(failure.Message, "Git stderr:") || !strings.Contains(failure.Message, "stderr tail:") {
 		t.Fatalf("broken HEAD diagnostic = %v", err)
 	}
-	if got := gitStderrSummary(strings.TrimPrefix(failure.Message, "Repository HEAD cannot be read. Git failed while reading HEAD. ")); got == "" {
+	if !strings.HasSuffix(failure.Message, "; stderr tail: fatal: Needed a single revision") {
 		t.Fatalf("broken HEAD diagnostic omitted stderr: %q", failure.Message)
 	}
 }

@@ -355,7 +355,7 @@ func tryThreeWayJobPatch(root, destination string, paths []string, patch []byte,
 	for _, name := range paths {
 		source, target := filepath.Join(root, filepath.FromSlash(name)), filepath.Join(tree, filepath.FromSlash(name))
 		if !withinPath(root, filepath.Dir(source)) || !withinPath(tree, filepath.Dir(target)) {
-			return nil, &inspectionError{"GIT_FAILED", "Job patch contains an unsafe path."}
+			return nil, &inspectionError{Code: "GIT_FAILED", Message: "Job patch contains an unsafe path."}
 		}
 		if err = copyReplayPath(source, target); err != nil {
 			return nil, err
@@ -413,7 +413,7 @@ func tryThreeWayJobPatch(root, destination string, paths []string, patch []byte,
 			for _, name := range paths {
 				source, target := filepath.Join(tree, filepath.FromSlash(name)), filepath.Join(destination, filepath.FromSlash(name))
 				if !withinPath(destination, filepath.Dir(target)) {
-					return nil, &inspectionError{"GIT_FAILED", "Replay path traverses a worktree symlink."}
+					return nil, &inspectionError{Code: "GIT_FAILED", Message: "Replay path traverses a worktree symlink."}
 				}
 				if err = copyReplayPath(source, target); err != nil {
 					return nil, err

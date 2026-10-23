@@ -17,7 +17,7 @@ import (
 var manifestClock = time.Now
 
 func manifestBudgetError() *inspectionError {
-	return &inspectionError{"MANIFEST_BUDGET_EXCEEDED", "The scoped untracked/ignored manifest exceeded its wall-clock budget."}
+	return &inspectionError{Code: "MANIFEST_BUDGET_EXCEEDED", Message: "The scoped untracked/ignored manifest exceeded its wall-clock budget."}
 }
 
 func checkManifestDeadline(deadline time.Time) error {
@@ -187,7 +187,7 @@ func transientBytecode(path string) bool {
 
 func scopedManifest(root string, scope []string, timeout time.Duration, budgetSeconds float64) ([]map[string]any, error) {
 	if math.IsNaN(budgetSeconds) || math.IsInf(budgetSeconds, 0) || budgetSeconds <= 0 {
-		return nil, &inspectionError{"INVALID_MANIFEST_BUDGET", "The manifest wall-clock budget must be a positive number."}
+		return nil, &inspectionError{Code: "INVALID_MANIFEST_BUDGET", Message: "The manifest wall-clock budget must be a positive number."}
 	}
 	maximumSeconds := float64(int64(^uint64(0)>>1)) / float64(time.Second)
 	duration := time.Duration(math.MaxInt64)
@@ -230,12 +230,12 @@ func scopedManifest(root string, scope []string, timeout time.Duration, budgetSe
 		name := filepath.Join(root, filepath.FromSlash(relative))
 		info, err := os.Lstat(name)
 		if err != nil {
-			return nil, &inspectionError{"MANIFEST_IO_FAILED", "A scoped manifest file could not be fingerprinted."}
+			return nil, &inspectionError{Code: "MANIFEST_IO_FAILED", Message: "A scoped manifest file could not be fingerprinted."}
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, err := os.Readlink(name)
 			if err != nil {
-				return nil, &inspectionError{"MANIFEST_IO_FAILED", "A scoped manifest file could not be fingerprinted."}
+				return nil, &inspectionError{Code: "MANIFEST_IO_FAILED", Message: "A scoped manifest file could not be fingerprinted."}
 			}
 			digest := sha256.Sum256([]byte(target))
 			manifest = append(manifest, map[string]any{"path": relative, "sha256": hex.EncodeToString(digest[:]), "line_count": 0, "kind": "symlink"})
@@ -245,7 +245,7 @@ func scopedManifest(root string, scope []string, timeout time.Duration, budgetSe
 				if failure, ok := err.(*inspectionError); ok && failure.Code == "MANIFEST_BUDGET_EXCEEDED" {
 					return nil, err
 				}
-				return nil, &inspectionError{"MANIFEST_IO_FAILED", "A scoped manifest file could not be fingerprinted."}
+				return nil, &inspectionError{Code: "MANIFEST_IO_FAILED", Message: "A scoped manifest file could not be fingerprinted."}
 			}
 			manifest = append(manifest, map[string]any{"path": relative, "sha256": digest, "line_count": lines, "kind": "file"})
 		} else if info.IsDir() {

@@ -15,16 +15,35 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 const indexPathspecByteBudget = 8000
+const gitStderrLimit = 4096
+
+type gitStderrTail struct{ data []byte }
+
+func (tail *gitStderrTail) Write(value []byte) (int, error) {
+	if len(value) >= gitStderrLimit {
+		tail.data = append(tail.data[:0], value[len(value)-gitStderrLimit:]...)
+	} else if excess := len(tail.data) + len(value) - gitStderrLimit; excess > 0 {
+		tail.data = append(tail.data[:0], tail.data[excess:]...)
+		tail.data = append(tail.data, value...)
+	} else {
+		tail.data = append(tail.data, value...)
+	}
+	return len(value), nil
+}
 
 type inspectionError struct {
-	Code    string
-	Message string
+	Code       string
+	Message    string
+	ExitCode   int
+	StderrTail string
 }
 
 type InspectionError = inspectionError
@@ -39,7 +58,7 @@ func runGit(root string, args []string, timeout time.Duration, operation string,
 		if pathValue, ok := env["PATH"]; ok {
 			resolved, found := findGit(pathValue, env["PATHEXT"])
 			if !found {
-				return nil, &inspectionError{"GIT_UNAVAILABLE", "Git could not run while " + operation + "."}
+				return nil, &inspectionError{Code: "GIT_UNAVAILABLE", Message: fmt.Sprintf("Git could not start while %s (git %s): executable not found.", operation, renderGitArgs(args))}
 			}
 			args = append([]string(nil), args...)
 			commandPath = resolved
@@ -63,48 +82,52 @@ func runGit(root string, args []string, timeout time.Duration, operation string,
 			command.Env = append(command.Env, key+"="+value)
 		}
 	}
-	var stdout, stderr strings.Builder
+	var stdout strings.Builder
+	var stderr gitStderrTail
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err := command.Run()
 	if ctx.Err() != nil {
-		return nil, &inspectionError{"GIT_TIMEOUT", "Git timed out while " + operation + "."}
+		return nil, &inspectionError{Code: "GIT_TIMEOUT", Message: fmt.Sprintf("Git timed out while %s (git %s): %v%s", operation, renderGitArgs(args), ctx.Err(), gitStderrSuffix(stderr.data))}
 	}
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			if readingHead {
-				detail := gitStderrSummary(stderr.String())
-				if detail != "" {
-					return nil, &inspectionError{"GIT_FAILED", "Repository HEAD cannot be read. Git failed while " + operation + ". " + detail}
-				}
+				message := fmt.Sprintf("Repository HEAD cannot be read. Git failed while %s (git %s): exit code %d%s", operation, renderGitArgs(args), exitErr.ExitCode(), gitStderrSuffix(stderr.data))
+				return nil, &inspectionError{Code: "GIT_FAILED", Message: message, ExitCode: exitErr.ExitCode(), StderrTail: gitStderrSummary(string(stderr.data))}
 			}
-			message := fmt.Sprintf("Git failed with exit code %d while %s.", exitErr.ExitCode(), operation)
-			if detail := gitStderrSummary(stderr.String()); detail != "" {
-				message += " Git stderr: " + detail
-			}
-			return nil, &inspectionError{"GIT_FAILED", message}
+			message := fmt.Sprintf("Git failed while %s (git %s): exit code %d%s", operation, renderGitArgs(args), exitErr.ExitCode(), gitStderrSuffix(stderr.data))
+			return nil, &inspectionError{Code: "GIT_FAILED", Message: message, ExitCode: exitErr.ExitCode(), StderrTail: gitStderrSummary(string(stderr.data))}
 		}
-		return nil, &inspectionError{"GIT_UNAVAILABLE", "Git could not run while " + operation + "."}
+		return nil, &inspectionError{Code: "GIT_UNAVAILABLE", Message: fmt.Sprintf("Git could not start while %s (git %s): %v%s", operation, renderGitArgs(args), err, gitStderrSuffix(stderr.data))}
 	}
 	return []byte(stdout.String()), nil
 }
 
 func gitStderrSummary(stderr string) string {
-	lines := strings.Split(strings.TrimSpace(stderr), "\n")
-	for i := range lines {
-		lines[i] = strings.TrimSpace(strings.TrimSuffix(lines[i], "\r"))
+	stderr = strings.Join(strings.Fields(strings.ToValidUTF8(stderr, "�")), " ")
+	if len(stderr) > 400 {
+		stderr = stderr[len(stderr)-400:]
+		for !utf8.RuneStart(stderr[0]) {
+			stderr = stderr[1:]
+		}
 	}
-	for len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	return stderr
+}
+
+func gitStderrSuffix(stderr []byte) string {
+	if detail := gitStderrSummary(string(stderr)); detail != "" {
+		return "; stderr tail: " + detail
 	}
-	if len(lines) == 0 {
-		return ""
+	return ""
+}
+
+func renderGitArgs(args []string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = strconv.Quote(arg)
 	}
-	detail := strings.Join(lines, " ")
-	if len(detail) > 400 {
-		detail = detail[:400]
-	}
-	return detail
+	return strings.Join(quoted, " ")
 }
 
 // GitTopLevel resolves a directory through Git's work-tree semantics.
@@ -115,13 +138,17 @@ func GitTopLevel(directory string) (string, error) {
 	}
 	root := strings.TrimSpace(string(raw))
 	if root == "" {
-		return "", &inspectionError{"GIT_FAILED", "Git returned an empty top-level."}
+		return "", &inspectionError{Code: "GIT_FAILED", Message: "Git returned an empty top-level."}
 	}
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return "", &inspectionError{"GIT_OUTPUT_INVALID", "Git returned an invalid top-level."}
+		return "", &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git returned an invalid top-level: " + err.Error()}
 	}
-	return filepath.Abs(resolved)
+	absolute, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git top-level could not be made absolute: " + err.Error()}
+	}
+	return absolute, nil
 }
 
 func findGit(pathValue, pathExt string) (string, bool) {
@@ -148,22 +175,22 @@ func findGit(pathValue, pathExt string) (string, bool) {
 
 func normalizeScope(scope []string) ([]string, error) {
 	if len(scope) == 0 {
-		return nil, &inspectionError{"INVALID_SCOPE", "At least one scoped path is required."}
+		return nil, &inspectionError{Code: "INVALID_SCOPE", Message: "At least one scoped path is required."}
 	}
 	drive := regexp.MustCompile(`^[A-Za-z]:`)
 	unique := make(map[string]bool)
 	for _, value := range scope {
 		value = strings.TrimSpace(value)
 		if value == "" {
-			return nil, &inspectionError{"INVALID_SCOPE", "Scope paths must be non-empty strings."}
+			return nil, &inspectionError{Code: "INVALID_SCOPE", Message: "Scope paths must be non-empty strings."}
 		}
 		value = strings.ReplaceAll(value, `\`, "/")
 		if strings.ContainsRune(value, 0) || strings.HasPrefix(value, "/") || strings.Contains("/"+value+"/", "/../") || drive.MatchString(value) {
-			return nil, &inspectionError{"INVALID_SCOPE", "Scope paths must be literal repository-relative paths."}
+			return nil, &inspectionError{Code: "INVALID_SCOPE", Message: "Scope paths must be literal repository-relative paths."}
 		}
 		value = path.Clean(value)
 		if value == "." || value == "" {
-			return nil, &inspectionError{"UNBOUNDED_SCOPE", "A whole-repository manifest scope is forbidden."}
+			return nil, &inspectionError{Code: "UNBOUNDED_SCOPE", Message: "A whole-repository manifest scope is forbidden."}
 		}
 		unique[value] = true
 	}
@@ -189,13 +216,13 @@ func parseStatus(raw []byte) ([]map[string]string, error) {
 	for i := 0; i < len(records) && len(records[i]) > 0; i++ {
 		record := records[i]
 		if len(record) < 4 || record[2] != ' ' || record[0] > 127 || record[1] > 127 {
-			return nil, &inspectionError{"GIT_OUTPUT_INVALID", "Git status output was malformed."}
+			return nil, &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git status output was malformed."}
 		}
 		entry := map[string]string{"state": string(record[:2]), "path": decodeGitPath(record[3:])}
 		if strings.ContainsAny(entry["state"], "RC") {
 			i++
 			if i >= len(records) || len(records[i]) == 0 {
-				return nil, &inspectionError{"GIT_OUTPUT_INVALID", "Git rename output was malformed."}
+				return nil, &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git rename output was malformed."}
 			}
 			entry["original_path"] = decodeGitPath(records[i])
 		}
@@ -245,7 +272,7 @@ func indexEntries(root string, paths []string, timeout time.Duration) (map[strin
 			}
 			separator := strings.IndexByte(string(record), '\t')
 			if separator < 0 {
-				return nil, &inspectionError{"GIT_OUTPUT_INVALID", "Git index output was malformed."}
+				return nil, &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git index output was malformed."}
 			}
 			metadata, name := string(record[:separator]), decodeGitPath(record[separator+1:])
 			ascii := true
@@ -256,7 +283,7 @@ func indexEntries(root string, paths []string, timeout time.Duration) (map[strin
 				}
 			}
 			if !ascii || len(strings.Split(metadata, " ")) != 3 {
-				return nil, &inspectionError{"GIT_OUTPUT_INVALID", "Git index output was malformed."}
+				return nil, &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git index output was malformed."}
 			}
 			result[name] = append(result[name], metadata)
 		}

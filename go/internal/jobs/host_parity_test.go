@@ -4,6 +4,7 @@ import "purser-hook/internal/testutil"
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -402,6 +403,12 @@ func normalizeHostParityValue(value any, root string) any {
 			case "exitCode":
 				if state == "TIMED_OUT" || state == "CANCELLED" {
 					item[key] = "__TERMINATION_EXIT_CODE__"
+				} else {
+					item[key] = normalizeHostParityValue(child, root)
+				}
+			case "message":
+				if item["errorCode"] == "WORKTREE_SNAPSHOT_FAILED" && strings.HasPrefix(fmt.Sprint(child), "Worktree snapshot could not be created:") {
+					item[key] = "__SNAPSHOT_FAILURE_CAUSE__"
 				} else {
 					item[key] = normalizeHostParityValue(child, root)
 				}

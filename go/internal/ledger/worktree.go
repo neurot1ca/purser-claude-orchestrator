@@ -22,7 +22,7 @@ func CreateJobWorktree(repoRoot, jobID, parentDir string) (map[string]string, er
 		return nil, err
 	}
 	if jobID == "" {
-		return nil, &inspectionError{"INVALID_JOB_ID", "job_id must be a non-empty string"}
+		return nil, &inspectionError{Code: "INVALID_JOB_ID", Message: "job_id must be a non-empty string"}
 	}
 	if err = os.MkdirAll(parent, 0700); err != nil {
 		return nil, err
@@ -100,7 +100,7 @@ func copyUntracked(root, worktree string, timeout time.Duration) error {
 		}
 		name := filepath.FromSlash(item)
 		if !filepath.IsLocal(name) {
-			return &inspectionError{"GIT_OUTPUT_INVALID", "Git returned an unsafe untracked path."}
+			return &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git returned an unsafe untracked path."}
 		}
 		if err = copyPath(filepath.Join(root, name), filepath.Join(worktree, name), false); err != nil {
 			return err
@@ -112,7 +112,7 @@ func copyProfilePath(root, worktree, raw string) error {
 	normalized := strings.ReplaceAll(raw, `\`, "/")
 	name := filepath.FromSlash(normalized)
 	if normalized == "" || strings.ContainsRune(normalized, 0) || !filepath.IsLocal(name) || filepath.Clean(name) == "." {
-		return &inspectionError{"INVALID_WORKTREE_COPY_PATH", "Unsafe worktree copy path: " + raw}
+		return &inspectionError{Code: "INVALID_WORKTREE_COPY_PATH", Message: "Unsafe worktree copy path: " + raw}
 	}
 	source := filepath.Join(root, name)
 	resolved, err := filepath.EvalSymlinks(source)
@@ -124,7 +124,7 @@ func copyProfilePath(root, worktree, raw string) error {
 	}
 	rel, err := filepath.Rel(root, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return &inspectionError{"INVALID_WORKTREE_COPY_PATH", "Unsafe worktree copy path: " + raw}
+		return &inspectionError{Code: "INVALID_WORKTREE_COPY_PATH", Message: "Unsafe worktree copy path: " + raw}
 	}
 	return copyPath(source, filepath.Join(worktree, name), true)
 }
@@ -145,7 +145,7 @@ func copyPath(source, target string, recursive bool) error {
 	}
 	if info.IsDir() {
 		if !recursive {
-			return &inspectionError{"UNTRACKED_FILE_UNSUPPORTED", "An untracked path was not a regular file or symlink."}
+			return &inspectionError{Code: "UNTRACKED_FILE_UNSUPPORTED", Message: "An untracked path was not a regular file or symlink."}
 		}
 		entries, e := os.ReadDir(source)
 		if e != nil {
@@ -162,7 +162,7 @@ func copyPath(source, target string, recursive bool) error {
 		return nil
 	}
 	if !info.Mode().IsRegular() {
-		return &inspectionError{"UNTRACKED_FILE_UNSUPPORTED", "An untracked path was not a regular file or symlink."}
+		return &inspectionError{Code: "UNTRACKED_FILE_UNSUPPORTED", Message: "An untracked path was not a regular file or symlink."}
 	}
 	in, err := os.Open(source)
 	if err != nil {

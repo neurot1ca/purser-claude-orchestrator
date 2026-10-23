@@ -289,7 +289,7 @@ func TestPrepareJobReplayPythonFixture(t *testing.T) {
 			if c.Script == "ls_tree_error" {
 				runner = func(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
 					if operation == "checking replay source path" {
-						return nil, &inspectionError{"GIT_FAILED", "scripted ls-tree inspection failure"}
+						return nil, &inspectionError{Code: "GIT_FAILED", Message: "scripted ls-tree inspection failure"}
 					}
 					return runGit(root, args, timeout, operation, input, env)
 				}

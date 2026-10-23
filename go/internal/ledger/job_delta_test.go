@@ -123,6 +123,14 @@ func stringsOutput(t *testing.T, root string, args ...string) string {
 func assertJobDeltaExpected(t *testing.T, got, want map[string]any) {
 	t.Helper()
 	got = cloneMap(got)
+	expectedMessage, _ := want["message"].(string)
+	if prefix, hasOSCause := strings.CutSuffix(expectedMessage, "<OS_ERROR>"); hasOSCause {
+		message, _ := got["message"].(string)
+		if !strings.HasPrefix(message, prefix) || strings.TrimSpace(strings.TrimPrefix(message, prefix)) == "" {
+			t.Fatalf("job diagnostic = %q; want prefix %q and a nonempty OS cause", message, prefix)
+		}
+		got["message"] = expectedMessage
+	}
 	if got["baseline_head"] != nil {
 		got["baseline_head"] = "<SNAPSHOT>"
 	}

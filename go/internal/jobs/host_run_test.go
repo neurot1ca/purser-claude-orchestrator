@@ -615,6 +615,7 @@ func TestReplyAfterCompletedRetirementStaysIsolated(t *testing.T) {
 				t.Fatal(err)
 			}
 			workerLaunched := false
+			var hostResult map[string]any
 			opt := StartOptions{StateRoot: state, Validation: StartValidationOptions{Agent: "codex", FixedAgent: true},
 				Launch: func(id string, generation int64, token string) error {
 					if creationFails {
@@ -622,7 +623,8 @@ func TestReplyAfterCompletedRetirementStaysIsolated(t *testing.T) {
 							return err
 						}
 					}
-					_, hostErr := RunHostGeneration(dir, id, generation, token, HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+					var hostErr error
+					hostResult, hostErr = RunHostGeneration(dir, id, generation, token, HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
 						workerLaunched = true
 						job := recordMap(readJob(dir, id))
 						if sameWorktree(args.Cwd, repo) || sameWorktree(args.Cwd, worktree) || !sameWorktree(args.Cwd, nonemptyString(job["worktreePath"])) || nonemptyString(job["snapshot"]) == "" || job["head"] != head {
@@ -632,7 +634,7 @@ func TestReplyAfterCompletedRetirementStaysIsolated(t *testing.T) {
 					}})
 					return hostErr
 				}}
-			_, reply, err := Start(state, map[string]any{
+			result, reply, err := Start(state, map[string]any{
 				"call": "00000000-0000-4000-8000-000000000014", "prompt": "continue", "mode": "reply", "threadId": "reply-thread", "cwd": repo, "worktree": false,
 			}, opt)
 			if err != nil || reply == nil {
@@ -640,8 +642,14 @@ func TestReplyAfterCompletedRetirementStaysIsolated(t *testing.T) {
 			}
 			job := recordMap(readJob(dir, nonemptyString(recordMap(reply)["jobId"])))
 			if creationFails {
-				if workerLaunched || job["state"] != "FAILED" || job["errorCode"] != "WORKTREE_SNAPSHOT_FAILED" || job["message"] != "Worktree snapshot could not be created" {
+				message := nonemptyString(job["message"])
+				if workerLaunched || job["state"] != "FAILED" || job["errorCode"] != "WORKTREE_SNAPSHOT_FAILED" || !strings.HasPrefix(message, "Worktree snapshot could not be created: creating Git worktree snapshot:") {
 					t.Fatalf("creation failure did not refuse worker launch: launched=%v job=%#v", workerLaunched, job)
+				}
+				result = Result(state, nonemptyString(job["jobId"]), float64(time.Now().UnixNano())/1e9, ResultOptions{})
+				structured := result["structuredContent"].(map[string]any)
+				if got := nonemptyString(hostResult["message"]); got != message || structured["message"] != message {
+					t.Fatalf("snapshot cause differs between job record and codex_result: record=%q result=%#v host=%#v", message, result, hostResult)
 				}
 			} else {
 				if !workerLaunched || job["state"] != "SUCCEEDED" {
@@ -733,6 +741,40 @@ func TestRunHostGenerationWritesValidFailureRecord(t *testing.T) {
 		!failure.Get("errorCode", &code) || code != "WORKTREE_SNAPSHOT_FAILED" ||
 		!failure.Get("message", &message) || message != "Repository root could not be resolved for Codex launch" {
 		t.Fatalf("invalid launch failure record: %s", mustRecordJSON(t, failure))
+	}
+}
+
+func TestRunHostGenerationRootResolutionCauseReachesResult(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	jobID := hostTestID
+	writeHostTestJSON(t, filepath.Join(dir, jobID+".json"), map[string]any{
+		"jobId": jobID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal",
+		"deadlineAt":  float64(time.Now().Add(time.Minute).UnixNano()) / 1e9,
+	})
+	writeHostTestJSON(t, filepath.Join(dir, jobID+".launch"), map[string]any{
+		"name": "codex", "agent": "codex", "args": map[string]any{"prompt": "p", "cwd": state, "worktree": true},
+	})
+	launched := false
+	result, err := RunHostGeneration(dir, jobID, 1, "owner", HostOptions{WorkerCommand: func(LaunchArgs) ([]string, error) { launched = true; return nil, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := recordMap(readJob(dir, jobID))
+	message := nonemptyString(job["message"])
+	if launched || job["state"] != "FAILED" || !strings.HasPrefix(message, "Worktree snapshot could not be created: resolving Git top-level:") {
+		t.Fatalf("root-resolution failure = launched:%v job:%#v", launched, job)
+	}
+	if got := nonemptyString(result["message"]); got != message {
+		t.Fatalf("root cause differs between job record and codex_result: record=%q result=%#v", message, result)
+	}
+	structured := Result(state, jobID, float64(time.Now().UnixNano())/1e9, ResultOptions{})["structuredContent"].(map[string]any)
+	if structured["message"] != message || structured["errorCode"] != "WORKTREE_SNAPSHOT_FAILED" {
+		t.Fatalf("root cause differs in codex_result: record=%q result=%#v", message, structured)
 	}
 }
 
