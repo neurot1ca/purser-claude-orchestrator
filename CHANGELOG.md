@@ -6,6 +6,7 @@ before it is published.
 ## 0.1.191 — 2026-10-23
 
 - **Fixed:** a job whose host launch was never acknowledged and recorded no host identity now fails with `HOST_LAUNCH_UNCONFIRMED` instead of staying queued, and its session can cancel it.
+- **Added:** a session whose turn stopped on the Claude usage limit is woken a minute after the limit resets, with `⚓ Claude usage renewed ✓`, to resume the interrupted work; a user message before then cancels it.
 - **Changed:** usage pills show Claude in orange and Codex in blue with a small mark, and pills wrap inside their group on narrow windows.
 
 ## 0.1.190 — 2026-10-23
