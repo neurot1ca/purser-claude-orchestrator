@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.191 — 2026-10-23
+
+- **Fixed:** a job whose host launch was never acknowledged and recorded no host identity now fails with `HOST_LAUNCH_UNCONFIRMED` instead of staying queued, and its session can cancel it.
+- **Changed:** usage pills show Claude in orange and Codex in blue with a small mark, and pills wrap inside their group on narrow windows.
+
 ## 0.1.190 — 2026-10-23
 
 - **Fixed:** a worktree snapshot or Git failure now reports the failed operation and a bounded cause instead of a bare `WORKTREE_SNAPSHOT_FAILED`.
