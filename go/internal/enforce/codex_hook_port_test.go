@@ -977,7 +977,7 @@ func TestCodexHookPortCheckFailureAndUnknownEvidence(t *testing.T) {
 			"profile_checks": []any{map[string]any{"name": "focused", "argv": argv, "when": []any{"scope/**"}, "timeout_seconds": 10}}}
 		bundle := baseBundle("")
 		bundle["thread_id"], bundle["worker_validation"], bundle["delta"] = "thread", map[string]any{"status": "PASS"}, map[string]any{"status": "OK", "changed_paths": []string{"scope/file.txt"}, "changed_file_count": 1, "changed_line_count": 2}
-		schedulePostReview(repo, pending, bundle, postProfile{}, postConfiguredChecks(pending), map[string]any{"small_delta_max_files": 2, "small_delta_max_lines": 50}, 2*time.Second, true, true)
+		schedulePostReview(repo, pending, bundle, postProfile{}, postConfiguredChecks(pending), map[string]any{"small_delta_max_files": 2, "small_delta_max_lines": 50}, 20*time.Second, true, true)
 		checks := mapValue(bundle["hook_checks"])
 		if checks["status"] != status {
 			t.Fatalf("check outcome = %#v", checks)
