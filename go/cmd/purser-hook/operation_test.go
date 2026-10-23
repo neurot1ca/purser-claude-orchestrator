@@ -254,35 +254,12 @@ func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("start exit=%d output=%s", code, output)
 	}
-	id := sha256.Sum256([]byte(args["call"].(string)))
-	launch, err := os.ReadFile(filepath.Join(state, "codex_exec_mcp", "jobs", hex.EncodeToString(id[:])+".launch"))
-	if err != nil {
-		t.Fatalf("launch record unavailable: %v; operation output=%s", err, output)
-	}
-	var recorded map[string]any
-	if err = json.Unmarshal(launch, &recorded); err != nil {
-		t.Fatal(err)
-	}
-	if recorded["agent"] != "agy" || recorded["codexBin"] != nil {
-		t.Fatalf("Codex executable override leaked into configured agent launch: %s", launch)
-	}
 	t.Setenv("PURSER_AGENT", "codex")
 	args["call"] = "123e4567-e89b-12d3-a456-426614174003"
 	input, _ = json.Marshal(map[string]any{"args": args})
 	code, output = runPrivate(t, binary, state, "op codex_start", string(input))
 	if code != 0 {
 		t.Fatalf("environment-selected start exit=%d output=%s", code, output)
-	}
-	id = sha256.Sum256([]byte(args["call"].(string)))
-	launch, err = os.ReadFile(filepath.Join(state, "codex_exec_mcp", "jobs", hex.EncodeToString(id[:])+".launch"))
-	if err != nil {
-		t.Fatalf("environment-selected launch record unavailable: %v; operation output=%s", err, output)
-	}
-	if err = json.Unmarshal(launch, &recorded); err != nil {
-		t.Fatal(err)
-	}
-	if recorded["agent"] != "codex" || recorded["codexBin"] != override {
-		t.Fatalf("PURSER_AGENT did not select Codex with its executable override: %s", launch)
 	}
 	t.Setenv("PURSER_AGENT", "codex")
 	t.Setenv("PURSER_CODEX_BIN", "[]")
@@ -303,6 +280,9 @@ func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 		var job map[string]any
 		if readErr != nil || json.Unmarshal(data, &job) != nil {
 			t.Fatalf("job record unavailable after disabled launch: %v", readErr)
+		}
+		if job["state"] != "FAILED" || job["errorCode"] != "HOST_LAUNCH_UNCONFIRMED" {
+			t.Fatalf("disabled launch did not record the unconfirmed host failure: %#v", job)
 		}
 		if _, launched := job["hostPid"]; launched {
 			t.Fatalf("test launch-disable setting did not prevent host process: %#v", job)

@@ -236,6 +236,57 @@ func TestValidateStartReportsOpenCodeLaunchValidationError(t *testing.T) {
 	}
 }
 
+func TestStartLaunchRecordUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		envAgent string
+	}{
+		{name: "configured agent"},
+		{name: "environment-selected codex", envAgent: "codex"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PURSER_AGENT", tc.envAgent)
+			state := t.TempDir()
+			override := filepath.Join(t.TempDir(), "fake-codex")
+			args := map[string]any{"call": "123e4567-e89b-12d3-a456-426614174001", "prompt": "test", "cwd": t.TempDir(),
+				"model": "gemini-test", "config": map[string]any{"model_reasoning_effort": "high"}}
+			var launch []byte
+			_, _, err := Start(state, args, StartOptions{
+				CodexBin: override,
+				Validation: StartValidationOptions{
+					Agent: tc.envAgent, FixedAgent: tc.envAgent != "",
+					ConfiguredAgent: func(string) (string, error) { return "agy", nil },
+					ValidateAgent:   func(string) error { return nil },
+				},
+				Launch: func(id string, _ int64, _ string) error {
+					// Capture before await can finish a failed launch and remove the record.
+					var readErr error
+					launch, readErr = os.ReadFile(filepath.Join(state, "codex_exec_mcp", "jobs", id+".launch"))
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					return errors.New("host launch disabled by test")
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var recorded map[string]any
+			if err := json.Unmarshal(launch, &recorded); err != nil {
+				t.Fatal(err)
+			}
+			wantAgent := "agy"
+			var wantBin any
+			if tc.envAgent != "" {
+				wantAgent, wantBin = "codex", override
+			}
+			if recorded["agent"] != wantAgent || recorded["codexBin"] != wantBin {
+				t.Fatalf("launch agent/binary = %s; want agent=%s codexBin=%v", launch, wantAgent, wantBin)
+			}
+		})
+	}
+}
+
 func TestStartBindsRegisteredPlanBeforeLaunch(t *testing.T) {
 	base := t.TempDir()
 	repo := filepath.Join(base, "repo")
