@@ -44,6 +44,18 @@ test('maps session usage fields and keeps Claude, Codex, then cost groups', () =
   expect(groups.flat().some(pill => ['input', 'output', 'cache'].includes(pill.id))).toBe(false)
 })
 
+test('uses brand colors and marks the first Claude and Codex pill in SVG', () => {
+  const session = mapSessionUsage(usage, now)
+  const groups = usageGroups({ ...readQuotaSnapshot([quotaRecord()], now), model: 'gpt-6-luna' }, session, now)
+  expect(groups[0].map(pill => pill.color)).toEqual(['#d97757', '#d97757', '#d97757'])
+  expect(groups[1].map(pill => pill.color)).toEqual(['#6b7cff', '#6b7cff', '#6b7cff'])
+  expect(groups[2][0].color).toBe('#bd922e')
+  expect(pillSvg(groups[0][0])).toContain('data-brand-mark="claude"')
+  expect(pillSvg(groups[1][0])).toContain('data-brand-mark="codex"')
+  expect(pillSvg(groups[0][1])).not.toContain('data-brand-mark=')
+  expect(pillSvg(groups[1][1])).not.toContain('data-brand-mark=')
+})
+
 test('hides cost and Claude quota pills when session usage omits their sources', () => {
   const session = mapSessionUsage({ context: { window: 200_000 }, rateLimits: [] }, now)
   expect(session.cost).toBeUndefined()
@@ -126,6 +138,7 @@ test('keeps another mod drawing and uses the terminal fallback', async ($, on) =
   expect((await ui.find({ type: 'Text', text: 'Other mod status' }))?.text).toBe('Other mod status')
   expect(await ui.find({ type: 'Svg' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /5h/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /✻/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\$4.32/ })).toBeDefined()
   const claude = usageGroups({}, mapSessionUsage(usage, now), now)[0][0]
   expect(terminalBar(claude)).toContain('│')
@@ -169,6 +182,7 @@ test('reads Codex quota from the newest artifact that contains it', async ($, on
   expect(listed[0].replace(/\\/g, '/').toLowerCase().endsWith('/shared/purser-state/bundle_artifacts')).toBe(true)
   expect(reads.map(path => path.split(/[\\/]/).at(-1))).toEqual([newest, prior])
   expect(await ui.find({ type: 'Text', text: /codex 5h/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: />_/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -177,6 +191,6 @@ test('shows the latest Codex model and effort as the first Codex pill', () => {
   expect(readCodexModel(records)).toEqual({ model: 'gpt-6-luna', effort: 'high' })
   expect(readCodexModel(['not json', { model: '' }])).toEqual({})
   const groups = usageGroups({ ...readQuotaSnapshot([quotaRecord()], now), ...readCodexModel(records) }, mapSessionUsage(usage, now), now)
-  expect(groups[1][0]).toMatchObject({ id: 'codex-model', value: 'gpt-6-luna · high' })
+  expect(groups[1][0]).toMatchObject({ id: 'codex-model', label: 'codex', value: 'gpt-6-luna · high', color: '#6b7cff' })
   expect(terminalBar(groups[1][0])).toBeUndefined()
 })

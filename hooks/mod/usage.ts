@@ -3,7 +3,7 @@ import { stateRoot } from './state-root.js'
 type Window = { percent: number; resetAt: number; windowMs: number }
 type Quota = { fiveHour?: Window; sevenDay?: Window; model?: string; effort?: string }
 type SessionData = { quota: Quota; contextFill?: number; cost?: number }
-type Pill = { id: string; label: string; value: string; detail: string; icon: string; color: string; percent?: number; tick?: number; countdown?: string }
+type Pill = { id: string; label: string; value: string; detail: string; icon: string; color: string; brandMark?: 'claude' | 'codex'; percent?: number; tick?: number; countdown?: string }
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
@@ -91,7 +91,7 @@ function quotaPills(quota: Quota, prefix: string, now: number, contextFill?: num
       id: `${prefix}-${name}`, label: prefix === 'codex' ? `codex ${name}` : `${icon} ${name}`,
       value: `${Math.round(window.percent)}%`,
       detail: `${prefix} ${name} quota ${window.percent.toFixed(1)}% used; resets in ${remaining(window.resetAt, now)}${context}`,
-      icon: '◷', color: name === '5h' ? '#2a9d82' : '#8e63c7', percent: window.percent,
+      icon: '◷', color: prefix === 'claude' ? '#d97757' : '#6b7cff', percent: window.percent,
       tick: timeElapsedTick(timeLeft, window.windowMs), countdown: remaining(window.resetAt, now),
     })
   }
@@ -104,17 +104,19 @@ export function usageGroups(codex: Quota, session: SessionData, now = Date.now()
     claude.push({
       id: 'claude-context', label: '◧ ctx', value: `${Math.round(session.contextFill)}%`,
       detail: `claude context ${session.contextFill.toFixed(1)}% of the window used`,
-      icon: '◧', color: '#4a7fc1', percent: session.contextFill,
+      icon: '◧', color: '#d97757', percent: session.contextFill,
     })
   }
+  if (claude.length) claude[0].brandMark = 'claude'
   const codexPills = quotaPills(codex, 'codex', now, session.contextFill)
   if (codex.model) {
     const value = codex.effort ? `${codex.model} · ${codex.effort}` : codex.model
     codexPills.unshift({
-      id: 'codex-model', label: '⚓ codex', value,
-      detail: `Codex model of the latest job: ${value}`, icon: '⚓', color: '#5b7083',
+      id: 'codex-model', label: 'codex', value,
+      detail: `Codex model of the latest job: ${value}`, icon: '◷', color: '#6b7cff',
     })
   }
+  if (codexPills.length) codexPills[0].brandMark = 'codex'
   const groups: Pill[][] = [claude, codexPills]
   if (session.cost !== undefined) {
     const context = session.contextFill === undefined ? '' : `; context ${session.contextFill.toFixed(1)}%`
@@ -137,7 +139,15 @@ export function pillSvg(pill: Pill): string {
   const height = 24
   const baseline = 16
   let x = 10
+  let brandMark = ''
+  if (pill.brandMark === 'claude') {
+    brandMark = `<g data-brand-mark="claude" transform="translate(${x},6)" stroke="${pill.color}" stroke-width="1.5" stroke-linecap="round"><path d="M6 0v12M0 6h12M1.76 1.76l8.48 8.48M10.24 1.76l-8.48 8.48"/></g>`
+  } else if (pill.brandMark === 'codex') {
+    brandMark = `<g data-brand-mark="codex" transform="translate(${x},6)" fill="none" stroke="${pill.color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l5 5-5 5M8 10h4"/></g>`
+  }
+  if (pill.brandMark) x += Math.max(12, textWidth(pill.brandMark === 'claude' ? '✻' : '>_', 12)) + 4
   let inner = `<text x="${x}" y="${baseline}" font-size="12">${escapeXml(pill.label)}</text>`
+  inner = brandMark + inner
   x += textWidth(pill.label, 12) + 8
   if (pill.percent !== undefined) {
     const barWidth = 46
@@ -192,7 +202,8 @@ export function terminalBar(pill: Pill): string | undefined {
 
 function terminalPill(Text, pill: Pill) {
   const bar = terminalBar(pill)
-  return Text({ color: pill.color, children: [pill.label, ' ', ...(bar ? [bar, ' '] : []), pill.value, ...(pill.countdown ? [' │ ◷ ', pill.countdown] : [])] })
+  const mark = pill.brandMark === 'claude' ? '✻' : pill.brandMark === 'codex' ? '>_' : undefined
+  return Text({ color: pill.color, children: [...(mark ? [mark, ' '] : []), pill.label, ' ', ...(bar ? [bar, ' '] : []), pill.value, ...(pill.countdown ? [' │ ◷ ', pill.countdown] : [])] })
 }
 
 let timerStarted = false
@@ -220,7 +231,7 @@ export function registerUsage(on) {
       const terminal = e.surface === 'terminal' || !Svg
       const rendered = groups.map((group, groupIndex) => Box({
         key: `purser-usage-group-${groupIndex}`,
-        flexDirection: 'row', gap: 1,
+        flexDirection: 'row', flexWrap: 'wrap', gap: 1,
         children: group.map(pill => terminal ? terminalPill(Text, pill) : Svg({ key: pill.id, source: pillSvg(pill), alt: pill.detail })),
       }))
       const band = Box({ flexDirection: 'row', flexWrap: 'wrap', gap: terminal ? 3 : 1, children: rendered })
