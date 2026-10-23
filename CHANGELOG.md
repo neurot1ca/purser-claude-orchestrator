@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.190 — 2026-10-23
+
+- **Fixed:** a worktree snapshot or Git failure now reports the failed operation and a bounded cause instead of a bare `WORKTREE_SNAPSHOT_FAILED`.
+- **Fixed:** untracked files that disappear between listing and copying no longer fail the worktree snapshot.
+- **Fixed:** `plan accept` validates write paths only for the milestones being accepted.
+- **Added:** worktree jobs refuse `sandbox: danger-full-access`, and a job reports main-checkout files that changed while it ran, forcing a full review.
+- **Changed:** the dispatcher agent passes only the coder settings main Claude supplied.
+
 ## 0.1.189 — 2026-10-21
 
 - **Fixed:** after a compaction, a handoff note older than 12 hours is no longer restored; only the recent turns and reply language carry over.
