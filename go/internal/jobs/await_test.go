@@ -73,13 +73,26 @@ func TestAwaitHostPythonAcknowledgementOutcomes(t *testing.T) {
 			t.Fatalf("unconfirmed host result differs from Python: %#v", got)
 		}
 	})
-	t.Run("missing acknowledgement times out", func(t *testing.T) {
+	t.Run("pidless unacknowledged launch is terminal and waiter exits", func(t *testing.T) {
 		stateRoot := t.TempDir()
 		writeAwaitRecord(t, stateRoot, map[string]any{"jobId": id, "state": "QUEUED", "acceptedAt": 10, "deadlineAt": 20})
 		got := awaitHost(stateRoot, id, time.Millisecond)
 		value := got["structuredContent"].(map[string]any)
-		if value["errorCode"] != "PROCESS_UNCONFIRMED" || value["message"] != "Host ownership was not acknowledged" {
+		if value["state"] != "FAILED" || value["errorCode"] != "HOST_LAUNCH_UNCONFIRMED" {
 			t.Fatalf("timeout result differs from Python: %#v", got)
+		}
+		waited := Wait(stateRoot, id)
+		if waited.ExitCode != 1 || len(waited.Lines) != 1 || waited.Lines[0] != "purser-wait "+id+" FAILED" {
+			t.Fatalf("waiter did not return terminal launch failure: %#v", waited)
+		}
+	})
+	t.Run("pidless lease-queued job keeps waiting", func(t *testing.T) {
+		stateRoot := t.TempDir()
+		writeAwaitRecord(t, stateRoot, map[string]any{"jobId": id, "state": "QUEUED", "leaseQueued": true,
+			"acceptedAt": 10, "deadlineAt": 20})
+		got := awaitHost(stateRoot, id, time.Millisecond)["structuredContent"].(map[string]any)
+		if got["state"] != "UNKNOWN_OR_IN_PROGRESS" || got["errorCode"] != "PROCESS_UNCONFIRMED" {
+			t.Fatalf("lease-queued job did not remain pending: %#v", got)
 		}
 	})
 	t.Run("dead recorded queued host fails launch", func(t *testing.T) {

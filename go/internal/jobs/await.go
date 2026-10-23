@@ -77,6 +77,18 @@ func finishUnconfirmedLaunch(stateRoot, jobID string) bool {
 	}
 	pidValue, pidOK := recoveryInteger(record, "hostPid")
 	created, createdOK := recoveryInteger(record, "hostCreatedAt")
+	if !pidOK || pidValue <= 0 {
+		if truthy(values["leaseQueued"]) {
+			return false
+		}
+		if err := finishJob(dir, jobID, "FAILED", "HOST_LAUNCH_UNCONFIRMED", nil,
+			"Host launch was not acknowledged and no host identity was recorded",
+			float64(time.Now().UnixNano())/1e9, FinishOptions{}); err != nil {
+			return false
+		}
+		final := recordMap(readJob(dir, jobID))
+		return final["state"] == "FAILED" && final["errorCode"] == "HOST_LAUNCH_UNCONFIRMED"
+	}
 	pid := int(pidValue)
 	if !pidOK || !createdOK || pidValue <= 0 || int64(pid) != pidValue || created <= 0 ||
 		runtime.GOOS == "windows" && !truthy(values["hostContained"]) ||

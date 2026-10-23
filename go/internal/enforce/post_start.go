@@ -50,7 +50,8 @@ func postStart(event map[string]any, root string) (map[string]any, error) {
 	if configField, ok := event["post_tool_output_field"].(string); ok && (configField == "updatedToolOutput" || configField == "updatedMCPToolOutput") {
 		field = configField
 	}
-	if jobID == "" || jobID != expected || (state != "QUEUED" && state != "RUNNING" && state != "SUCCEEDED" && !hostLaunchUnconfirmed) || codexResponseIsError(event["tool_response"]) {
+	processUnconfirmed := state == "UNKNOWN_OR_IN_PROGRESS" && value["errorCode"] == "PROCESS_UNCONFIRMED"
+	if jobID == "" || jobID != expected || (state != "QUEUED" && state != "RUNNING" && state != "SUCCEEDED" && !hostLaunchUnconfirmed && !processUnconfirmed) || codexResponseIsError(event["tool_response"]) {
 		message := stringValue(value["errorCode"])
 		if message == "" {
 			message = "codex_start failed or returned a mismatched job"

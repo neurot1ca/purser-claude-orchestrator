@@ -347,10 +347,9 @@ func Start(stateRoot string, args map[string]any, opt StartOptions) (map[string]
 	}
 	started := false
 	if opt.Launch != nil {
-		if err = opt.Launch(req.JobID, 1, job["ownershipToken"].(string)); err != nil {
-			return jobResult(map[string]any{"jobId": req.JobID, "state": "UNKNOWN_OR_IN_PROGRESS", "errorCode": "PROCESS_UNCONFIRMED", "message": "Host launch unconfirmed"}), r, nil
+		if err = opt.Launch(req.JobID, 1, job["ownershipToken"].(string)); err == nil {
+			started = true
 		}
-		started = true
 	}
 	if started && req.Agent == "codex" && job["phase"] == "implementation" {
 		if repository := nonemptyString(job["repoRoot"]); repository != "" {

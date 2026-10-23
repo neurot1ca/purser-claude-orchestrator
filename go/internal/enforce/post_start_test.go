@@ -282,6 +282,67 @@ func TestPostStartKeepsDeadUnconfirmedJobOwnedAndReleasesLease(t *testing.T) {
 	}
 }
 
+func TestPostStartReleasesFailedPidlessLaunchLeaseForRetry(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	project := "0123456789abcdef"
+	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
+		"tool_use_id": "pidless-host", "session_id": "pidless-host-session"}
+	owner, _ := callKey(event)
+	call := "pidless-host-start-call"
+	jobID := jobHash(call)
+	pending := map[string]any{"async_call": call, "async_ready": true, "session_id": event["session_id"],
+		"tool_use_id": event["tool_use_id"], "project_key": project, "repo_root": repo, "lease_owner": owner,
+		"task_id": "retryable-task", "route": "normal", "model": "gpt-test", "effort": "medium",
+		"baseline": map[string]any{}}
+	if err := writeFixtureJSON(filepath.Join(root, "pending", owner+".json"), pending); err != nil {
+		t.Fatal(err)
+	}
+	if got := lease.New(filepath.Join(root, "projects", project)).Acquire(owner, "retryable-task", []string{"src"}, lease.AcquireOptions{JobID: &jobID}, 1800000000); got.Status != "OK" {
+		t.Fatalf("lease setup: %+v", got)
+	}
+	event["tool_response"] = map[string]any{"structuredContent": map[string]any{"jobId": jobID, "state": "FAILED",
+		"errorCode": "HOST_LAUNCH_UNCONFIRMED", "message": "Host launch was not acknowledged"}}
+	if _, err := postStart(event, root); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(filepath.Join(root, "pending", owner+".json")) || !fileExists(filepath.Join(root, "async_jobs", jobID+".json")) {
+		t.Fatal("failed launch lost ownership records needed by codex_cancel")
+	}
+	retry := lease.New(filepath.Join(root, "projects", project)).Acquire("next-owner", "next-task", []string{"src"}, lease.AcquireOptions{}, 1800000001)
+	if retry.Status != "OK" || retry.Code != "LEASE_ACQUIRED" {
+		t.Fatalf("retry on released scope was not admitted: %+v", retry)
+	}
+}
+
+func TestPostStartBindsUnknownLaunchToSessionForCancel(t *testing.T) {
+	root := t.TempDir()
+	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
+		"tool_use_id": "unknown-host", "session_id": "unknown-host-session"}
+	owner, _ := callKey(event)
+	call := "unknown-host-start-call"
+	jobID := jobHash(call)
+	pending := map[string]any{"async_call": call, "async_ready": true, "session_id": event["session_id"],
+		"tool_use_id": event["tool_use_id"], "project_key": "0123456789abcdef", "lease_owner": owner,
+		"task_id": "unknown-task", "baseline": map[string]any{}}
+	if err := writeFixtureJSON(filepath.Join(root, "pending", owner+".json"), pending); err != nil {
+		t.Fatal(err)
+	}
+	event["tool_response"] = map[string]any{"structuredContent": map[string]any{"jobId": jobID, "state": "UNKNOWN_OR_IN_PROGRESS",
+		"errorCode": "PROCESS_UNCONFIRMED", "message": "Host ownership was not acknowledged"}}
+	if _, err := postStart(event, root); err != nil {
+		t.Fatal(err)
+	}
+	cancelEvent := map[string]any{"tool_name": "mcp__codex-main__codex_cancel", "session_id": event["session_id"],
+		"tool_input": map[string]any{"jobId": jobID}}
+	if denied := asyncPreFollowup(cancelEvent, root); len(denied) != 0 {
+		t.Fatalf("own unconfirmed job cancel was denied: %#v", denied)
+	}
+}
+
 func jobHash(call string) string {
 	sum := sha256.Sum256([]byte(call))
 	return hex.EncodeToString(sum[:])
