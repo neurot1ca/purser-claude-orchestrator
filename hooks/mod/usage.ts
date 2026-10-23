@@ -50,6 +50,14 @@ export function mapSessionUsage(value: any, now = Date.now()): SessionData {
   }
 }
 
+export function claudeRateLimitResetAt(value: any, now = Date.now()): number | undefined {
+  const windows = mapSessionUsage(value, now).quota
+  const resets = [windows.fiveHour, windows.sevenDay]
+    .filter((window): window is Window => window !== undefined && window.percent >= 100)
+    .map(window => window.resetAt)
+  return resets.length ? Math.max(...resets) : undefined
+}
+
 // The newest artifact naming a model gives the model pill, even when it carries no quota.
 export function readCodexModel(records: unknown[]): Pick<Quota, 'model' | 'effort'> {
   for (const value of records.slice(0, 20)) {

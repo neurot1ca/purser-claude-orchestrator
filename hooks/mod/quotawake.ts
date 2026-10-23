@@ -1,4 +1,5 @@
 import { platformBinary } from './read.js'
+import { claudeRateLimitResetAt } from './usage.js'
 
 // When Codex work is held for quota, Purser records a wake request with the
 // quota reset time; this wakes the idle session at that time so the held work
@@ -71,4 +72,47 @@ export function registerQuotaWake(on) {
     }
     return result
   })
+}
+
+export const CLAUDE_WAKE_MARKER = '⚓ Claude usage renewed ✓'
+
+export function claudeWakeContext(): string {
+  return `Purser submitted "${CLAUDE_WAKE_MARKER}" because the Claude usage limit reset. Resume the work interrupted by that limit from where it stopped; re-read your task notes or handoff if needed. Do not repeat the marker line. If nothing was in progress, stop.`
+}
+
+export function cancelClaudeWake() {
+  claudeTimer?.cancel()
+  claudeTimer = undefined
+  claudeScheduledFor = undefined
+}
+
+let claudeScheduledFor: number | undefined
+let claudeTimer: { cancel: () => void } | undefined
+
+export function registerClaudeWake(on) {
+  on('prompt.submit', { text: CLAUDE_WAKE_MARKER }, async ($, e, next) => {
+    if (e.origin?.kind === 'plugin') {
+      return next({ ...e, context: [...(e.context ?? []), claudeWakeContext()] })
+    }
+    return next(e)
+  })
+}
+
+export async function scheduleClaudeWake($, error: string) {
+  if (error !== 'rate_limit') return
+  try {
+    const usage = await $.session.usage()
+    const resetAt = claudeRateLimitResetAt(usage, await $.clock.now())
+    if (resetAt === undefined || resetAt === claudeScheduledFor) return
+    claudeScheduledFor = resetAt
+    const delay = Math.max(0, resetAt - (await $.clock.now()) + 60_000)
+    // This timer lives only in the session process; it will not fire if the app closes.
+    claudeTimer = $.clock.after(delay, async () => {
+      claudeTimer = undefined
+      try { await $.prompt.submit({ text: CLAUDE_WAKE_MARKER }) }
+      catch (error) {
+        try { await $.ui.log(`Purser Claude usage wake failed: ${String(error)}`) } catch { /* no log surface */ }
+      }
+    })
+  } catch { /* No usage snapshot or timer: nothing to wake. */ }
 }

@@ -6,7 +6,7 @@ import { registerUsage } from './mod/usage.js'
 import { register as registerEnforcement } from './mod/enforcement.js'
 import { registerAutoCompact } from './mod/autocompact.js'
 import { registerLanguage } from './mod/language.js'
-import { registerQuotaWake } from './mod/quotawake.js'
+import { cancelClaudeWake, registerClaudeWake, registerQuotaWake, scheduleClaudeWake } from './mod/quotawake.js'
 
 const reported = new Set<string>()
 const lifecycleReported = new Set<string>()
@@ -33,6 +33,7 @@ async function detectBinary($): Promise<string> {
 }
 
 async function lifecycle($, e, next, name: LifecycleEvent) {
+  if (name === 'UserPromptSubmit') cancelClaudeWake()
   const prior = await next(e)
   if (name === 'UserPromptSubmit' || name === 'Stop') $.ui.invalidate('ui.render')
   let mapped: ReturnType<typeof mapHookOutput> = {}
@@ -72,6 +73,7 @@ export function register(on) {
   registerAutoCompact(on)
   registerLanguage(on)
   registerQuotaWake(on)
+  registerClaudeWake(on)
 
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
     let sessionId = ''
@@ -102,6 +104,10 @@ export function register(on) {
   })
 
   on('classic.UserPromptSubmit', ($, e, next) => lifecycle($, e, next, 'UserPromptSubmit'))
+  on('classic.StopFailure', async ($, e, next) => {
+    await scheduleClaudeWake($, e.error)
+    return next(e)
+  })
   on('classic.SessionStart', async ($, e, next) => {
     const prior = await next(e)
     return lifecycle($, e, () => prior, 'SessionStart')
