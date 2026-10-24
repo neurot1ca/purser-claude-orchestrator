@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, resetAutoCompactForTests, RESUME_PROMPT, thresholdFrom, WAKE_MARKER, wakeContext } from './autocompact.js'
+import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, resetAutoCompactForTests, RESUME_PROMPT, thresholdFrom, turnIsRunning, WAKE_MARKER, wakeContext } from './autocompact.js'
 
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
 const normalized = (path: string) => path.replace(/\\/g, '/').replace(/(^|:)[A-Za-z]:(?=\/)/g, '$1')
@@ -8,6 +8,7 @@ function engine(on, tokens: number, env: Record<string, string> = {}, failures =
   resetAutoCompactForTests()
   const calls = { compacts: 0 }
   const reads: string[] = []
+  const logs: string[] = []
   const clock = mock.clock(on)
   mock.env(on, { OS: 'Linux', HOME: '/home', ...env })
   on('fs.read', async (_$, e) => {
@@ -17,13 +18,14 @@ function engine(on, tokens: number, env: Record<string, string> = {}, failures =
   })
   on('turn.complete', async () => ({ text: 'ok' }))
   on('prompt.submit', async (_$, e) => ({ text: e.text, origin: e.origin }))
+  on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
   on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [] } }))
   on('session.compact', async (_$, e) => {
     calls.compacts++
     if (calls.compacts <= failures) throw new Error('a turn is running')
     return { messages: [{ role: 'user', text: 'compacted', toolUses: [] }] }
   })
-  return { calls, clock, reads }
+  return { calls, clock, logs, reads }
 }
 
 test('reads the threshold override and the off switch', () => {
@@ -226,6 +228,20 @@ test('keeps trying on later turns after every retry failed', async ($, on) => {
   expect(calls.compacts).toBe(4)
 })
 
+test('a later completed turn can compact after turn-running refusals', async ($, on) => {
+  const { calls, clock, logs } = engine(on, 260_000, {}, 3)
+  await $.turn.complete(TURN)
+  await $.prompt.submit({ text: 'next turn', asUser: true })
+  await clock.advance(14_000)
+  expect(calls.compacts).toBe(3)
+  expect(logs.some(line => line.startsWith('Purser auto-compact:') && line.includes('a turn is running'))).toBe(false)
+
+  await $.turn.complete({ ...TURN, turnId: 't2' })
+  await clock.advance(1_000)
+  expect(calls.compacts).toBe(4)
+  expect(logs.some(line => line.includes('compacted at 260000 tokens'))).toBe(true)
+})
+
 test('writes each main turn decision to the auto-compact log', async ($, on) => {
   const { clock } = engine(on, 260_000, { USERPROFILE: 'C:/home', OS: 'Windows_NT' })
   const writes: Record<string, string> = {}
@@ -243,6 +259,8 @@ test('writes each main turn decision to the auto-compact log', async ($, on) => 
 test('recognises the SDK-host refusal that needs a /compact prompt', () => {
   expect(needsCompactPrompt(new Error('HooksError: purser: $.session.compact: not available in a headless (-p / SDK) session yet'))).toBe(true)
   expect(needsCompactPrompt(new Error('a turn is running'))).toBe(false)
+  expect(turnIsRunning(new Error('HooksError: purser: $.session.compact: a turn is running (t1)'))).toBe(true)
+  expect(turnIsRunning(new Error('unrelated compact failure'))).toBe(false)
 })
 
 test('compact notice reports the measured saving; the visible wake line stays language-neutral', () => {

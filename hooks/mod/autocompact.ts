@@ -96,6 +96,10 @@ export function needsCompactPrompt(error: unknown): boolean {
   return String(error).includes('headless')
 }
 
+export function turnIsRunning(error: unknown): boolean {
+  return String(error).includes('a turn is running')
+}
+
 async function log($, text: string) {
   await trace($, text)
   try { await $.ui.log(`Purser auto-compact: ${text}`) } catch { /* as above */ }
@@ -149,7 +153,8 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
       // The headless refusal is the expected path on an SDK host, not a failure
       // to show the person; only the trace keeps it.
       const text = `attempt ${attempt + 1} failed at ${tokens} tokens: ${String(error)}`
-      await (needsCompactPrompt(error) ? trace($, text) : log($, text))
+      const turnRunning = turnIsRunning(error)
+      await (needsCompactPrompt(error) || turnRunning ? trace($, text) : log($, text))
       // An SDK host (the desktop Code tab, -p) compacts only through the /compact
       // command, so queue it (it runs once the session is idle) instead of
       // retrying a call that cannot succeed.
@@ -161,6 +166,9 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
           },
           (runError) => log($, `/compact failed at ${tokens} tokens: ${String(runError)}`),
         ).finally(() => { inFlight = false })
+      } else if (turnRunning && !idle) {
+        inFlight = false
+        await trace($, `stopped retries at ${tokens} tokens because a new turn started`)
       } else if (attempt + 1 < RETRY_DELAYS_MS.length) compactWhenIdle($, tokens, attempt + 1)
       else inFlight = false
     }
