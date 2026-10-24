@@ -204,6 +204,27 @@ func Stop(event map[string]any, started time.Time) []byte {
 			}
 		}
 	}
+	todosReason := ""
+	if latestUser >= 0 && !questionTurn && planReason == "" {
+		openTitles := openTranscriptTasks(records)
+		if len(openTitles) > 0 {
+			openSet := strings.Join(openTitles, "; ")
+			reminded, _ := state["todos_reminded"].(map[string]any)
+			remindedUser, remindedUserOK := exactInteger(reminded["user_index"])
+			if !remindedUserOK || remindedUser != latestUser || str(reminded["open_set"]) != openSet {
+				state["todos_reminded"] = map[string]any{"user_index": latestUser, "open_set": openSet}
+				shown := make([]string, min(3, len(openTitles)))
+				for i, title := range openTitles[:len(shown)] {
+					shown[i] = runePrefix(title, 60)
+				}
+				more := ""
+				if remaining := len(openTitles) - len(shown); remaining > 0 {
+					more = fmt.Sprintf(", +%d more", remaining)
+				}
+				todosReason = "Approved work is still open in your task list: " + strings.Join(shown, ", ") + more + ". Continue it now unless it needs a real user decision; if an item is obsolete, mark it completed or remove it."
+			}
+		}
+	}
 	if notice, ok := state["notice_pending"].(map[string]any); ok && validNoticePending(notice) && notice["blocked"] != true {
 		if !autoCompactModActive() {
 			notice["blocked"] = true
@@ -239,6 +260,10 @@ func Stop(event map[string]any, started time.Time) []byte {
 	if planReason != "" {
 		reasons = append(reasons, planReason)
 		kinds["plan"] = true
+	}
+	if todosReason != "" {
+		reasons = append(reasons, todosReason)
+		kinds["todos"] = true
 	}
 	if changed || len(reasons) > 0 {
 		if writeAdvisorState(path, state) != nil {
