@@ -62,13 +62,10 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 		return run(dir, args, 30*time.Second, operation, input, nil)
 	}
 	restore := func(base string) error {
-		if _, err := git(worktree, []string{"read-tree", "--reset", base}, nil, "restoring worker index"); err != nil {
+		if _, err := git(worktree, []string{"read-tree", "--reset", "-u", base}, nil, "restoring worker index"); err != nil {
 			return err
 		}
 		if _, err := git(worktree, []string{"clean", "-fd"}, nil, "clearing replay worktree"); err != nil {
-			return err
-		}
-		if _, err := git(worktree, []string{"checkout-index", "--all", "--force"}, nil, "restoring worker baseline"); err != nil {
 			return err
 		}
 		return copyReplayTree(filepath.Join(recovery, "worker-tree"), worktree)
@@ -219,13 +216,11 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 		return nil, err
 	}
 	mutatingWorktree = true
-	if _, err := git(worktree, []string{"read-tree", "--reset", current}, nil, "resetting replay index"); err != nil {
+	// Move tracked files with the index before clean applies the checkout's ignore rules.
+	if _, err := git(worktree, []string{"read-tree", "--reset", "-u", current}, nil, "resetting replay index"); err != nil {
 		return nil, err
 	}
 	if _, err := git(worktree, []string{"clean", "-fd"}, nil, "clearing replay worktree"); err != nil {
-		return nil, err
-	}
-	if _, err := git(worktree, []string{"checkout-index", "--all", "--force"}, nil, "restoring current checkout snapshot"); err != nil {
 		return nil, err
 	}
 	if len(patch) > 0 {

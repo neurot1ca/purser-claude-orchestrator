@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +44,50 @@ func TestPrepareJobReplayStagesOnlyJobPaths(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(worker, "other.txt")); string(got) != "other\n" {
 		t.Fatalf("outside-scope checkout content leaked into replay snapshot: %q", got)
+	}
+}
+
+func TestPrepareJobReplayMatchesSnapshotOutsideJobPaths(t *testing.T) {
+	base := gitTempDir(t)
+	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
+	initReplayRepository(t, repo, "")
+	writePatchTestFile(t, filepath.Join(repo, "removed.txt"), []byte("remove me\n"))
+	writePatchTestFile(t, filepath.Join(repo, ".gitignore"), []byte("removed.txt\n"))
+	git(t, repo, "add", ".gitignore")
+	git(t, repo, "add", "-f", "removed.txt")
+	git(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "initial removed path")
+	snapshot := stringsOutput(t, repo, "rev-parse", "HEAD^{tree}")
+	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
+	writePatchTestFile(t, filepath.Join(repo, "other.txt"), []byte("newer\n"))
+	writePatchTestFile(t, filepath.Join(repo, "later.txt"), []byte("main addition\n"))
+	writePatchTestFile(t, filepath.Join(repo, ".gitignore"), nil)
+	if err := os.Remove(filepath.Join(repo, "removed.txt")); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "add", "-A")
+	git(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "main moved")
+	writePatchTestFile(t, filepath.Join(worker, "tracked.txt"), []byte("worker\n"))
+	prepared, err := PrepareJobReplay(repo, worker, snapshot, filepath.Join(base, "recovery"))
+	if err != nil || prepared["status"] != "prepared" {
+		t.Fatalf("prepare=%#v err=%v", prepared, err)
+	}
+	current := prepared["snapshot"].(string)
+	delta := ComputeJobDelta(worker, current)
+	if delta["status"] != OK || !reflect.DeepEqual(delta["changed_paths"], []string{"tracked.txt"}) {
+		t.Fatalf("non-job paths leaked into replay delta: %#v", delta)
+	}
+	patch, err := JobPatch(worker, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths, err := JobPatchPaths(worker, patch); err != nil || !reflect.DeepEqual(paths, []string{"tracked.txt"}) {
+		t.Fatalf("patch paths=%v err=%v", paths, err)
+	}
+	if applied := ApplyJobPatch(repo, patch); applied["applied"] != true {
+		t.Fatalf("apply=%#v", applied)
+	}
+	if got := stringsOutput(t, repo, "diff", "--name-only", "HEAD"); got != "tracked.txt" {
+		t.Fatalf("apply changed non-job paths: %q", got)
 	}
 }
 

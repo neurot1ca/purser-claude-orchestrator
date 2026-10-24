@@ -624,6 +624,79 @@ func TestReplyAfterAppliedWorktreeFinalizesOnlyReplyDelta(t *testing.T) {
 	}
 }
 
+func TestAsyncWorktreeDeltaContainsOnlyWorkerPathsAfterMainCommit(t *testing.T) {
+	state, repo, event, index, pending, original, job, resolved, loaded := newAsyncSuccessCase(t, "job_snapshot_delta")
+	runAsyncSuccessGit(t, repo, "config", "core.autocrlf", "true")
+	oldCheckpoint := filepath.Join(repo, "checkpoint-before-start.md")
+	if err := os.WriteFile(oldCheckpoint, []byte("old checkpoint\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("checkpoint-before-start.md\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runAsyncSuccessGit(t, repo, "add", "-f", ".gitignore", "checkpoint-before-start.md")
+	runAsyncSuccessGit(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "initial checkpoint")
+	created, err := ledger.CreateJobWorktree(repo, "job-snapshot-delta", filepath.Join(state, "worktrees"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktree, snapshot := created["path"], created["snapshot"]
+	job["worktreePath"], job["snapshot"], job["repoRoot"] = worktree, snapshot, repo
+	if err = writeAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"), job); err != nil {
+		t.Fatal(err)
+	}
+
+	mainFile := filepath.Join(repo, "checkpoint-after-start.md")
+	if err = os.WriteFile(mainFile, []byte("main commit\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(oldCheckpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(repo, ".gitignore"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	runAsyncSuccessGit(t, repo, "add", "-A")
+	runAsyncSuccessGit(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "main commit after job start")
+	if err = os.WriteFile(filepath.Join(worktree, "src", "file.go"), []byte("package src\n// worker change\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := responseBundle(t, response)
+	if !reflect.DeepEqual(bundle["changed_paths"], []any{"src/file.go"}) {
+		t.Fatalf("review delta includes main commit paths: %#v", bundle["changed_paths"])
+	}
+	stored, err := readAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"))
+	if err != nil || stored["snapshot"] == snapshot || stored["snapshot"] != bundle["baseline_head"] {
+		t.Fatalf("review did not use the prepared replay snapshot: job=%v bundle=%v original=%s err=%v", stored["snapshot"], bundle["baseline_head"], snapshot, err)
+	}
+	snapshot = stringValue(stored["snapshot"])
+	patch, err := ledger.JobPatch(worktree, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths, err := ledger.JobPatchPaths(worktree, patch); err != nil || !reflect.DeepEqual(paths, []string{"src/file.go"}) {
+		t.Fatalf("apply patch paths=%v err=%v", paths, err)
+	}
+	if applied := ledger.ApplyJobPatch(repo, patch); applied["applied"] != true {
+		t.Fatalf("worker patch did not apply: %#v", applied)
+	}
+	if got, err := os.ReadFile(mainFile); err != nil || string(got) != "main commit\n" {
+		t.Fatalf("later main commit was not preserved: %q err=%v", got, err)
+	}
+	if _, err := os.Stat(oldCheckpoint); !os.IsNotExist(err) {
+		t.Fatalf("apply restored main's deleted checkpoint: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(repo, "src", "file.go")); err != nil || strings.ReplaceAll(string(got), "\r\n", "\n") != "package src\n// worker change\n" {
+		t.Fatalf("worker change was not applied: %q err=%v", got, err)
+	}
+}
+
 func TestUnfinalizableAsyncResultIsTerminal(t *testing.T) {
 	root := t.TempDir()
 	id := jobHash("unfinalizable async result")
