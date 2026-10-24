@@ -203,7 +203,8 @@ export function registerAutoCompact(on) {
       if ((cacheCreation?.ephemeral_1h_input_tokens ?? 0) > 0) cacheTtlMs = LONG_CACHE_TTL_MS
       else if (cacheTtlMs !== LONG_CACHE_TTL_MS) {
         if ((cacheCreation?.ephemeral_5m_input_tokens ?? 0) > 0) cacheTtlMs = DEFAULT_CACHE_TTL_MS
-        else if (inferLongCache && cacheReads > 0) cacheTtlMs = LONG_CACHE_TTL_MS
+        // TurnUsage omits the TTL breakdown; allow an hour for writes with an unknown TTL.
+        else if ((e.usage?.cache_creation_input_tokens ?? 0) > 0 || (inferLongCache && cacheReads > 0)) cacheTtlMs = LONG_CACHE_TTL_MS
       }
       const compacting = tokens !== undefined && tokens >= threshold
       await trace($, `turn ${e.turnId}: ${tokens ?? 'no'} tokens, threshold ${threshold}, ${compacting ? 'compacting' : 'below'}`)
