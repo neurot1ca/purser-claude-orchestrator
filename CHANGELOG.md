@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.195 — 2026-10-24
+
+- **Fixed:** auto-compact no longer prints a failure line when the session is busy with a turn; it retries quietly after the next turn.
+
 ## 0.1.194 — 2026-10-24
 
 - **Fixed:** the Stop hook reminds Claude once per turn to continue approved work still open in its task list, unless the turn ends with a question; the orchestrator skill asks Claude to track approved multi-step work there.
