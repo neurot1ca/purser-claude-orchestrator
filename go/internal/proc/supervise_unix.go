@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -96,7 +97,7 @@ func guardMain(config supervisorConfig) int {
 		sendEvent(supervisionEvent{Kind: "stopped", Confirmed: true}, err)
 		return 1
 	}
-	// Never reap the anchor before the only group kill. Its unreleased identity
+	// Never reap the anchor before the last group kill. Its unreleased identity
 	// prevents a root-exit/PID-reuse race from targeting an unrelated group.
 	events := make(chan supervisionEvent, 2)
 	go func() {
@@ -207,6 +208,17 @@ func observeAnchoredGroup(pid int, until time.Time) (bool, error) {
 		}
 		if stopped {
 			return true, nil
+		}
+		if runtime.GOOS == "darwin" {
+			// Darwin signals a snapshot of the group; a concurrent fork can
+			// miss a sweep. The unreaped anchor still pins this group ID.
+			if killErr := killSupervisedGroup(-pid, syscall.SIGKILL); killErr != nil {
+				stopped, err := observeSupervisedGroup(pid)
+				if err == nil && stopped {
+					return true, nil
+				}
+				return false, errors.Join(killErr, err)
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
