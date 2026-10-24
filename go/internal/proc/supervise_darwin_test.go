@@ -12,10 +12,12 @@ func TestSupervisionResweepsLiveGroup(t *testing.T) {
 		name      string
 		killErr   error
 		confirmed bool
+		wantErr   error
 	}{
-		{"late_child", nil, true},
-		{"denied", syscall.EPERM, false},
-		{"exited_before_resweep", syscall.ESRCH, true},
+		{"late_child", nil, true, nil},
+		{"permission_denied_while_stopping", syscall.EPERM, true, nil},
+		{"group_gone_before_resweep", syscall.ESRCH, true, nil},
+		{"unexpected_error", syscall.EACCES, false, syscall.EACCES},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			originalKill, originalObserve := killSupervisedGroup, observeSupervisedGroup
@@ -28,19 +30,21 @@ func TestSupervisionResweepsLiveGroup(t *testing.T) {
 				kills++
 				return tc.killErr
 			}
+			observations := 0
 			observeSupervisedGroup = func(pid int) (bool, error) {
 				if pid != 123 {
 					t.Fatalf("group = %d", pid)
 				}
-				// A child missed the initial kill. A second sweep must stop it;
-				// a failed sweep cannot confirm a group still observed alive.
-				return kills > 0 && tc.confirmed, nil
+				observations++
+				// The first observation sees a live group. Confirmation after
+				// the resweep must come from a later group observation.
+				return observations > 1 && tc.confirmed, nil
 			}
 			confirmed, err := observeAnchoredGroup(123, time.Now().Add(time.Second))
 			if confirmed != tc.confirmed || kills != 1 {
 				t.Fatalf("confirmation = %t, %v; resweeps = %d", confirmed, err, kills)
 			}
-			if tc.confirmed && err != nil || !tc.confirmed && !errors.Is(err, tc.killErr) {
+			if tc.wantErr == nil && err != nil || tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
 				t.Fatalf("confirmation error = %v", err)
 			}
 		})
