@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.193 — 2026-10-24
+
+- **Fixed:** host validation keeps the head and tail of a log past its 1 MB cap and names failing packages instead of reporting a timeout.
+- **Fixed:** applying a job replays only the worker's paths onto the current checkout, so unrelated changes made since the snapshot are no longer committed or reverted.
+- **Fixed:** on macOS the supervisor keeps killing a job's process group until teardown is confirmed.
+- **Fixed:** the idle auto-compact timer waits an hour when the cache TTL is unknown instead of compacting after five minutes.
+
 ## 0.1.192 — 2026-10-24
 
 - **Fixed:** a job whose host launch was never acknowledged and recorded no host identity now fails with `HOST_LAUNCH_UNCONFIRMED` instead of staying queued, and its session can cancel it.
