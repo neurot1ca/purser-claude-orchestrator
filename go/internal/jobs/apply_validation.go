@@ -89,6 +89,8 @@ type applyValidation struct {
 	Commands       []string       `json:"commands,omitempty"`
 	Counts         map[string]int `json:"counts,omitempty"`
 	FailedTests    []string       `json:"failing_tests,omitempty"`
+	FailedPackages []string       `json:"failing_packages,omitempty"`
+	RunningPackage string         `json:"running_package,omitempty"`
 	UpdatedAt      string         `json:"updated_at"`
 	PID            int            `json:"pid,omitempty"`
 	Identity       int64          `json:"identity,omitempty"`
@@ -669,7 +671,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 				if errors.Is(err, errTreeUnconfirmed) {
 					return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
 				}
-				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), "go test failed")
+				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), validationCommandFailureReason("go test", err, &record))
 			}
 		}
 	}
@@ -754,6 +756,19 @@ func validationFailureState(err error) string {
 		return "launch_error"
 	}
 	return "failed"
+}
+
+func validationCommandFailureReason(label string, err error, record *applyValidation) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		if record != nil && record.RunningPackage != "" {
+			return label + " timed out while package " + record.RunningPackage + " was running"
+		}
+		return label + " timed out"
+	}
+	if record != nil && len(record.FailedPackages) == 0 && len(record.FailedTests) == 0 {
+		return label + " failed: " + err.Error() + "; no failing package found in output"
+	}
+	return label + " failed"
 }
 
 // RecoverApplyValidations marks detached checks left without a live owner as interrupted.
@@ -863,25 +878,54 @@ func mapValidationState(status, reason string) string {
 func summarizeApplyValidationFailure(_ *applyValidation, _ string) {}
 
 type limitedCapture struct {
-	file  io.Writer
-	limit int64
-	kept  int64
+	file     io.Writer
+	limit    int64
+	kept     int64
+	head     int64
+	tail     []byte
+	overflow bool
 }
 
 func (w *limitedCapture) Write(p []byte) (int, error) {
 	n := len(p)
-	if w.kept < w.limit {
+	if w.kept < w.head {
 		take := int64(n)
-		if take > w.limit-w.kept {
-			take = w.limit - w.kept
+		if take > w.head-w.kept {
+			take = w.head - w.kept
 		}
 		written, err := w.file.Write(p[:take])
 		w.kept += int64(written)
 		if err != nil {
 			return written, err
 		}
+		p = p[take:]
+	}
+	if len(p) > 0 {
+		const marker = "\n...[validation output truncated; tail follows]...\n"
+		capacity := int(w.limit - int64(len(marker)))
+		if capacity > 0 {
+			tailLimit := capacity - int(w.head)
+			if tailLimit > 0 {
+				w.tail = append(w.tail, p...)
+				if len(w.tail) > tailLimit {
+					w.overflow = true
+					w.tail = append(w.tail[:0], w.tail[len(w.tail)-tailLimit:]...)
+				}
+			}
+		}
 	}
 	return n, nil
+}
+
+func (w *limitedCapture) Finish() error {
+	if w.overflow {
+		marker := []byte("\n...[validation output truncated; tail follows]...\n")
+		if _, err := w.file.Write(marker); err != nil {
+			return err
+		}
+	}
+	_, err := w.file.Write(w.tail)
+	return err
 }
 
 func runValidationCommand(dir string, env, args []string, timeout time.Duration, log io.Writer, record *applyValidation) error {
@@ -902,13 +946,19 @@ func runValidationCommand(dir string, env, args []string, timeout time.Duration,
 			capture.kept = info.Size()
 		}
 	}
-	parsed := &boundedValidationBuffer{}
+	if capture.kept > capture.limit {
+		capture.kept = capture.limit
+	}
+	available := capture.limit - capture.kept
+	capture.head = capture.kept + available/2
+	parsed := &testJSONCapture{record: record}
 	if record != nil {
 		cmd.Stdout = io.MultiWriter(capture, parsed)
 	} else {
 		cmd.Stdout = capture
 	}
 	cmd.Stderr = capture
+	defer capture.Finish()
 	receiptPath := ""
 	if file, ok := log.(*os.File); ok {
 		validationPath := strings.TrimSuffix(file.Name(), ".log") + ".json"
@@ -936,15 +986,15 @@ func runValidationCommand(dir string, env, args []string, timeout time.Duration,
 		return err
 	}
 	r, err := supervised.wait()
+	if record != nil {
+		parsed.Finish()
+	}
 	if !r.Confirmed {
 		return errors.Join(err, errTreeUnconfirmed)
 	}
 
 	if ctx.Err() != nil {
 		return ctx.Err()
-	}
-	if record != nil {
-		parseTestJSON(bytes.NewBuffer(parsed.data), record)
 	}
 	return err
 }
@@ -960,52 +1010,122 @@ func setValidationChildEnv(env []string) []string {
 	return append(filtered, applyValidationChildEnv+"=1")
 }
 
-type boundedValidationBuffer struct{ data []byte }
-
-func (b *boundedValidationBuffer) Write(value []byte) (int, error) {
-	n := len(value)
-	remaining := validationOutputLimit - len(b.data)
-	if remaining > 0 {
-		if n > remaining {
-			n = remaining
-		}
-		b.data = append(b.data, value[:n]...)
-	}
-	return len(value), nil
+type testJSONCapture struct {
+	record      *applyValidation
+	pending     []byte
+	running     []string
+	discardLine bool
 }
 
-func parseTestJSON(data *bytes.Buffer, record *applyValidation) {
+func (b *testJSONCapture) Write(value []byte) (int, error) {
+	original := len(value)
+	for len(value) > 0 {
+		end := bytes.IndexByte(value, '\n')
+		if end < 0 {
+			if b.discardLine {
+				break
+			}
+			if len(b.pending)+len(value) <= validationOutputLimit {
+				b.pending = append(b.pending, value...)
+			} else {
+				b.pending = b.pending[:0]
+				b.discardLine = true
+			}
+			break
+		}
+		if b.discardLine {
+			b.discardLine = false
+			b.pending = b.pending[:0]
+			value = value[end+1:]
+			continue
+		}
+		if len(b.pending)+end > validationOutputLimit {
+			b.pending = b.pending[:0]
+			b.discardLine = false
+			value = value[end+1:]
+			continue
+		}
+		b.pending = append(b.pending, value[:end]...)
+		parseTestJSONLine(b.pending, b)
+		b.pending = b.pending[:0]
+		value = value[end+1:]
+	}
+	return original, nil
+}
+
+func (b *testJSONCapture) Finish() {
+	if len(b.pending) > 0 {
+		parseTestJSONLine(b.pending, b)
+		b.pending = nil
+	}
+}
+
+func parseTestJSONLine(data []byte, capture *testJSONCapture) {
+	record := capture.record
 	if record.Counts == nil {
 		record.Counts = map[string]int{}
 	}
-	dec := json.NewDecoder(bytes.NewReader(data.Bytes()))
-	for {
-		var event struct {
-			Action string
-			Test   string
-		}
-		if dec.Decode(&event) != nil {
-			break
-		}
-		if event.Test != "" {
-			switch event.Action {
-			case "pass":
-				record.Counts["tests_passed"]++
-			case "fail":
-				record.Counts["tests_failed"]++
-				if len(record.FailedTests) < 100 {
-					record.FailedTests = append(record.FailedTests, event.Test)
-				}
-			case "skip":
-				record.Counts["tests_skipped"]++
+	var event struct {
+		Action  string
+		Test    string
+		Package string
+	}
+	if json.Unmarshal(bytes.TrimSpace(data), &event) != nil {
+		return
+	}
+	if event.Test != "" {
+		switch event.Action {
+		case "pass":
+			record.Counts["tests_passed"]++
+		case "fail":
+			record.Counts["tests_failed"]++
+			if len(record.FailedTests) < 100 {
+				record.FailedTests = append(record.FailedTests, event.Test)
 			}
-		} else if event.Action == "pass" {
+		case "skip":
+			record.Counts["tests_skipped"]++
+		}
+	} else if event.Package != "" {
+		switch event.Action {
+		case "run":
+			found := false
+			for _, running := range capture.running {
+				if running == event.Package {
+					found = true
+					break
+				}
+			}
+			if !found {
+				capture.running = append(capture.running, event.Package)
+			}
+			record.RunningPackage = event.Package
+		case "pass":
 			record.Counts["packages_passed"]++
-		} else if event.Action == "fail" {
+			capture.finishPackage(event.Package)
+		case "fail":
 			record.Counts["packages_failed"]++
+			capture.finishPackage(event.Package)
+			if len(record.FailedPackages) < 100 {
+				record.FailedPackages = append(record.FailedPackages, event.Package)
+			}
 		}
 	}
 	sort.Strings(record.FailedTests)
+	sort.Strings(record.FailedPackages)
+}
+
+func (b *testJSONCapture) finishPackage(pkg string) {
+	for i, running := range b.running {
+		if running == pkg {
+			b.running = append(b.running[:i], b.running[i+1:]...)
+			break
+		}
+	}
+	if len(b.running) == 0 {
+		b.record.RunningPackage = ""
+	} else {
+		b.record.RunningPackage = b.running[len(b.running)-1]
+	}
 }
 
 func validationEnvironment(root string) []string {

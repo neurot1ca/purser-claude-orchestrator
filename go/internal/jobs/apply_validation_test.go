@@ -509,6 +509,14 @@ func TestValidationTimeout(t *testing.T) {
 
 func TestValidationCommandHelper(t *testing.T) {
 	switch os.Getenv("PURSER_VALIDATION_COMMAND_HELPER") {
+	case "pass-exit":
+		for _, pkg := range []string{"one", "two", "three"} {
+			_, _ = io.WriteString(os.Stdout, `{"Action":"pass","Package":"example.test/`+pkg+`"}`+"\r\nok\texample.test/"+pkg+"\r\n")
+		}
+		os.Exit(1)
+	case "package-timeout":
+		_, _ = io.WriteString(os.Stdout, `{"Action":"run","Package":"example.test/slow"}`+"\n")
+		time.Sleep(30 * time.Second)
 	case "worker":
 		_, _ = io.WriteString(os.Stdout, "worker output before exit\n")
 		child := exec.Command(os.Args[0], "-test.run=^TestValidationCommandHelper$")
@@ -521,6 +529,78 @@ func TestValidationCommandHelper(t *testing.T) {
 		time.Sleep(30 * time.Second)
 	case "timeout":
 		time.Sleep(30 * time.Second)
+	}
+}
+
+func TestLimitedCaptureKeepsHeadAndTailWithinLimit(t *testing.T) {
+	var output strings.Builder
+	capture := &limitedCapture{file: &output, limit: 160, head: 64}
+	input := strings.Repeat("h", 64) + strings.Repeat("m", 256) + "FINAL-PACKAGE-SUMMARY"
+	if n, err := capture.Write([]byte(input)); err != nil || n != len(input) {
+		t.Fatalf("Write = %d, %v", n, err)
+	}
+	if err := capture.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	if len(got) > 160 || !strings.HasPrefix(got, strings.Repeat("h", 64)) || !strings.Contains(got, "truncated") || !strings.HasSuffix(got, "FINAL-PACKAGE-SUMMARY") {
+		t.Fatalf("captured %d bytes, missing bounded head/tail: %q", len(got), got)
+	}
+}
+
+func TestTestJSONCaptureFindsFailurePastOutputLimit(t *testing.T) {
+	record := &applyValidation{}
+	capture := &testJSONCapture{record: record}
+	if _, err := capture.Write([]byte(strings.Repeat("x", validationOutputLimit+100) + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{
+		`{"Action":"run","Package":"example.test/broken"}` + "\r\n",
+		`{"Action":"fail","Test":"TestLateFailure","Package":"example.test/broken"}` + "\r\n",
+		`{"Action":"fail","Package":"example.test/broken"}` + "\r\n",
+	} {
+		if _, err := capture.Write([]byte(event)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capture.Finish()
+	if record.Counts["packages_failed"] != 1 || len(record.FailedPackages) != 1 || record.FailedPackages[0] != "example.test/broken" || len(record.FailedTests) != 1 || record.FailedTests[0] != "TestLateFailure" {
+		t.Fatalf("late failure not retained: %#v", record)
+	}
+}
+
+func TestValidationTimeoutAndFailureAreDistinct(t *testing.T) {
+	deadline := validationCommandFailureReason("go test", context.DeadlineExceeded, &applyValidation{RunningPackage: "example.test/slow"})
+	failure := validationCommandFailureReason("go test", errors.New("exit status 1"), &applyValidation{})
+	if validationFailureState(context.DeadlineExceeded) != "timeout" || !strings.Contains(deadline, "timed out") || !strings.Contains(deadline, "example.test/slow") {
+		t.Fatalf("timeout result = %q", deadline)
+	}
+	if validationFailureState(errors.New("exit status 1")) != "failed" || failure != "go test failed: exit status 1; no failing package found in output" {
+		t.Fatalf("failure result = %q", failure)
+	}
+}
+
+func TestValidationNonzeroExitWithPassingPackagesStaysFailed(t *testing.T) {
+	log, err := os.CreateTemp(t.TempDir(), "validation.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	env := replaceValidationEnv(os.Environ(), "PURSER_VALIDATION_COMMAND_HELPER", "pass-exit")
+	record := &applyValidation{}
+	err = runValidationCommand(t.TempDir(), env, []string{os.Args[0], "-test.run=^TestValidationCommandHelper$"}, 10*time.Second, log, record)
+	if err == nil || validationFailureState(err) != "failed" || record.Counts["packages_passed"] != 3 {
+		t.Fatalf("run = %v, counts = %#v", err, record.Counts)
+	}
+	if reason := validationCommandFailureReason("go test", err, record); reason != "go test failed: worker exited with code 1; no failing package found in output" {
+		t.Fatalf("failure reason = %q", reason)
+	}
+	if _, err := log.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(log)
+	if err != nil || strings.Count(string(output), "ok\texample.test/") != 3 || strings.Contains(string(output), "FAIL") {
+		t.Fatalf("output = %q, error = %v", output, err)
 	}
 }
 
@@ -557,10 +637,14 @@ func TestValidationCommandDeadlineWhileProcessRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer log.Close()
-	env := replaceValidationEnv(os.Environ(), "PURSER_VALIDATION_COMMAND_HELPER", "timeout")
-	err = runValidationCommand(t.TempDir(), env, []string{os.Args[0], "-test.run=^TestValidationCommandHelper$"}, 100*time.Millisecond, log, nil)
+	env := replaceValidationEnv(os.Environ(), "PURSER_VALIDATION_COMMAND_HELPER", "package-timeout")
+	record := &applyValidation{}
+	err = runValidationCommand(t.TempDir(), env, []string{os.Args[0], "-test.run=^TestValidationCommandHelper$"}, time.Second, log, record)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("runValidationCommand error = %v, want deadline exceeded", err)
+	}
+	if record.RunningPackage != "example.test/slow" || validationCommandFailureReason("go test", err, record) != "go test timed out while package example.test/slow was running" {
+		t.Fatalf("timeout package/reason = %q / %q", record.RunningPackage, validationCommandFailureReason("go test", err, record))
 	}
 }
 
