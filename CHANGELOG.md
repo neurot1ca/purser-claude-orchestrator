@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.194 — 2026-10-24
+
+- **Fixed:** the Stop hook reminds Claude once per turn to continue approved work still open in its task list, unless the turn ends with a question; the orchestrator skill asks Claude to track approved multi-step work there.
+
 ## 0.1.193 — 2026-10-24
 
 - **Fixed:** host validation keeps the head and tail of a log past its 1 MB cap and names failing packages instead of reporting a timeout.
