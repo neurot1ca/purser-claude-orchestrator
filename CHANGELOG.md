@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.197 — 2026-10-25
+
+- **Added:** `purser-hook optimize telemetry` prints a read-only report of jobs and send-backs per task, reviewer outcome per job, input coverage and per-component telemetry health.
+- **Added:** each job record keeps its reviewer identity and outcome, and the learning summary carries those facts per job with explicit zero counts.
+- **Fixed:** telemetry health records failures per component and recovers after a later success; unknown state entries are reported, never deleted.
+- **Fixed:** telemetry projection accepts older aggregate and cursor shapes, and the run note no longer claims success before health is published.
+- **Fixed:** host validation counts a package as passed when `go test` printed `ok` but a leftover child process held its output.
+
 ## 0.1.196 — 2026-10-25
 
 - **Fixed:** the usage band keeps a quota pill after its window resets, showing 0% until the next snapshot instead of hiding it.
