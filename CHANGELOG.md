@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.199 — 2026-10-25
+
+- **Fixed:** on Windows, job record writes retry when an antivirus or indexer handle briefly denies the replace, instead of leaving the job in a stale state.
+
 ## 0.1.198 — 2026-10-25
 
 - **Fixed:** retention ages out thread and plan records older than 90 days instead of reporting a permanent limit breach, and names the breaching entry.
