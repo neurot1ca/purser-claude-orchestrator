@@ -140,8 +140,8 @@ func TestDistillReviewUnavailableAndSkippedAreDistinct(t *testing.T) {
 	root := t.TempDir()
 	unavailable := fixtureSource(t, root, 1)
 	skipped := fixtureSource(t, root, 2)
-	unavailable.Job["reviewerOutcome"] = "unavailable"
-	skipped.Job["reviewerOutcome"] = "skipped"
+	unavailable.Job["reviewerOutcome"] = map[string]any{"execution_status": "UNAVAILABLE", "verdict": "UNAVAILABLE"}
+	skipped.Job["reviewerOutcome"] = map[string]any{"execution_status": "SKIPPED", "verdict": "SKIPPED"}
 	if _, err := DistillJobs(root, []Source{unavailable, skipped}, 100, 10, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +150,85 @@ func TestDistillReviewUnavailableAndSkippedAreDistinct(t *testing.T) {
 	review := counts["review"].(map[string]any)
 	if numberFloat(review["passed"]) != 0 || numberFloat(review["unavailable"]) != 1 || numberFloat(review["skipped"]) != 1 {
 		t.Fatalf("review outcomes = %#v", review)
+	}
+}
+
+func TestReadJobFactsScopesAndDeduplicatesPrecisionEvents(t *testing.T) {
+	root := t.TempDir()
+	id := strings.Repeat("b", 64)
+	job := map[string]any{"jobId": id, "taskId": "task-a", "project_key": "project-a", "state": "SUCCEEDED", "finishedAt": float64(20), "reviewerOutcome": map[string]any{"execution_status": "COMPLETED", "verdict": "NOVEL", "provider": "provider-x", "requested_model": "model-x"}}
+	source := fixtureSource(t, root, 2)
+	source.Job = job
+	if err := os.MkdirAll(filepath.Join(root, "telemetry", "events", "by_task"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	event := `{"event_id":"e1","event_type":"CLAUDE_DECISION_RECORDED","project_key":"project-a","task_id":"task-a","payload":{"source":{"job_id":"` + id + `"},"reviewer1_valid_count":0,"reviewer1_false_count":2}}`
+	wrong := strings.ReplaceAll(event, `"project-a"`, `"project-b"`)
+	if err := os.WriteFile(filepath.Join(root, "telemetry", "events", "by_task", "task-a.jsonl"), []byte(event+"\n"+event+"\n"+wrong+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DistillJobs(root, []Source{source}, 20, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	record := ReadSummary(root)["records"].([]any)[0].(map[string]any)
+	if record["project_key"] != "project-a" || record["review_verdict"] != "NOVEL" || record["review_provider"] != "provider-x" || record["review_model"] != "model-x" {
+		t.Fatalf("normalized identity/reviewer facts = %#v", record)
+	}
+	if record["review"] != nil || numberFloat(record["reviewer1_valid"]) != 0 || record["reviewer1_valid_present"] != true || numberFloat(record["reviewer1_false"]) != 2 {
+		t.Fatalf("unknown verdict or explicit zero was lost: %#v", record)
+	}
+}
+
+func TestTaskSendBackSnapshotIsScopedAndExcludedFromJobSums(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "projects", "project-a", "telemetry", "tasks"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var sources []Source
+	for n := 1; n <= 2; n++ {
+		src := fixtureSource(t, root, n)
+		src.Job["project_key"], src.Job["taskId"] = "project-a", "task-a"
+		delete(src.Job, "reviewerOutcome")
+		src.Job["reviewedOutcome"] = "legacy-result"
+		sources = append(sources, src)
+	}
+	snapshot := `{"project_key":"project-a","task_id":"task-a","claude_acceptance":{"outcome":"rejected","send_backs":4,"applied_as_is":false,"sources":[]}}`
+	if err := os.WriteFile(filepath.Join(root, "projects", "project-a", "telemetry", "tasks", "task-a.json"), []byte(snapshot), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DistillJobs(root, sources, 20, 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	cohort := ReadSummary(root)["cohorts"].(map[string]any)["project-a|normal|model-a|high"].(map[string]any)
+	if cohort["counts"].(map[string]any)["send_backs"] != nil {
+		t.Fatalf("task snapshot was summed into job cohort: %#v", cohort)
+	}
+	records := ReadSummary(root)["records"].([]any)
+	if len(records) != 2 {
+		t.Fatal("job records missing")
+	}
+	for _, raw := range records {
+		record := raw.(map[string]any)
+		if record["acceptance"] != "rejected" || numberFloat(record["send_backs"]) != 4 || record["applied_as_is"] != false {
+			t.Fatalf("nested task acceptance was lost: %#v", record)
+		}
+		if record["review"] != nil || record["reviewedOutcome"] != "legacy-result" {
+			t.Fatalf("legacy reviewer facts changed: %#v", record)
+		}
+	}
+}
+
+func TestStrictCheckpointRejectsCorruption(t *testing.T) {
+	root := t.TempDir()
+	path := summaryPath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"schema_version":1,"sources":{},"records":[],"cohorts":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadCheckpoint(root); err == nil {
+		t.Fatal("corrupt checkpoint accepted")
 	}
 }
 

@@ -74,7 +74,7 @@ func ReadSummary(stateRoot string) Summary {
 		return empty()
 	}
 	var extra any
-	if err := d.Decode(&extra); err != io.EOF {
+	if d.Decode(&extra) != io.EOF {
 		return empty()
 	}
 	if _, ok := value["sources"].([]any); !ok {
@@ -89,6 +89,51 @@ func ReadSummary(stateRoot string) Summary {
 	return value
 }
 
+// ReadCheckpoint returns only a complete, schema-valid checkpoint. It takes the
+// same lock as writers so cleanup can use its source list as a durable ack.
+func ReadCheckpoint(stateRoot string) (Summary, error) {
+	path := summaryPath(stateRoot)
+	unlock, err := contextio.LockFile(filepath.Join(filepath.Dir(path), LockName))
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return readCheckpoint(path)
+}
+
+func readCheckpoint(path string) (Summary, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return empty(), nil
+		}
+		return nil, err
+	}
+	if len(b) > MaxSummaryBytes {
+		return nil, errors.New("learning checkpoint exceeds byte cap")
+	}
+	var value map[string]any
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	if d.Decode(&value) != nil || numInt(value["schema_version"]) != 1 {
+		return nil, errors.New("invalid learning checkpoint")
+	}
+	var extra any
+	if err := d.Decode(&extra); err != io.EOF {
+		return nil, errors.New("invalid learning checkpoint trailer")
+	}
+	if _, ok := value["sources"].([]any); !ok {
+		return nil, errors.New("invalid learning checkpoint sources")
+	}
+	if _, ok := value["records"].([]any); !ok {
+		return nil, errors.New("invalid learning checkpoint records")
+	}
+	if _, ok := value["cohorts"].(map[string]any); !ok {
+		return nil, errors.New("invalid learning checkpoint cohorts")
+	}
+	return value, nil
+}
+
 func DistillJobs(stateRoot string, sources []Source, now float64, maxSources int, existingSources map[string]bool) (map[string]bool, error) {
 	path := summaryPath(stateRoot)
 	unlock, err := contextio.LockFile(filepath.Join(filepath.Dir(path), LockName))
@@ -96,7 +141,10 @@ func DistillJobs(stateRoot string, sources []Source, now float64, maxSources int
 		return nil, err
 	}
 	defer unlock()
-	d := ReadSummary(stateRoot)
+	d, err := readCheckpoint(path)
+	if err != nil {
+		return nil, err
+	}
 	present := existingSources
 	if present == nil {
 		present = map[string]bool{}
@@ -144,12 +192,18 @@ func DistillJobs(stateRoot string, sources []Source, now float64, maxSources int
 		state, _ := src.Job["state"].(string)
 		var record map[string]any
 		if terminal(state) && validNumber(stamp) && id == stem {
-			record = makeRecord(src.Job, task(stateRoot, src.Job), stamp)
+			record = makeRecord(src.Job, ReadJobFacts(stateRoot, src.Job), stamp)
 		}
 		if record != nil && !recorded[id] {
 			mergeRecord(d, record)
 			records = append(records, record)
 			if len(records) > MaxTaskRecords {
+				archive, _ := d["archive"].(map[string]any)
+				if archive == nil {
+					archive = map[string]any{"legacy_derived_totals_suitable": false}
+					d["archive"] = archive
+				}
+				archive["evicted_records"] = numberFloat(archive["evicted_records"]) + float64(len(records)-MaxTaskRecords)
 				records = records[len(records)-MaxTaskRecords:]
 			}
 			recorded[id] = true
@@ -159,6 +213,13 @@ func DistillJobs(stateRoot string, sources []Source, now float64, maxSources int
 	}
 	d["records"] = records
 	d["sources"] = stringsAny(sortedBoolKeys(ids))
+	archive, _ := d["archive"].(map[string]any)
+	if archive == nil {
+		archive = map[string]any{}
+	}
+	archive["covered_sources"] = len(ids)
+	archive["legacy_derived_totals_suitable"] = false
+	d["archive"] = archive
 	b, err := encode(d)
 	if err != nil {
 		return nil, err
@@ -180,46 +241,66 @@ func IsDistilled(stateRoot, identity string) bool {
 
 func terminal(s string) bool {
 	switch s {
-	case "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "EXPIRED":
+	case "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "EXPIRED", "SUPERSEDED":
 		return true
 	}
 	return false
 }
-func task(root string, job map[string]any) map[string]any {
+
+// ReadJobFacts is the shared, read-only normalization boundary for job-linked
+// learning facts and telemetry events.
+func ReadJobFacts(root string, job map[string]any) map[string]any {
 	taskID, _ := job["taskId"].(string)
 	jobID, _ := job["jobId"].(string)
-	if taskID == "" {
-		return map[string]any{}
-	}
+	result := map[string]any{"source_job_id": jobID, "task_id": taskID}
 	b, err := os.ReadFile(filepath.Join(root, "async_jobs", jobID+".json"))
-	if err != nil {
-		return map[string]any{}
-	}
 	var idx map[string]any
-	if json.Unmarshal(b, &idx) != nil {
-		return map[string]any{}
+	if err == nil && json.Unmarshal(b, &idx) == nil {
+		if project, ok := idx["project_key"].(string); ok && project != "" {
+			result["project_key"] = project
+		}
 	}
-	project, ok := idx["project_key"].(string)
-	if !ok {
-		return map[string]any{}
+	if project, ok := job["project_key"].(string); ok && project != "" {
+		result["project_key"] = project
+	}
+	if outcome, ok := job["reviewerOutcome"].(map[string]any); ok {
+		result["reviewer_outcome"] = outcome
+		for _, key := range []string{"verdict", "provider", "requested_model", "execution_status", "skip_reason", "served_model_attestation"} {
+			if value, exists := outcome[key]; exists {
+				result["reviewer_"+key] = value
+			}
+		}
+	}
+	if taskID == "" {
+		return result
+	}
+	project, _ := result["project_key"].(string)
+	if project == "" {
+		return result
 	}
 	// Telemetry task snapshots are the aggregate produced by the Python telemetry builder.
 	projectRoot := filepath.Join(root, "projects", project, "telemetry")
 	b, err = os.ReadFile(filepath.Join(projectRoot, "tasks", taskID+".json"))
-	if err != nil {
-		return map[string]any{}
-	}
-	var result map[string]any
-	d := json.NewDecoder(bytes.NewReader(b))
-	d.UseNumber()
-	if d.Decode(&result) != nil || result["project_key"] != project {
-		return map[string]any{}
+	if err == nil {
+		d := json.NewDecoder(bytes.NewReader(b))
+		d.UseNumber()
+		var snapshot map[string]any
+		if d.Decode(&snapshot) == nil && snapshot["project_key"] == project && snapshot["task_id"] == taskID {
+			result["task_assessment"] = snapshot
+			for key, value := range snapshot {
+				if _, exists := result[key]; !exists {
+					result[key] = value
+				}
+			}
+		}
 	}
 	// Python rebuilds these decision counters from the task index on every pass.
 	index, err := os.Open(filepath.Join(root, "telemetry", "events", "by_task", taskID+".jsonl"))
 	if err == nil {
 		defer index.Close()
 		var valid, falseCount float64
+		validPresent, falsePresent := false, false
+		seen := map[string]bool{}
 		scanner := bufio.NewScanner(index)
 		scanner.Buffer(make([]byte, 4096), MaxSummaryBytes)
 		for scanner.Scan() {
@@ -230,17 +311,30 @@ func task(root string, job map[string]any) map[string]any {
 				continue
 			}
 			payload, _ := event["payload"].(map[string]any)
+			source, _ := payload["source"].(map[string]any)
+			if source["job_id"] != jobID {
+				continue
+			}
+			eventID, _ := event["event_id"].(string)
+			if eventID != "" && seen[eventID] {
+				continue
+			}
+			if eventID != "" {
+				seen[eventID] = true
+			}
 			if validNumber(payload["reviewer1_valid_count"]) {
 				valid += numberFloat(payload["reviewer1_valid_count"])
+				validPresent = true
 			}
 			if validNumber(payload["reviewer1_false_count"]) {
 				falseCount += numberFloat(payload["reviewer1_false_count"])
+				falsePresent = true
 			}
 		}
-		if valid != 0 {
+		if validPresent {
 			result["reviewer1_valid_count"] = valid
 		}
-		if falseCount != 0 {
+		if falsePresent {
 			result["reviewer1_false_count"] = falseCount
 		}
 	}
@@ -248,24 +342,24 @@ func task(root string, job map[string]any) map[string]any {
 }
 
 func makeRecord(job, task map[string]any, stamp any) map[string]any {
-	acceptance, _ := task["claude_acceptance"].(map[string]any)
-	review, _ := job["reviewerOutcome"].(string)
-	skipped, _ := task["reviewer1_skipped_reason"].(string)
-	result, hasResult := task["reviewer1_result"]
-	if review != "passed" && review != "failed" && review != "skipped" && review != "unavailable" {
-		switch {
-		case skipped == "REVIEWER1_UNAVAILABLE":
-			review = "unavailable"
-		case skipped != "":
-			review = "skipped"
-		case hasResult && result != nil:
-			if result == "APPROVED" || result == "PASS" || result == "PASSED" {
-				review = "passed"
-			} else {
-				review = "failed"
-			}
-		default:
-			review = ""
+	assessment, _ := task["task_assessment"].(map[string]any)
+	acceptance, _ := assessment["claude_acceptance"].(map[string]any)
+	outcome, _ := job["reviewerOutcome"].(map[string]any)
+	verdict, _ := outcome["verdict"].(string)
+	review := ""
+	switch strings.ToUpper(fmt.Sprint(outcome["execution_status"])) {
+	case "SKIPPED":
+		review = "skipped"
+	case "UNAVAILABLE":
+		review = "unavailable"
+	case "FAILED":
+		review = "failed"
+	default:
+		switch strings.ToUpper(verdict) {
+		case "PASS", "PASSED", "APPROVED":
+			review = "passed"
+		case "FAIL", "FAILED", "REJECTED":
+			review = "failed"
 		}
 	}
 	duration := task["duration_ms"]
@@ -316,7 +410,10 @@ func makeRecord(job, task map[string]any, stamp any) map[string]any {
 		quota = q
 	}
 	quota = normalizeQuota(quota)
-	r := map[string]any{"id": job["jobId"], "task": job["taskId"], "at": stamp, "cohort": strings.Join(parts, "|"), "duration_ms": duration, "eta_error_ms": etaError, "acceptance": acceptance["outcome"], "send_backs": sendbacks(acceptance), "review": nonempty(review), "reviewer1_valid": fallback(job["reviewer1Valid"], task["reviewer1_valid_count"], nil), "reviewer1_false": fallback(job["reviewer1False"], task["reviewer1_false_count"], nil), "validation": fallback(task["validation"], job["validation"], nil), "apply_conflict": fallback(job["applyConflictReason"], conflict(job), nil), "failure": job["errorCode"], "usage": usage, "usage_complete": usageComplete, "quota": quota}
+	valid := fallback(job["reviewer1Valid"], task["reviewer1_valid_count"], nil)
+	falseCount := fallback(job["reviewer1False"], task["reviewer1_false_count"], nil)
+	r := map[string]any{"id": job["jobId"], "task": job["taskId"], "project_key": task["project_key"], "at": stamp, "cohort": strings.Join(parts, "|"), "duration_ms": duration, "eta_error_ms": etaError, "acceptance": acceptance["outcome"], "send_backs": sendbacks(acceptance), "review": nonempty(review), "review_verdict": outcome["verdict"], "review_provider": outcome["provider"], "review_model": outcome["requested_model"], "review_execution_status": outcome["execution_status"], "review_skip_reason": outcome["skip_reason"], "review_served_model_attestation": outcome["served_model_attestation"], "reviewedOutcome": job["reviewedOutcome"], "reviewer1_valid": valid, "reviewer1_false": falseCount, "reviewer1_valid_present": validNumber(valid), "reviewer1_false_present": validNumber(falseCount), "validation": fallback(task["validation"], job["validation"], nil), "apply_conflict": fallback(job["applyConflictReason"], conflict(job), nil), "failure": job["errorCode"], "usage": usage, "usage_complete": usageComplete, "quota": quota}
+	r["applied_as_is"] = acceptance["applied_as_is"]
 	for k, v := range r {
 		if v == nil {
 			delete(r, k)
@@ -330,7 +427,7 @@ func makeRecord(job, task map[string]any, stamp any) map[string]any {
 			r["quota"] = q[1:]
 		} else {
 			trimmed := false
-			for _, k := range []string{"task", "cohort", "id"} {
+			for _, k := range []string{"cohort", "review_provider", "review_model", "review_skip_reason"} {
 				if s, ok := r[k].(string); ok && len(s) > 32 {
 					r[k] = truncate(s, 32)
 					trimmed = true
@@ -346,7 +443,7 @@ func makeRecord(job, task map[string]any, stamp any) map[string]any {
 }
 
 func cell() map[string]any {
-	return map[string]any{"counts": map[string]any{"tasks": 0, "acceptance": map[string]any{}, "send_backs": nil, "review": map[string]any{}, "validation": map[string]any{}, "reviewer1_valid": nil, "reviewer1_false": nil, "apply_conflicts": map[string]any{}, "failures": map[string]any{}, "token_usage": map[string]any{}, "token_usage_complete": map[string]any{}}, "samples": []any{}, "quota_samples": []any{}}
+	return map[string]any{"counts": map[string]any{"tasks": 0, "acceptance": map[string]any{}, "send_backs": nil, "review": map[string]any{}, "validation": map[string]any{}, "reviewer1_valid": nil, "reviewer1_false": nil, "reviewer1_valid_observations": 0, "reviewer1_false_observations": 0, "apply_conflicts": map[string]any{}, "failures": map[string]any{}, "token_usage": map[string]any{}, "token_usage_complete": map[string]any{}}, "samples": []any{}, "quota_samples": []any{}}
 }
 func mergeRecord(data, record map[string]any) {
 	cohorts := data["cohorts"].(map[string]any)
@@ -364,10 +461,10 @@ func mergeRecord(data, record map[string]any) {
 	for _, pair := range [][2]string{{"acceptance", "acceptance"}, {"review", "review"}, {"validation", "validation"}, {"apply_conflict", "apply_conflicts"}, {"failure", "failures"}} {
 		countValue(counts[pair[1]].(map[string]any), record[pair[0]])
 	}
-	if validNumber(record["send_backs"]) {
-		counts["send_backs"] = numberFloat(counts["send_backs"]) + numberFloat(record["send_backs"])
-	}
 	for _, f := range []string{"reviewer1_valid", "reviewer1_false"} {
+		if record[f+"_present"] == true {
+			counts[f+"_observations"] = numberFloat(counts[f+"_observations"]) + 1
+		}
 		if validNumber(record[f]) {
 			counts[f] = numberFloat(counts[f]) + numberFloat(record[f])
 		}
@@ -565,12 +662,12 @@ func writePython(b *bytes.Buffer, v any) {
 	}
 }
 
-var keyOrder = []string{"schema_version", "sources", "records", "cohorts", "id", "task", "at", "cohort", "duration_ms", "eta_error_ms", "acceptance", "send_backs", "review", "reviewer1_valid", "reviewer1_false", "validation", "apply_conflict", "failure", "usage", "usage_complete", "quota", "timestamp", "resets_at", "used", "limit", "counts", "tasks", "send_backs", "reviewer1_valid", "reviewer1_false", "apply_conflicts", "failures", "token_usage", "token_usage_complete", "samples", "quota_samples"}
+var keyOrder = []string{"schema_version", "sources", "records", "cohorts", "archive", "id", "task", "project_key", "at", "cohort", "duration_ms", "eta_error_ms", "acceptance", "send_backs", "review", "review_verdict", "review_provider", "review_model", "review_execution_status", "review_skip_reason", "review_served_model_attestation", "reviewedOutcome", "reviewer1_valid", "reviewer1_false", "reviewer1_valid_present", "reviewer1_false_present", "validation", "apply_conflict", "failure", "usage", "usage_complete", "quota", "timestamp", "resets_at", "used", "limit", "counts", "tasks", "send_backs", "reviewer1_valid", "reviewer1_false", "reviewer1_valid_observations", "reviewer1_false_observations", "apply_conflicts", "failures", "token_usage", "token_usage_complete", "samples", "quota_samples"}
 
 func orderedKeys(m map[string]any) []string {
 	if _, ok := m["tasks"]; ok {
 		if _, ok := m["acceptance"]; ok {
-			order := []string{"tasks", "acceptance", "send_backs", "review", "validation", "reviewer1_valid", "reviewer1_false", "apply_conflicts", "failures", "token_usage", "token_usage_complete"}
+			order := []string{"tasks", "acceptance", "send_backs", "review", "validation", "reviewer1_valid", "reviewer1_false", "reviewer1_valid_observations", "reviewer1_false_observations", "apply_conflicts", "failures", "token_usage", "token_usage_complete"}
 			keys := make([]string, 0, len(m))
 			used := map[string]bool{}
 			for _, key := range order {

@@ -352,6 +352,64 @@ func TestCleanupDistillsBeforeDeletingExpiredJob(t *testing.T) {
 	}
 }
 
+func TestCleanupKeepsSourceWhenCheckpointIsCorrupt(t *testing.T) {
+	root := t.TempDir()
+	id := strings.Repeat("f", 64)
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{"finishedAt": float64(cleanupNow().Unix()) - 8*86400})
+	checkpoint := filepath.Join(root, "telemetry", "learning_summary.json")
+	if err := os.MkdirAll(filepath.Dir(checkpoint), 0700); err != nil {
+		t.Fatal(err)
+	}
+	previous := []byte(`{"schema_version":1,"sources":{},"records":[],"cohorts":{}}`)
+	if err := os.WriteFile(checkpoint, previous, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(jobPath); err != nil {
+		t.Fatalf("source job was deleted without a checkpoint ack: %v", err)
+	}
+	got, err := os.ReadFile(checkpoint)
+	if err != nil || string(got) != string(previous) {
+		t.Fatalf("corrupt checkpoint changed: %v %s", err, got)
+	}
+}
+
+func TestCleanupKeepsSourceWhenCheckpointLockCannotOpen(t *testing.T) {
+	root := t.TempDir()
+	id := strings.Repeat("8", 64)
+	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{"finishedAt": float64(cleanupNow().Unix()) - 8*86400})
+	lockPath := filepath.Join(root, "telemetry", "learning_summary.lock")
+	if err := os.MkdirAll(lockPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(jobPath); err != nil {
+		t.Fatalf("source job was deleted without lock/checkpoint acknowledgement: %v", err)
+	}
+}
+
+func TestCleanupDistillsSupersededJob(t *testing.T) {
+	root := t.TempDir()
+	id := strings.Repeat("9", 64)
+	cleanupJob(t, root, id, "SUPERSEDED", map[string]any{"applyState": "superseded", "finishedAt": float64(cleanupNow().Unix()) - 8*86400})
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")); !os.IsNotExist(err) {
+		t.Fatalf("superseded job remains: %v", err)
+	}
+	checkpoint, err := os.ReadFile(filepath.Join(root, "telemetry", "learning_summary.json"))
+	if err != nil || !strings.Contains(string(checkpoint), id) {
+		t.Fatalf("superseded source not archived: %v %s", err, checkpoint)
+	}
+}
+
 func TestCleanupSessionStartKeepsUncheckpointedExpiredJob(t *testing.T) {
 	root := t.TempDir()
 	id := strings.Repeat("e", 64)
