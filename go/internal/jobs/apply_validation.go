@@ -672,6 +672,8 @@ func RunApplyValidation(stateRoot, key, id string) error {
 					return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
 				}
 				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), validationCommandFailureReason("go test", err, &record))
+			} else if validationState == "" && record.Reason != "" {
+				validationReason = record.Reason
 			}
 		}
 	}
@@ -744,7 +746,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 	if validationState != "" {
 		return finishValidation(stateRoot, path, &record, validationState, validationReason)
 	}
-	return finishValidation(stateRoot, path, &record, "passed", "")
+	return finishValidation(stateRoot, path, &record, "passed", validationReason)
 }
 
 func validationFailureState(err error) string {
@@ -993,6 +995,10 @@ func runValidationCommand(dir string, env, args []string, timeout time.Duration,
 		return errors.Join(err, errTreeUnconfirmed)
 	}
 
+	if ctx.Err() != nil && record != nil && parsed.allPackagesSucceeded() {
+		record.Reason = "passed; leftover child process held output"
+		return nil
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -1014,7 +1020,17 @@ type testJSONCapture struct {
 	record      *applyValidation
 	pending     []byte
 	running     []string
+	packages    map[string]string
 	discardLine bool
+}
+
+func (b *testJSONCapture) allPackagesSucceeded() bool {
+	for _, action := range b.packages {
+		if action != "pass" && action != "skip" {
+			return false
+		}
+	}
+	return len(b.packages) > 0 && len(b.running) == 0 && b.record.Counts["packages_failed"] == 0 && b.record.Counts["tests_failed"] == 0
 }
 
 func (b *testJSONCapture) Write(value []byte) (int, error) {
@@ -1069,6 +1085,7 @@ func parseTestJSONLine(data []byte, capture *testJSONCapture) {
 		Action  string
 		Test    string
 		Package string
+		Output  string
 	}
 	if json.Unmarshal(bytes.TrimSpace(data), &event) != nil {
 		return
@@ -1086,8 +1103,24 @@ func parseTestJSONLine(data []byte, capture *testJSONCapture) {
 			record.Counts["tests_skipped"]++
 		}
 	} else if event.Package != "" {
+		if event.Action == "output" {
+			fields := strings.Fields(event.Output)
+			if len(fields) >= 2 && fields[1] == event.Package && strings.HasPrefix(event.Output, fields[0]) {
+				switch fields[0] {
+				case "ok":
+					event.Action = "pass"
+				case "FAIL":
+					event.Action = "fail"
+				}
+			}
+		}
+		if capture.packages == nil {
+			capture.packages = map[string]string{}
+		}
+		previous := capture.packages[event.Package]
 		switch event.Action {
-		case "run":
+		case "start", "run":
+			capture.packages[event.Package] = "run"
 			found := false
 			for _, running := range capture.running {
 				if running == event.Package {
@@ -1100,9 +1133,22 @@ func parseTestJSONLine(data []byte, capture *testJSONCapture) {
 			}
 			record.RunningPackage = event.Package
 		case "pass":
-			record.Counts["packages_passed"]++
+			if previous != "pass" && previous != "fail" {
+				capture.packages[event.Package] = "pass"
+				record.Counts["packages_passed"]++
+			}
+			capture.finishPackage(event.Package)
+		case "skip":
+			if previous != "skip" && previous != "fail" {
+				capture.packages[event.Package] = "skip"
+				record.Counts["packages_skipped"]++
+			}
 			capture.finishPackage(event.Package)
 		case "fail":
+			if previous == "fail" {
+				break
+			}
+			capture.packages[event.Package] = "fail"
 			record.Counts["packages_failed"]++
 			capture.finishPackage(event.Package)
 			if len(record.FailedPackages) < 100 {

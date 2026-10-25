@@ -126,6 +126,7 @@ func runValidationFixture(t *testing.T, status string, commandErr error) applyVa
 				result.FailedTests = []string{"TestBad"}
 			} else {
 				result.Counts = map[string]int{"tests_passed": 1}
+				result.Reason = "passed; leftover child process held output"
 			}
 			return commandErr
 		}
@@ -152,6 +153,9 @@ func TestValidationPass(t *testing.T) {
 	got := runValidationFixture(t, "passed", nil)
 	if got.Counts["tests_passed"] != 1 {
 		t.Fatalf("counts missing: %#v", got.Counts)
+	}
+	if got.Reason != "passed; leftover child process held output" {
+		t.Fatalf("pass reason not retained: %q", got.Reason)
 	}
 }
 
@@ -525,6 +529,16 @@ func TestValidationCommandHelper(t *testing.T) {
 		if err := child.Start(); err != nil {
 			t.Fatal(err)
 		}
+	case "passing-worker":
+		for _, event := range []string{
+			`{"Action":"start","Package":"example.test/passing"}`,
+			`{"Action":"pass","Package":"example.test/passing","Test":"TestPassing"}`,
+			`{"Action":"output","Package":"example.test/passing","Output":"PASS\r\n"}`,
+			`{"Action":"output","Package":"example.test/passing","Output":"ok  \texample.test/passing\t1.0s\r\n"}`,
+		} {
+			_, _ = io.WriteString(os.Stdout, event+"\n")
+		}
+		time.Sleep(30 * time.Second)
 	case "grandchild":
 		time.Sleep(30 * time.Second)
 	case "timeout":
@@ -628,6 +642,48 @@ func TestValidationCommandExitedWhileGrandchildKeepsPipeOpen(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "worker output before exit") {
 		t.Fatalf("output before worker exit was not captured: %q", output)
+	}
+}
+
+func TestValidationCommandPassesAfterPackageSummaryAndDeadline(t *testing.T) {
+	log, err := os.CreateTemp(t.TempDir(), "validation.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	env := replaceValidationEnv(os.Environ(), "PURSER_VALIDATION_COMMAND_HELPER", "passing-worker")
+	record := &applyValidation{}
+	started := time.Now()
+	err = runValidationCommand(t.TempDir(), env, []string{os.Args[0], "-test.run=^TestValidationCommandHelper$"}, time.Second, log, record)
+	if err != nil || record.Counts["packages_passed"] != 1 || record.RunningPackage != "" || record.Reason != "passed; leftover child process held output" {
+		t.Fatalf("runValidationCommand = %v, record = %#v", err, record)
+	}
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("command completion took %s, want before helper finishes", elapsed)
+	}
+}
+
+func TestValidationPackageOutputCompletion(t *testing.T) {
+	record := &applyValidation{}
+	capture := &testJSONCapture{record: record}
+	for _, event := range []string{
+		`{"Action":"start","Package":"example.test/pkg"}`,
+		`{"Action":"output","Package":"example.test/pkg","Output":"ok  \texample.test/pkg\t[no test files]\r\n"}`,
+		`{"Action":"pass","Package":"example.test/pkg"}`,
+	} {
+		parseTestJSONLine([]byte(event), capture)
+	}
+	if record.Counts["packages_passed"] != 1 || !capture.allPackagesSucceeded() {
+		t.Fatalf("package summary/pass not deduplicated: %#v", record)
+	}
+	for _, event := range []string{
+		`{"Action":"output","Package":"example.test/pkg","Output":"FAIL\texample.test/pkg\t1.0s\r\n"}`,
+		`{"Action":"fail","Package":"example.test/pkg"}`,
+	} {
+		parseTestJSONLine([]byte(event), capture)
+	}
+	if record.Counts["packages_failed"] != 1 || len(record.FailedPackages) != 1 || capture.allPackagesSucceeded() {
+		t.Fatalf("package failure summary not retained/deduplicated: %#v", record)
 	}
 }
 
