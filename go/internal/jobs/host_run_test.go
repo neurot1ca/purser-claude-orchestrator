@@ -71,6 +71,23 @@ func TestHostFakeWorker(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		os.Exit(0)
 	}
+	if mode == "wait_for_release" {
+		ready := os.Getenv("PURSER_HOST_FAKE_READY_FILE")
+		release := os.Getenv("PURSER_HOST_FAKE_RELEASE_FILE")
+		if ready != "" {
+			if err := os.WriteFile(ready, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		until := time.Now().Add(3 * time.Minute)
+		for time.Now().Before(until) {
+			if _, err := os.Stat(release); err == nil {
+				os.Exit(0)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		os.Exit(1)
+	}
 	_, _ = os.Stdout.WriteString("{\"type\": \"thread.started\", \"thread_id\": \"fake-thread\"}\r\n")
 	_, _ = os.Stdout.WriteString("{\"type\": \"item.completed\", \"item\": {\"type\": \"agent_message\", \"text\": \"fake answer\"}}\r\n")
 	if os.Getenv("PURSER_HOST_FAKE_TEST_EVIDENCE") == "1" {
@@ -190,7 +207,7 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 		{name: "worker_launch_failure", state: "FAILED", errorCode: "CODEX_FAILED"},
 		{name: "deadline", mode: "sleep", state: "TIMED_OUT", errorCode: "DEADLINE_EXCEEDED", deadline: 120 * time.Millisecond},
 		{name: "deadline_before_worker_start", state: "TIMED_OUT", errorCode: "DEADLINE_EXCEEDED", deadline: -time.Second},
-		{name: "signal_cancel", mode: "sleep", state: "CANCELLED", errorCode: "CANCELLED", deadline: 5 * time.Second, cancel: true},
+		{name: "signal_cancel", mode: "wait_for_release", state: "CANCELLED", errorCode: "CANCELLED", deadline: hostTestWaitBudget(5 * time.Second), cancel: true},
 		{name: "stale_generation", state: "QUEUED", stale: true},
 		{name: "worktree_setup_unavailable", state: "FAILED", errorCode: "WORKTREE_MISSING"},
 	}
@@ -224,8 +241,21 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 			}
 			_ = os.Setenv("PURSER_HOST_FAKE_WORKER", "1")
 			_ = os.Setenv("PURSER_HOST_FAKE_MODE", tc.mode)
+			readyFile := filepath.Join(root, "worker-ready")
+			releaseFile := filepath.Join(root, "worker-release")
+			if tc.cancel {
+				_ = os.Setenv("PURSER_HOST_FAKE_READY_FILE", readyFile)
+				_ = os.Setenv("PURSER_HOST_FAKE_RELEASE_FILE", releaseFile)
+				t.Cleanup(func() {
+					if err := os.WriteFile(releaseFile, nil, 0600); err != nil {
+						t.Errorf("release fake worker: %v", err)
+					}
+				})
+			}
 			defer os.Unsetenv("PURSER_HOST_FAKE_WORKER")
 			defer os.Unsetenv("PURSER_HOST_FAKE_MODE")
+			defer os.Unsetenv("PURSER_HOST_FAKE_READY_FILE")
+			defer os.Unsetenv("PURSER_HOST_FAKE_RELEASE_FILE")
 			executable, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
@@ -243,6 +273,7 @@ func TestRunHostGenerationWorkerCases(t *testing.T) {
 					finished <- hostErr
 				}()
 				waitForHostState(t, dir, "RUNNING")
+				waitForHostTestFile(t, readyFile)
 				record := readJob(dir, hostTestID)
 				var port int
 				record.Get("signalPort", &port)
@@ -1149,7 +1180,7 @@ func TestHostStartFailurePreservesCancellationAndDeadline(t *testing.T) {
 
 func waitForHostState(t *testing.T, dir, expected string) {
 	t.Helper()
-	limit := time.Now().Add(3 * time.Second)
+	limit := time.Now().Add(hostTestWaitBudget(3 * time.Second))
 	for time.Now().Before(limit) {
 		job := readJob(dir, hostTestID)
 		if job == nil {
@@ -1164,6 +1195,18 @@ func waitForHostState(t *testing.T, dir, expected string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("host did not enter RUNNING")
+}
+
+func waitForHostTestFile(t *testing.T, path string) {
+	t.Helper()
+	limit := time.Now().Add(hostTestWaitBudget(3 * time.Second))
+	for time.Now().Before(limit) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("host worker did not create readiness file %s", path)
 }
 
 func writeHostTestJSON(t *testing.T, path string, value any) {

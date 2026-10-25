@@ -113,7 +113,7 @@ func TestRunHostCapacityRetries(t *testing.T) {
 			// Observe the reserved retry, then try another host and recovery while
 			// the owning host is alive and waiting in backoff.
 			if tc.name == "same_intent" || tc.cancel {
-				until := time.Now().Add(5 * time.Second)
+				until := time.Now().Add(hostTestWaitBudget(5 * time.Second))
 				for {
 					job := readJob(dir, hostTestID)
 					if job != nil {
@@ -149,7 +149,7 @@ func TestRunHostCapacityRetries(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(hostTestWaitBudget(10 * time.Second)):
 				t.Fatal("host did not finish")
 			}
 			job := recordMap(readJob(dir, hostTestID))

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -217,7 +218,8 @@ func transientReplace(err error) bool {
 	if !errors.As(err, &errno) {
 		return false
 	}
-	return errno == syscall.EACCES || errno == syscall.EBUSY || errno == syscall.Errno(32)
+	return errno == syscall.EACCES || errno == syscall.EBUSY ||
+		runtime.GOOS == "windows" && (errno == syscall.Errno(5) || errno == syscall.Errno(32))
 }
 
 var ErrClaimConflict = errors.New("job generation claim conflict")

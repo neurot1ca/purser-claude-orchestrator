@@ -5,9 +5,11 @@ import "purser-hook/internal/testutil"
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -109,6 +111,15 @@ func TestInterruptedReplaceLeavesOldRecord(t *testing.T) {
 	}
 	if string(got) != string(old) {
 		t.Fatalf("old record lost: %s", got)
+	}
+}
+
+func TestTransientReplaceWindowsErrors(t *testing.T) {
+	for _, errno := range []syscall.Errno{5, 32} {
+		err := fmt.Errorf("replace job record: %w", &os.LinkError{Op: "rename", Old: "old", New: "new", Err: errno})
+		if got, want := transientReplace(err), runtime.GOOS == "windows"; got != want {
+			t.Fatalf("transientReplace for wrapped errno %d = %t, want %t", errno, got, want)
+		}
 	}
 }
 

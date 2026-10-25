@@ -167,7 +167,7 @@ func TestHostPythonOracleReplay(t *testing.T) {
 					}
 				}
 				port := waitForHostSignalPort(t, dir, jobID)
-				if ok, signalErr := SignalCancel("127.0.0.1:"+strconv.Itoa(port), jobID, "host-signal-token", time.Second); signalErr != nil || !ok {
+				if ok, signalErr := SignalCancel("127.0.0.1:"+strconv.Itoa(port), jobID, "host-signal-token", hostTestWaitBudget(time.Second)); signalErr != nil || !ok {
 					t.Fatalf("cancel failed: acknowledged=%v err=%v", ok, signalErr)
 				}
 				if err := <-finished; err != nil {
@@ -277,7 +277,7 @@ func setupHostParityRepo(t *testing.T, repo string, setupFailure bool) {
 
 func waitForHostQueued(t *testing.T, dir, id string) {
 	t.Helper()
-	until := time.Now().Add(30 * time.Second)
+	until := time.Now().Add(hostTestWaitBudget(30 * time.Second))
 	lastState, lastCode, lastPort := "", "", 0
 	for time.Now().Before(until) {
 		record := readHostParityRecord(t, dir, id)
@@ -301,7 +301,7 @@ func waitForHostQueued(t *testing.T, dir, id string) {
 
 func waitForHostStateID(t *testing.T, dir, id, expected string) {
 	t.Helper()
-	until := time.Now().Add(30 * time.Second)
+	until := time.Now().Add(hostTestWaitBudget(30 * time.Second))
 	last, code := "", ""
 	for time.Now().Before(until) {
 		record := readHostParityRecord(t, dir, id)
@@ -317,7 +317,7 @@ func waitForHostStateID(t *testing.T, dir, id, expected string) {
 
 func waitForHostErrorCode(t *testing.T, dir, id, code string) {
 	t.Helper()
-	until := time.Now().Add(30 * time.Second)
+	until := time.Now().Add(hostTestWaitBudget(30 * time.Second))
 	lastState, lastCode := "", ""
 	for time.Now().Before(until) {
 		record := readHostParityRecord(t, dir, id)
@@ -333,7 +333,7 @@ func waitForHostErrorCode(t *testing.T, dir, id, code string) {
 
 func waitForHostSignalPort(t *testing.T, dir, id string) int {
 	t.Helper()
-	until := time.Now().Add(30 * time.Second)
+	until := time.Now().Add(hostTestWaitBudget(30 * time.Second))
 	for time.Now().Before(until) {
 		record := readHostParityRecord(t, dir, id)
 		var port int
@@ -347,14 +347,14 @@ func waitForHostSignalPort(t *testing.T, dir, id string) int {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("host signal listener did not become ready within 30 seconds")
+	t.Fatalf("host signal listener did not become ready within %s", hostTestWaitBudget(30*time.Second))
 	return 0
 }
 
 func readHostParityRecord(t *testing.T, dir, id string) *Record {
 	t.Helper()
 	path := filepath.Join(dir, id+".json")
-	until := time.Now().Add(time.Second)
+	until := time.Now().Add(hostTestWaitBudget(time.Second))
 	for time.Now().Before(until) {
 		record, err := Read(path)
 		if err == nil {
