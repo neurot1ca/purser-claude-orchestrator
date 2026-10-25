@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.198 — 2026-10-25
+
+- **Fixed:** retention ages out thread and plan records older than 90 days instead of reporting a permanent limit breach, and names the breaching entry.
+- **Fixed:** Obsidian run-note writes retry a briefly locked replace before reporting a projection failure.
+- **Changed:** ORCH lines accept unambiguous phase and reason aliases (for example `implement`, `review_feedback`), and a rejected line comes with a corrected line to resend.
+
 ## 0.1.197 — 2026-10-25
 
 - **Added:** `purser-hook optimize telemetry` prints a read-only report of jobs and send-backs per task, reviewer outcome per job, input coverage and per-component telemetry health.
