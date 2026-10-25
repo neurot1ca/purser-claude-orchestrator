@@ -21,6 +21,7 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/obsidian"
+	"purser-hook/internal/telemetryhealth"
 )
 
 const observationSchemaVersion = 1
@@ -33,6 +34,8 @@ const (
 )
 
 var errObservationRunNoteUndated = errors.New("run note has no anchor time")
+
+var errObservationMalformedCursor = errors.New("malformed task telemetry cursor")
 
 var observationMarker = regexp.MustCompile(`(?m)^(?:<!-- orchestrator projection v1 sha256=([0-9a-f]{64}) -->|# orchestrator projection v1 sha256=([0-9a-f]{64}))\n`)
 
@@ -235,18 +238,26 @@ func cleanupObservationUndatedRunNotes(vaultRoot string) {
 
 // renderObservationHealthNote mirrors project_health's read and render path.
 // It renders only; callers own all writes.
-func renderObservationHealthNote(stateRoot, vaultRoot string, lastProjectionWriteAt *string) (string, string, error) {
+func renderObservationHealthNote(stateRoot, vaultRoot string, lastProjectionWriteAt, projectionSuccessAt *string) (string, string, error) {
 	path, ok := observationSafeVaultPath(vaultRoot, "System", "Telemetry Health.md")
 	if !ok {
 		return "", "", errors.New("projection path escaped the vault root")
 	}
+	stateRoot, err := filepath.Abs(stateRoot)
+	if err != nil {
+		return "", "", errors.New("telemetry state root is invalid")
+	}
+	resolvedStateRoot, err := filepath.EvalSymlinks(stateRoot)
+	if err != nil {
+		return "", "", errors.New("telemetry state root is unavailable")
+	}
 	root := filepath.Join(stateRoot, "telemetry")
 	health := map[string]any{"status": nil, "failure_count": nil, "last_error_code": nil, "updated_at": nil, "last_projection_write_at": nil}
-	if data, err := os.ReadFile(filepath.Join(root, "telemetry_health.json")); err == nil {
+	if data, readErr := os.ReadFile(filepath.Join(root, "telemetry_health.json")); readErr == nil {
 		if health, err = decodeObservationHealthObject(data); err != nil {
 			return "", "", errors.New("telemetry health is unreadable")
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return "", "", errors.New("telemetry health is unreadable")
 	}
 	status := health["status"]
@@ -277,35 +288,84 @@ func renderObservationHealthNote(stateRoot, vaultRoot string, lastProjectionWrit
 			}
 		}
 	}
+	if projectionSuccessAt != nil {
+		applyObservationProjectionSuccess(health, *projectionSuccessAt)
+		status = health["status"]
+	}
 	if lastProjectionWriteAt != nil {
 		if err := observationHealthTimestamp(*lastProjectionWriteAt); err != nil {
 			return "", "", errors.New("last_projection_write_at is not a UTC timestamp")
 		}
 		health["last_projection_write_at"] = *lastProjectionWriteAt
 	}
-	count := 0
-	tasksRoot := filepath.Join(root, "tasks")
-	entries, err := os.ReadDir(tasksRoot)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", "", fmt.Errorf("cannot read task aggregates: %w", err)
-	}
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".json" {
-			continue
+	projectCount, legacyCount := 0, 0
+	malformed := make([]string, 0)
+	addMalformed := func(name string) {
+		if len(malformed) < 20 {
+			malformed = append(malformed, normalizeObservationID(name, "unknown"))
 		}
-		data, readErr := os.ReadFile(filepath.Join(tasksRoot, entry.Name()))
+	}
+	scanTasks := func(tasksRoot, label string) int {
+		abs, absErr := filepath.Abs(tasksRoot)
+		resolved, resolveErr := filepath.EvalSymlinks(abs)
+		if errors.Is(resolveErr, os.ErrNotExist) {
+			return 0
+		}
+		rel, relErr := filepath.Rel(resolvedStateRoot, resolved)
+		if absErr != nil || relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			addMalformed(label + "_UNSAFE_PATH")
+			return 0
+		}
+		if resolveErr != nil {
+			addMalformed(label + "_UNREADABLE")
+			return 0
+		}
+		entries, readErr := os.ReadDir(resolved)
+		if errors.Is(readErr, os.ErrNotExist) {
+			return 0
+		}
 		if readErr != nil {
-			return "", "", fmt.Errorf("task aggregate cannot be read: %s", entry.Name())
+			addMalformed(label + "_UNREADABLE")
+			return 0
 		}
-		aggregate, decodeErr := decodeObservationHealthObject(data)
-		if decodeErr != nil || aggregate["task_id"] != strings.TrimSuffix(entry.Name(), ".json") {
-			return "", "", fmt.Errorf("task aggregate identity is invalid: %s", entry.Name())
+		count := 0
+		for _, entry := range entries {
+			if filepath.Ext(entry.Name()) != ".json" || entry.Type()&os.ModeSymlink != 0 {
+				continue
+			}
+			name := label + "_" + strings.TrimSuffix(entry.Name(), ".json")
+			data, readErr := os.ReadFile(filepath.Join(abs, entry.Name()))
+			aggregate, decodeErr := decodeObservationHealthObject(data)
+			if readErr != nil || decodeErr != nil || aggregate["task_id"] != strings.TrimSuffix(entry.Name(), ".json") {
+				addMalformed(name)
+				continue
+			}
+			if _, runErr := prepareObservationRun(aggregate); runErr != nil {
+				addMalformed(name)
+				continue
+			}
+			count++
 		}
-		if _, err := prepareObservationRun(aggregate); err != nil {
-			return "", "", err
-		}
-		count++
+		return count
 	}
+	projectsRoot := filepath.Join(stateRoot, "projects")
+	resolvedProjectsRoot, projectsResolveErr := filepath.EvalSymlinks(projectsRoot)
+	projectsRel, projectsRelErr := filepath.Rel(resolvedStateRoot, resolvedProjectsRoot)
+	if projectsResolveErr == nil && projectsRelErr == nil && projectsRel != ".." && !strings.HasPrefix(projectsRel, ".."+string(filepath.Separator)) && !filepath.IsAbs(projectsRel) {
+		if projects, readErr := os.ReadDir(resolvedProjectsRoot); readErr == nil {
+			for _, project := range projects {
+				if !project.IsDir() || project.Type()&os.ModeSymlink != 0 {
+					continue
+				}
+				projectCount += scanTasks(filepath.Join(projectsRoot, project.Name(), "telemetry", "tasks"), "project_"+project.Name())
+			}
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			addMalformed("PROJECT_INVENTORY_UNREADABLE")
+		}
+	} else if !errors.Is(projectsResolveErr, os.ErrNotExist) {
+		addMalformed("PROJECT_INVENTORY_UNSAFE_PATH")
+	}
+	legacyCount = scanTasks(filepath.Join(root, "tasks"), "legacy_root")
 	body := "# Telemetry Health\n\n" +
 		"This is observational health for local telemetry and projection; it is not an authority for routing or acceptance.\n\n" +
 		fmt.Sprintf("- Status: %s\n", observationHealthDisplay(status)) +
@@ -313,7 +373,9 @@ func renderObservationHealthNote(stateRoot, vaultRoot string, lastProjectionWrit
 		fmt.Sprintf("- Last error code: %s\n", observationHealthDisplay(health["last_error_code"])) +
 		fmt.Sprintf("- Health updated at (UTC): %s\n", observationHealthDisplay(health["updated_at"])) +
 		fmt.Sprintf("- Last successful projection write (UTC): %s\n", observationHealthDisplay(health["last_projection_write_at"])) +
-		fmt.Sprintf("- Aggregate count: n=%d\n", count) +
+		fmt.Sprintf("- Project aggregate count: n=%d\n", projectCount) +
+		fmt.Sprintf("- Legacy root aggregate count (separate): n=%d\n", legacyCount) +
+		fmt.Sprintf("- Malformed or unsupported historical aggregates: n=%d; files=%s\n", len(malformed), observationHealthDisplay(strings.Join(malformed, ","))) +
 		"- Projection mode: local-only, deterministic, no model/network/process access.\n"
 	return observationWithMarker("", body, false), path, nil
 }
@@ -334,6 +396,67 @@ func observationHealthNumber(value any) (float64, error) {
 	default:
 		return 0, errors.New("not numeric")
 	}
+}
+
+func observationHealthCount(value any) int64 {
+	switch n := value.(type) {
+	case json.Number:
+		if i, err := n.Int64(); err == nil && i >= 0 {
+			return i
+		}
+	case float64:
+		if n >= 0 && n <= 1<<53 && math.Trunc(n) == n {
+			return int64(n)
+		}
+	case int64:
+		if n >= 0 {
+			return n
+		}
+	case int:
+		if n >= 0 {
+			return int64(n)
+		}
+	}
+	return 0
+}
+
+// applyObservationProjectionSuccess mirrors telemetryhealth.Update's success
+// path in memory so the note can be rendered before the health file is published.
+func applyObservationProjectionSuccess(health map[string]any, now string) {
+	components, ok := health["components"].(map[string]any)
+	if !ok || components == nil {
+		components = map[string]any{}
+	}
+	projection, _ := components["projection"].(map[string]any)
+	if projection == nil {
+		projection = map[string]any{"lifetime_failures": int64(0), "consecutive_failures": int64(0)}
+	}
+	projection["component"] = "projection"
+	projection["path_class"] = "vault"
+	projection["last_checked_at"] = now
+	projection["status"] = "OK"
+	projection["last_successful_check"] = now
+	projection["consecutive_failures"] = int64(0)
+	components["projection"] = projection
+	health["schema_version"] = 1
+	health["components"] = components
+	health["updated_at"] = now
+	var lifetime, consecutive int64
+	status := "OK"
+	for _, value := range components {
+		component, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		lifetime += observationHealthCount(component["lifetime_failures"])
+		consecutive += observationHealthCount(component["consecutive_failures"])
+		if component["status"] == "DEGRADED" {
+			status = "DEGRADED"
+		}
+	}
+	health["lifetime_failure_count"] = lifetime
+	health["consecutive_failure_count"] = consecutive
+	health["status"] = status
 }
 
 func observationHealthTimestamp(value any) error {
@@ -537,8 +660,8 @@ func prepareObservationRun(a map[string]any) (observationRun, error) {
 	}
 	for _, enum := range []struct{ key, allowed string }{
 		{"status", "UNKNOWN_OR_IN_PROGRESS IN_PROGRESS FINISHED FAILED ACCEPTED REJECTED APPLIED VERIFIED NOT_VERIFIED INCONCLUSIVE NO_CHANGE"},
-		{"phase", "implementation operation"}, {"task_type", "implementation operation plan unknown"},
-		{"route", "mechanical subtle normal consequential escalated operation"}, {"effort", "low medium high xhigh"},
+		{"phase", "implementation operation plan"}, {"task_type", "implementation operation plan unknown"},
+		{"route", "mechanical subtle normal consequential escalated operation plan_standard"}, {"effort", "low medium high xhigh"},
 		{"validation", "PASS FAIL UNKNOWN"}, {"claude_review_mode", "AUDIT FULL"},
 		{"reviewer1_result", "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE CHANGES_REQUIRED UNCERTAIN REVIEWER1_UNAVAILABLE"},
 		{"reviewer1_skipped_reason", "PHASE_OPERATION NO_DELTA BELOW_THRESHOLD REVIEWER_UNAVAILABLE"},
@@ -1754,44 +1877,35 @@ func atomicObservationNote(path, content string) error {
 	return os.Rename(tmp, path)
 }
 
-func recordObservationProjectionFailure(root string, now time.Time) {
+func observationErrorCategory(err error) string {
+	switch {
+	case err == nil:
+		return "FAILED"
+	case errors.Is(err, os.ErrPermission):
+		return "PERMISSION"
+	case errors.Is(err, os.ErrNotExist):
+		return "MISSING"
+	case errors.Is(err, os.ErrExist):
+		return "EXISTS"
+	case errors.Is(err, errObservationMalformedCursor):
+		return "MALFORMED"
+	default:
+		return "IO"
+	}
+}
+
+func recordObservationProjectionFailure(root, stage string, err error) {
 	defer func() { _ = recover() }()
-	path := filepath.Join(root, "telemetry", "telemetry_health.json")
-	data, err := os.ReadFile(path)
-	health := map[string]any{"schema_version": 1, "status": "OK", "failure_count": 0, "last_error_code": nil}
-	if err == nil {
-		var saved map[string]any
-		if json.Unmarshal(data, &saved) == nil && saved != nil {
-			health = saved
-		}
-	}
-	count, ok := health["failure_count"].(float64)
-	if !ok {
-		if n, yes := health["failure_count"].(int); yes {
-			count, ok = float64(n), true
-		} else if value, yes := health["failure_count"].(bool); yes {
-			if value {
-				count = 1
-			}
-			ok = true
-		}
-	}
-	if !ok || count < 0 || math.Trunc(count) != count {
-		count = 0
-	}
-	health["schema_version"], health["status"], health["failure_count"], health["last_error_code"] = 1, "DEGRADED", count+1, "TELEMETRY_PROJECTION_FAILED"
-	health["updated_at"] = now.UTC().Format(time.RFC3339Nano)
-	encoded, err := json.Marshal(health)
-	if err == nil {
-		_ = atomicObservationJSON(path, encoded)
-	}
+	reason := "PROJECTION_" + stage + "_" + observationErrorCategory(err)
+	_ = telemetryhealth.Update(root, "projection", reason, "vault", true)
 }
 
 func projectObservationTask(root, taskID, projectKey, configPath string, envVault *string) {
 	state, vault := filepath.Dir(root), ""
+	stage := "RUN_NOTE"
 	defer func() {
 		if recover() != nil {
-			recordObservationProjectionFailure(state, observationProjectionNow())
+			recordObservationProjectionFailure(state, stage, errors.New("projection panic"))
 			if vault != "" {
 				writeObservationHealthFallback(state, vault)
 			}
@@ -1806,10 +1920,20 @@ func projectObservationTask(root, taskID, projectKey, configPath string, envVaul
 	projectState := filepath.Join(state, "projects", projectKey)
 	aggregatePath := filepath.Join(projectState, "telemetry", "tasks", taskID+".json")
 	var aggregate map[string]any
-	if data, err := os.ReadFile(aggregatePath); err == nil {
+	if data, readErr := os.ReadFile(aggregatePath); readErr == nil {
 		decoder := json.NewDecoder(bytes.NewReader(data))
 		decoder.UseNumber()
-		_ = decoder.Decode(&aggregate)
+		if decodeErr := decoder.Decode(&aggregate); decodeErr != nil {
+			recordObservationProjectionFailure(state, stage, decodeErr)
+			writeObservationHealthFallback(state, vault)
+			return
+		}
+	} else if errors.Is(readErr, os.ErrNotExist) {
+		return
+	} else {
+		recordObservationProjectionFailure(state, stage, readErr)
+		writeObservationHealthFallback(state, vault)
+		return
 	}
 	content, path, err := renderObservationRunNote(aggregate, vault)
 	if errors.Is(err, errObservationRunNoteUndated) {
@@ -1823,44 +1947,27 @@ func projectObservationTask(root, taskID, projectKey, configPath string, envVaul
 	}
 	var now string
 	if err == nil {
+		stage = "HEALTH_NOTE"
 		now = observationProjectionNow().UTC().Format(time.RFC3339Nano)
-		healthPath := filepath.Join(root, "telemetry_health.json")
-		data, readErr := os.ReadFile(healthPath)
-		health := map[string]any{"schema_version": 1, "status": "OK", "failure_count": 0, "last_error_code": nil}
-		if readErr == nil {
-			var saved map[string]any
-			if json.Unmarshal(data, &saved) == nil && saved != nil {
-				health = saved
-			}
-		}
-		health["schema_version"], health["last_projection_write_at"] = 1, now
-		encoded, marshalErr := json.Marshal(health)
-		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-			err = readErr
-		} else if marshalErr != nil {
-			err = marshalErr
-		} else {
-			err = atomicObservationJSON(healthPath, encoded)
-		}
-	}
-	if err == nil {
 		var writtenAt *string = &now
 		var healthNote string
 		var healthPath string
-		healthNote, healthPath, err = renderObservationHealthNote(state, vault, writtenAt)
+		healthNote, healthPath, err = renderObservationHealthNote(state, vault, writtenAt, &now)
 		if err == nil {
 			err = atomicObservationNote(healthPath, healthNote)
 		}
 	}
 	if err != nil {
-		recordObservationProjectionFailure(state, observationProjectionNow())
+		recordObservationProjectionFailure(state, stage, err)
 		writeObservationHealthFallback(state, vault)
+		return
 	}
+	_ = telemetryhealth.Update(state, "projection", "", "vault", false)
 }
 
 func writeObservationHealthFallback(state, vault string) {
 	defer func() { _ = recover() }()
-	if content, path, err := renderObservationHealthNote(state, vault, nil); err == nil {
+	if content, path, err := renderObservationHealthNote(state, vault, nil, nil); err == nil {
 		_ = atomicObservationNote(path, content)
 	}
 }
@@ -1939,7 +2046,7 @@ func observationConfigPath() string {
 
 func updateObservationTaskBestEffort(root, taskID, projectKey string) {
 	if err := updateObservationTask(root, taskID, projectKey); err != nil {
-		recordObservationHealth(filepath.Dir(root), "DEGRADED", "TELEMETRY_UPDATE_TASK_FAILED")
+		recordObservationHealth(filepath.Dir(root), "DEGRADED", "TELEMETRY_UPDATE_TASK_FAILED", err)
 	}
 }
 
@@ -1954,26 +2061,26 @@ func readObservationCursor(root, taskID, projectKey string) (int64, map[string]b
 	}
 	var value map[string]any
 	if json.Unmarshal(data, &value) != nil || len(value) != 3 || value["schema_version"] != float64(1) {
-		return 0, nil, fmt.Errorf("malformed task telemetry cursor")
+		return 0, nil, errObservationMalformedCursor
 	}
 	for key := range value {
 		if key != "schema_version" && key != "index_offset" && key != "spool_event_ids" {
-			return 0, nil, fmt.Errorf("malformed task telemetry cursor")
+			return 0, nil, errObservationMalformedCursor
 		}
 	}
 	offset, ok := value["index_offset"].(float64)
 	if !ok || offset < 0 || math.Trunc(offset) != offset || offset >= float64(math.MaxInt64) {
-		return 0, nil, fmt.Errorf("malformed task telemetry cursor")
+		return 0, nil, errObservationMalformedCursor
 	}
 	ids, ok := value["spool_event_ids"].([]any)
 	if !ok {
-		return 0, nil, fmt.Errorf("malformed task telemetry cursor")
+		return 0, nil, errObservationMalformedCursor
 	}
 	consumed := make(map[string]bool, len(ids))
 	for _, raw := range ids {
 		id, ok := raw.(string)
 		if !ok {
-			return 0, nil, fmt.Errorf("malformed task telemetry cursor")
+			return 0, nil, errObservationMalformedCursor
 		}
 		consumed[id] = true
 	}
@@ -2509,45 +2616,16 @@ func oneOfNumeric(value any, min, max float64) bool {
 var healthErrorCodes = fields("TELEMETRY_ENTRYPOINT_FAILURE TELEMETRY_EMIT_FAILED TELEMETRY_UPDATE_TASK_FAILED TELEMETRY_REBUILD_FAILED TELEMETRY_HEALTH_FAILED TELEMETRY_SPOOL_MERGE_FAILED TELEMETRY_PROJECTION_FAILED MALFORMED_SPOOL_EVENT CLAUDE_TRANSCRIPT_PARSER_UNAVAILABLE CLAUDE_TRANSCRIPT_PARSER_FAILED CLAUDE_TRANSCRIPT_FINALIZATION_FAILED CONTEXT_IO_EMIT_FAILED")
 
 // recordObservationHealth is best effort: health IO cannot affect enforcement.
-func recordObservationHealth(root, status, errorCode string) {
+func recordObservationHealth(root, status, errorCode string, underlying ...error) {
 	defer func() { _ = recover() }()
-	path := filepath.Join(root, "telemetry", "telemetry_health.json")
-	data, err := os.ReadFile(path)
-	health := map[string]any{"schema_version": 1, "status": "OK", "failure_count": 0, "last_error_code": nil}
-	if err == nil {
-		var saved map[string]any
-		if json.Unmarshal(data, &saved) == nil && saved != nil {
-			health = saved
-		}
-	}
-	if status == "DEGRADED" {
-		if !healthErrorCodes[errorCode] {
-			errorCode = "TELEMETRY_HEALTH_FAILED"
-		}
-		count, ok := health["failure_count"].(float64)
-		if !ok {
-			if n, yes := health["failure_count"].(int); yes {
-				count, ok = float64(n), true
-			} else if value, yes := health["failure_count"].(bool); yes {
-				if value {
-					count = 1
-				}
-				ok = true
-			}
-		}
-		if !ok || count < 0 || math.Trunc(count) != count {
-			count = 0
-		}
-		health["schema_version"], health["status"], health["failure_count"], health["last_error_code"] = 1, status, count+1, errorCode
-	} else if status == "OK" {
-		health["schema_version"], health["status"], health["last_error_code"] = 1, status, nil
-	} else {
+	if status != "DEGRADED" && status != "OK" {
 		return
 	}
-	health["updated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
-	data, err = json.Marshal(health)
-	if err != nil {
-		return
+	if !healthErrorCodes[errorCode] {
+		errorCode = "TELEMETRY_HEALTH_FAILED"
 	}
-	_ = atomicWrite(path, data)
+	if status == "DEGRADED" && errorCode == "TELEMETRY_UPDATE_TASK_FAILED" && len(underlying) > 0 {
+		errorCode = "INGESTION_TASK_UPDATE_" + observationErrorCategory(underlying[0])
+	}
+	_ = telemetryhealth.Update(root, "ingestion", errorCode, "state", status == "DEGRADED")
 }

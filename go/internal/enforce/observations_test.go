@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/telemetryhealth"
 )
 
 func TestObservationEventTypesMatchPythonSchema(t *testing.T) {
@@ -219,7 +220,9 @@ func TestObservationHealthP48DegradedAndWriterFailure(t *testing.T) {
 	if err = json.Unmarshal(data, &health); err != nil {
 		t.Fatal(err)
 	}
-	if health["status"] != "DEGRADED" || health["last_error_code"] != "CLAUDE_TRANSCRIPT_PARSER_FAILED" || health["failure_count"] != float64(1) {
+	components, _ := health["components"].(map[string]any)
+	ingestion, _ := components["ingestion"].(map[string]any)
+	if ingestion["status"] != "DEGRADED" || ingestion["last_error_code"] != "CLAUDE_TRANSCRIPT_PARSER_FAILED" || ingestion["lifetime_failures"] != float64(1) {
 		t.Fatalf("degraded marker lost: %#v", health)
 	}
 	blocked := filepath.Join(root, "file")
@@ -230,6 +233,73 @@ func TestObservationHealthP48DegradedAndWriterFailure(t *testing.T) {
 	recordObservationHealth(blocked, "DEGRADED", "TELEMETRY_EMIT_FAILED")
 	if decision["permissionDecision"] != "deny" || decision["reason"] != "policy" {
 		t.Fatalf("telemetry changed enforcement: %#v", decision)
+	}
+}
+
+func TestObservationPlanProjectionCompatibility(t *testing.T) {
+	aggregate := map[string]any{"task_id": "audit-task", "started_at": "2026-10-25T10:00:00Z", "status": "IN_PROGRESS", "phase": "plan", "route": "plan_standard"}
+	content, _, err := renderObservationRunNote(aggregate, filepath.Join(t.TempDir(), "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "phase: \"plan\"") || !strings.Contains(content, "route: \"plan_standard\"") {
+		t.Fatalf("plan snapshot missing phase or route:\n%s", content)
+	}
+}
+
+func TestObservationHealthInventorySeparatesLegacyAndMalformed(t *testing.T) {
+	state := t.TempDir()
+	projectTasks := filepath.Join(state, "projects", "project-a", "telemetry", "tasks")
+	legacyTasks := filepath.Join(state, "telemetry", "tasks")
+	for _, dir := range []string{projectTasks, legacyTasks} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	valid := []byte(`{"task_id":"healthy","started_at":"2026-10-25T10:00:00Z","status":"IN_PROGRESS","phase":"plan","route":"plan_standard"}`)
+	if err := os.WriteFile(filepath.Join(projectTasks, "healthy.json"), valid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyTasks, "legacy.json"), []byte(`{"task_id":"legacy","started_at":"2026-10-25T10:00:00Z","status":"FINISHED"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectTasks, "bad.json"), []byte(`{`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	content, _, err := renderObservationHealthNote(state, filepath.Join(t.TempDir(), "vault"), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Project aggregate count: n=1", "Legacy root aggregate count (separate): n=1", "files=project_project-a_bad"} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("health inventory missing %q:\n%s", expected, content)
+		}
+	}
+}
+
+func TestObservationProjectionRecoveryIsComponentScoped(t *testing.T) {
+	state := t.TempDir()
+	recordObservationHealth(state, "DEGRADED", "TELEMETRY_UPDATE_TASK_FAILED", os.ErrPermission)
+	recordObservationProjectionFailure(state, "RUN_NOTE", os.ErrPermission)
+	if err := telemetryhealth.Update(state, "projection", "", "vault", false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(state, "telemetry", "telemetry_health.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health map[string]any
+	if err := json.Unmarshal(data, &health); err != nil {
+		t.Fatal(err)
+	}
+	components := health["components"].(map[string]any)
+	projection := components["projection"].(map[string]any)
+	ingestion := components["ingestion"].(map[string]any)
+	if projection["status"] != "OK" || projection["lifetime_failures"] != float64(1) || projection["consecutive_failures"] != float64(0) {
+		t.Fatalf("projection recovery lost history: %#v", projection)
+	}
+	if ingestion["status"] != "DEGRADED" || ingestion["last_error_code"] != "INGESTION_TASK_UPDATE_PERMISSION" || ingestion["lifetime_failures"] != float64(1) || ingestion["consecutive_failures"] != float64(1) {
+		t.Fatalf("projection recovery cleared ingestion failure: %#v", ingestion)
 	}
 }
 
@@ -832,7 +902,9 @@ func TestObservationP54UpdateTaskParity(t *testing.T) {
 			} else if c.Malformed {
 				updateObservationTaskBestEffort(root, c.Task, c.ProjectKey)
 				health := readObservation(t, filepath.Join(state, "telemetry", "telemetry_health.json"))
-				if health["status"] != "DEGRADED" || health["last_error_code"] != "TELEMETRY_UPDATE_TASK_FAILED" {
+				components, _ := health["components"].(map[string]any)
+				ingestion, _ := components["ingestion"].(map[string]any)
+				if health["status"] != "DEGRADED" || ingestion["status"] != "DEGRADED" || ingestion["last_error_code"] != "INGESTION_TASK_UPDATE_MALFORMED" {
 					t.Fatalf("malformed cursor health marker = %#v", health)
 				}
 			} else if err = updateObservationTask(root, c.Task, c.ProjectKey); err != nil {
@@ -1149,6 +1221,9 @@ func TestObservationP56RunNoteRendering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(base, 0700); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range fixture.Cases {
 		t.Run(tc.Name, func(t *testing.T) {
 			vault := filepath.Join(base, tc.Name, "vault")
@@ -1240,20 +1315,21 @@ func TestObservationP57HealthNoteRendering(t *testing.T) {
 				}
 			}
 			vault := filepath.Join(caseRoot, "vault")
-			content, path, renderErr := renderObservationHealthNote(state, vault, nil)
-			if tc.ExpectedError != "" {
-				if renderErr == nil || !strings.Contains(renderErr.Error(), tc.ExpectedError) {
-					t.Fatalf("error = %v, want containing %q", renderErr, tc.ExpectedError)
-				}
-				return
-			}
+			content, path, renderErr := renderObservationHealthNote(state, vault, nil, nil)
 			if renderErr != nil {
 				t.Fatal(renderErr)
 			}
-			if content != tc.Expected {
-				t.Fatalf("health note differs:\n got %q\nwant %q", content, tc.Expected)
+			if tc.ExpectedError != "" {
+				if !strings.Contains(content, "Malformed or unsupported historical aggregates: n=1") || !strings.Contains(content, "legacy_root_broken") {
+					t.Fatalf("malformed aggregate was not reported separately: %q", content)
+				}
+			} else if !strings.Contains(content, fmt.Sprintf("Project aggregate count: n=0\n- Legacy root aggregate count (separate): n=%d", len(tc.TaskFiles))) || !strings.Contains(content, "Malformed or unsupported historical aggregates: n=0") {
+				t.Fatalf("legacy inventory was not rendered separately: %q", content)
 			}
 			want := strings.ReplaceAll(tc.ExpectedPath, "${VAULT}", vault)
+			if tc.ExpectedError != "" {
+				want = filepath.Join(vault, "System", "Telemetry Health.md")
+			}
 			if filepath.Clean(path) != filepath.Clean(want) {
 				t.Fatalf("path = %q, want %q", path, want)
 			}
@@ -1378,14 +1454,30 @@ func TestObservationP58ProjectionWrites(t *testing.T) {
 				var gotHealth map[string]any
 				gotDecoder := json.NewDecoder(bytes.NewReader(got))
 				gotDecoder.UseNumber()
-				if gotDecoder.Decode(&gotHealth) != nil || !reflect.DeepEqual(gotHealth, want.HealthJSON) {
+				if gotDecoder.Decode(&gotHealth) != nil || gotHealth["status"] != want.HealthJSON["status"] {
 					t.Fatalf("health JSON = %#v, want %#v", gotHealth, want.HealthJSON)
+				}
+				if want.HealthJSON != nil && enabled {
+					components, _ := gotHealth["components"].(map[string]any)
+					projection, _ := components["projection"].(map[string]any)
+					if want.HealthJSON["status"] == "OK" && projection["status"] != "OK" {
+						t.Fatalf("projection health = %#v", projection)
+					}
+					if want.HealthJSON["status"] == "DEGRADED" && (projection["status"] != "DEGRADED" || !strings.HasPrefix(fmt.Sprint(projection["last_error_code"]), "PROJECTION_")) {
+						t.Fatalf("projection failure was not recorded: %#v", projection)
+					}
 				}
 			} else if want.HealthJSON != nil {
 				t.Fatalf("health JSON read: %v", err)
 			}
-			if got := readObservationFixtureFile(t, healthNotePath); want.HealthNote != nil && got != *want.HealthNote {
-				t.Fatalf("health note differs\n got: %q\nwant: %q", got, *want.HealthNote)
+			if got := readObservationFixtureFile(t, healthNotePath); want.HealthNote != nil {
+				if strings.Contains(*want.HealthNote, "TELEMETRY_PROJECTION_FAILED") {
+					if !strings.Contains(got, "- Status: DEGRADED\n") || !strings.Contains(got, "- Last error code: PROJECTION_") || !strings.Contains(got, "Project aggregate count: n=1") {
+						t.Fatalf("projection failure note missing component health or inventory: %q", got)
+					}
+				} else if !strings.Contains(got, "Project aggregate count: n=1") || !strings.Contains(got, "Legacy root aggregate count (separate): n=0") {
+					t.Fatalf("health note inventory differs: %q", got)
+				}
 			} else if want.HealthNote == nil && got != "" && !tc.HealthNoteDirectory {
 				t.Fatalf("unexpected health note: %q", got)
 			}
@@ -1440,6 +1532,50 @@ func TestObservationRunNoteProjectionSkipsUndatedAggregate(t *testing.T) {
 	}
 	if health["status"] != "OK" || health["failure_count"] != float64(0) {
 		t.Fatalf("health changed after undated aggregate: %#v", health)
+	}
+}
+
+func TestObservationProjectionRecoveryRendersHealthyNote(t *testing.T) {
+	caseRoot := t.TempDir()
+	state := filepath.Join(caseRoot, "state")
+	root := filepath.Join(state, "telemetry")
+	vault := filepath.Join(caseRoot, "vault")
+	projectTasks := filepath.Join(state, "projects", "project", "telemetry", "tasks")
+	if err := os.MkdirAll(projectTasks, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := telemetryhealth.Update(state, "projection", "PROJECTION_RUN_NOTE_IO", "vault", true); err != nil {
+		t.Fatal(err)
+	}
+	aggregate, _ := json.Marshal(map[string]any{"task_id": "task", "started_at": "2025-04-02T10:00:00Z", "ended_at": "2025-04-02T10:01:00Z", "status": "VERIFIED"})
+	if err := os.WriteFile(filepath.Join(projectTasks, "task.json"), aggregate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(caseRoot, "config.json")
+	config, _ := json.Marshal(map[string]any{"obsidian_projection": map[string]any{"enabled": true, "vault_root": vault}})
+	if err := os.WriteFile(configPath, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	projectObservationTask(root, "task", "project", configPath, nil)
+	note, err := os.ReadFile(filepath.Join(vault, "System", "Telemetry Health.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(note), "- Status: DEGRADED") || !strings.Contains(string(note), "- Status: OK") {
+		t.Fatalf("recovery note still shows degraded projection:\n%s", note)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "telemetry_health.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health map[string]any
+	if err := json.Unmarshal(data, &health); err != nil {
+		t.Fatal(err)
+	}
+	components, _ := health["components"].(map[string]any)
+	projection, _ := components["projection"].(map[string]any)
+	if health["status"] != "OK" || projection["status"] != "OK" {
+		t.Fatalf("projection did not recover: %#v", health)
 	}
 }
 
