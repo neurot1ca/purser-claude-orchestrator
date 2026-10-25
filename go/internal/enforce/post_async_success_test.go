@@ -239,6 +239,13 @@ func TestDurableReviewFinalizationPythonOracleReplay(t *testing.T) {
 			if name == "reviewer_bridge_unavailable" && (bundle["claude_review_mode"] != "FULL" || bundle["reviewer1_result"] != nil) {
 				t.Fatalf("unavailable reviewer was represented as passing: %#v", bundle)
 			}
+			if name == "reviewer_bridge_unavailable" {
+				stored, readErr := readAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"))
+				if readErr != nil || mapValue(stored["reviewerOutcome"])["execution_status"] != "FAILED" ||
+					mapValue(stored["reviewerOutcome"])["verdict"] != nil {
+					t.Fatalf("reviewer execution failure facts=%#v err=%v", stored["reviewerOutcome"], readErr)
+				}
+			}
 			if want["bundle_persisted"] == true && !isFile(filepath.Join(state, "bundle_artifacts", stringValue(index["call_key"])+".json")) {
 				t.Fatal("bundle artifact was not persisted")
 			}
@@ -499,6 +506,84 @@ func TestAsyncSuccessReviewerKeepsHostValidationInArtifact(t *testing.T) {
 		worker["source"] != "HOST_TEST_EVIDENCE" || worker["status"] != "PASS" || artifact["validation"] != "PASS" || compact["validation"] != "PASS" {
 		t.Fatalf("reviewed artifact lost host validation: artifact=%#v compact validation=%v", artifact, compact["validation"])
 	}
+	stored, err := readAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"))
+	if err != nil || stored["project_key"] != "project-fixture" ||
+		!reflect.DeepEqual(stored["reviewerOutcome"], map[string]any{"execution_status": "COMPLETED", "verdict": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
+			"provider": "fixture-test", "requested_model": "fixture-model", "served_model_attestation": "fixture/actual"}) {
+		t.Fatalf("durable reviewer facts=%#v err=%v", stored["reviewerOutcome"], err)
+	}
+}
+
+func TestAsyncReviewerFactsStayWithEachJob(t *testing.T) {
+	state, repo, event, index, pending, original, _, resolved, loaded := newAsyncSuccessCase(t, "reviewer_job_isolation")
+	if err := os.WriteFile(filepath.Join(repo, "src", "file.go"), []byte("package src\n// review delta\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	configureNativeReviewer(t, state, &resolved, "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "PASS")
+	if _, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	firstID := stringValue(index["jobId"])
+	firstPath := filepath.Join(state, "codex_exec_mcp", "jobs", firstID+".json")
+
+	secondID := jobHash("later reviewer job")
+	secondIndex := clonePostMap(index)
+	secondIndex["jobId"], secondIndex["call"], secondIndex["stage"] = secondID, "later reviewer job", "FINALIZING"
+	secondJob := map[string]any{"jobId": secondID, "call": "later reviewer job", "state": "SUCCEEDED", "threadId": "thread-fixture", "repoRoot": repo}
+	secondPending := clonePostMap(pending)
+	secondPending["job_id"] = secondID
+	if err := writeAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", secondID+".json"), secondJob); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAsyncObject(filepath.Join(state, "async_jobs", secondID+".json"), secondIndex); err != nil {
+		t.Fatal(err)
+	}
+	secondEvent := clonePostMap(event)
+	secondEvent["tool_input"] = map[string]any{"jobId": secondID}
+	secondEvent["tool_response"] = map[string]any{"structuredContent": map[string]any{"jobId": secondID, "state": "SUCCEEDED", "threadId": "thread-fixture", "content": "done"}}
+	configureNativeReviewer(t, state, &resolved, "", "")
+	delete(postReviewerAdapters, "fixture-test")
+	if _, err := finishAsyncSuccess(state, secondEvent, secondIndex, secondPending, original, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	first, err := readAsyncObject(firstPath)
+	if err != nil || mapValue(first["reviewerOutcome"])["execution_status"] != "COMPLETED" {
+		t.Fatalf("earlier job reviewer facts overwritten: %#v err=%v", first, err)
+	}
+	second, err := readAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", secondID+".json"))
+	if err != nil || mapValue(second["reviewerOutcome"])["execution_status"] != "UNAVAILABLE" ||
+		mapValue(second["reviewerOutcome"])["verdict"] != "REVIEWER1_UNAVAILABLE" ||
+		mapValue(second["reviewerOutcome"])["requested_model"] != "fixture-model" ||
+		mapValue(second["reviewerOutcome"])["served_model_attestation"] != nil {
+		t.Fatalf("later unavailable job reviewer facts=%#v err=%v", second["reviewerOutcome"], err)
+	}
+}
+
+func TestAsyncReviewerFactsPublicationFailureIsRetryable(t *testing.T) {
+	state, repo, event, index, pending, original, _, resolved, loaded := newAsyncSuccessCase(t, "reviewer_publication_failure")
+	if err := os.WriteFile(filepath.Join(repo, "src", "file.go"), []byte("package src\n// review delta\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	jobPath := filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json")
+	configureNativeReviewer(t, state, &resolved, "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE", "PASS")
+	t.Setenv("PURser_ASYNC_REVIEW_BLOCK_JOB_PATH", jobPath)
+	_, err := finishAsyncSuccess(state, event, index, pending, original, repo, loaded, resolved, nil,
+		map[string]any{"small_delta_max_files": 0, "small_delta_max_lines": 0}, 8000, 1200, 5*time.Second)
+	if err == nil {
+		t.Fatal("durable job publication unexpectedly succeeded")
+	}
+	previous, readErr := readAsyncObject(jobPath + ".previous")
+	if readErr != nil || previous["jobId"] != index["jobId"] {
+		t.Fatalf("previous valid job was not retained: %#v err=%v", previous, readErr)
+	}
+	response, retryErr := retryAsyncFinalization(state, index, err, stringValue(loaded["post_tool_output_field"]))
+	storedIndex, indexErr := readAsyncObject(filepath.Join(state, "async_jobs", stringValue(index["jobId"])+".json"))
+	if retryErr != nil || response == nil || indexErr != nil || storedIndex["stage"] != "RETRYABLE" ||
+		!fileExists(pendingPathForAsync(state, original)) {
+		t.Fatalf("publication failure lost retry/handoff state: response=%#v index=%#v err=%v indexErr=%v", response, storedIndex, retryErr, indexErr)
+	}
 }
 
 func TestAsyncIncompleteReviewPacketRecordsNoExecution(t *testing.T) {
@@ -537,6 +622,12 @@ func TestAsyncIncompleteReviewPacketRecordsNoExecution(t *testing.T) {
 	}
 	if _, err = os.Stat(calls); !os.IsNotExist(err) {
 		t.Fatalf("reviewer process was invoked (stat err=%v)", err)
+	}
+	stored, err := readAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"))
+	if err != nil || mapValue(stored["reviewerOutcome"])["execution_status"] != "SKIPPED" ||
+		mapValue(stored["reviewerOutcome"])["verdict"] != "UNCERTAIN" ||
+		mapValue(stored["reviewerOutcome"])["served_model_attestation"] != nil {
+		t.Fatalf("incomplete review was not recorded as nonexecuted: %#v err=%v", stored["reviewerOutcome"], err)
 	}
 }
 
@@ -934,7 +1025,7 @@ func configureNativeReviewer(t *testing.T, state string, resolved *postProfile, 
 	}
 	source := `package main
 import ("fmt"; "os")
-func main() { if calls := os.Getenv("PURser_ASYNC_REVIEW_CALLS"); calls != "" { f, err := os.OpenFile(calls, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600); if err == nil { _, _ = f.WriteString("called\n"); _ = f.Close() } }; fmt.Print(os.Getenv("PURser_ASYNC_REVIEW_OUTPUT")) }
+func main() { if calls := os.Getenv("PURser_ASYNC_REVIEW_CALLS"); calls != "" { f, err := os.OpenFile(calls, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600); if err == nil { _, _ = f.WriteString("called\n"); _ = f.Close() } }; if path := os.Getenv("PURser_ASYNC_REVIEW_BLOCK_JOB_PATH"); path != "" { _ = os.Rename(path, path+".previous"); _ = os.Mkdir(path, 0700) }; fmt.Print(os.Getenv("PURser_ASYNC_REVIEW_OUTPUT")) }
 `
 	sourcePath := filepath.Join(state, "mock_reviewer.go")
 	if err := os.WriteFile(sourcePath, []byte(source), 0600); err != nil {

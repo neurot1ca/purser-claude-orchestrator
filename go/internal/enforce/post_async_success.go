@@ -210,22 +210,24 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 	}
 	schedulePostReview(repoRoot, pending, bundle, resolved, checks, gateConfig, 30*time.Second, true, true)
 	delta := mapValue(bundle["delta"])
+	var reviewerResult review.BridgeOutcome
+	var reviewerErr error
 	if bundle["reviewer1_skipped_reason"] == nil && bundle["claude_review_mode"] == review.Full {
 		pluginRoot := pluginroot.Root()
 		if pluginRoot == "" {
 			pluginRoot = repoRoot
 		}
 		reviewerStarted := time.Now()
-		result, runErr := runPostReviewer(pluginRoot, root, pending, bundle, resolved, loaded, delta, mapValue(bundle["concurrent_writer"]), time.Now(), hookBudget)
+		reviewerResult, reviewerErr = runPostReviewer(pluginRoot, root, pending, bundle, resolved, loaded, delta, mapValue(bundle["concurrent_writer"]), time.Now(), hookBudget)
 		started := bundle["reviewer1_skipped_reason"] == nil
 		recordPostReviewerObservations(root, original, &repoRoot, stringValue(pending["task_id"]), pendingProjectKey(pending),
-			started, stringValue(result.Attributes["provider"]), stringValue(result.Attributes["reviewer1_model_requested"]), stringValue(bundle["reviewer1_skipped_reason"]),
-			result, runErr, time.Since(reviewerStarted), -1)
-		if runErr != nil {
+			started, stringValue(reviewerResult.Attributes["provider"]), stringValue(reviewerResult.Attributes["reviewer1_model_requested"]), stringValue(bundle["reviewer1_skipped_reason"]),
+			reviewerResult, reviewerErr, time.Since(reviewerStarted), -1)
+		if reviewerErr != nil {
 			bundle["claude_review_mode"] = review.Full
 			bundle["findings"] = appendPostFinding(bundle["findings"], "INTERNAL_POST_ERROR", "Reviewer failed during async result review.")
 		} else {
-			applyPostReviewerOutcome(root, event, pending, bundle, delta, mapValue(bundle["concurrent_writer"]), result,
+			applyPostReviewerOutcome(root, event, pending, bundle, delta, mapValue(bundle["concurrent_writer"]), reviewerResult,
 				true, routeInList(gateConfig["always_full_routes"], stringValue(pending["route"])))
 			if resolved.ForceFullReview || bundle["force_full_review"] == true || pending["task_contract_grounded"] != true {
 				bundle["claude_review_mode"] = review.Full
@@ -236,6 +238,14 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 			false, "", stringValue(loaded["reviewer1_model_requested"]), reason, review.BridgeOutcome{}, nil, 0, -1)
 	}
 	job["reviewedOutcome"] = bundle["reviewer1_result"]
+	projectKey := pendingProjectKey(pending)
+	if projectKey == "" {
+		projectKey = stringValue(index["project_key"])
+	}
+	if projectKey != "" {
+		job["project_key"] = projectKey
+	}
+	job["reviewerOutcome"] = asyncReviewerFacts(reviewerResult, reviewerErr, bundle, loaded, resolved)
 	job["reviewFindingRefs"] = []any{}
 	for _, finding := range postReviewerFindings(bundle["findings"]) {
 		if ref := stringValue(finding["reference"]); ref != "" {
@@ -294,6 +304,55 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		}
 	}
 	return response, nil
+}
+
+func asyncReviewerFacts(result review.BridgeOutcome, runErr error, bundle, loaded map[string]any, resolved postProfile) map[string]any {
+	attrs := result.Attributes
+	status := "FAILED"
+	skip := stringValue(bundle["reviewer1_skipped_reason"])
+	if skip != "" {
+		status = "SKIPPED"
+	}
+	if runErr != nil {
+		status = "FAILED"
+	} else if result.Outcome == "unavailable" || stringValue(attrs["review_status"]) == "UNAVAILABLE" ||
+		stringValue(attrs["result"]) == "REVIEWER1_UNAVAILABLE" {
+		status = "UNAVAILABLE"
+	} else if result.Outcome == "incomplete" || stringValue(attrs["review_status"]) == "NOT_RUN_INCOMPLETE_PACKET" {
+		status, skip = "SKIPPED", "REVIEWER1_INCOMPLETE"
+	} else if result.Outcome == "completed" || stringValue(attrs["review_status"]) == "COMPLETED" {
+		status = "COMPLETED"
+	}
+
+	provider := stringValue(attrs["provider"])
+	requested := stringValue(attrs["reviewer1_model_requested"])
+	if len(resolved.ReviewerCandidates) > 0 {
+		if provider == "" {
+			provider = resolved.ReviewerCandidates[0].Agent
+		}
+		if requested == "" {
+			requested = resolved.ReviewerCandidates[0].Model
+		}
+	}
+	if requested == "" {
+		requested = stringValue(loaded["reviewer1_model_requested"])
+	}
+	facts := map[string]any{"execution_status": status, "verdict": firstNonNil(attrs["result"], bundle["reviewer1_result"]),
+		"provider": asyncReviewerNullable(provider), "requested_model": asyncReviewerNullable(requested)}
+	if skip != "" {
+		facts["skip_reason"] = skip
+	}
+	if attestation := stringValue(attrs["served_model_attestation"]); attestation != "" && attestation != "UNAVAILABLE" {
+		facts["served_model_attestation"] = attestation
+	}
+	return facts
+}
+
+func asyncReviewerNullable(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 // pythonCodexResultJSON preserves the result object's key order and Python's
