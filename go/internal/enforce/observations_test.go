@@ -1579,6 +1579,80 @@ func TestObservationProjectionRecoveryRendersHealthyNote(t *testing.T) {
 	}
 }
 
+func TestAtomicObservationNoteRetriesTransientReplaceFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "note.md")
+	if err := os.WriteFile(path, []byte(observationWithMarker("", "old", false)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previousRename := renameObservationNote
+	t.Cleanup(func() { renameObservationNote = previousRename })
+	attempts := 0
+	transientErr := errors.New("temporary sharing violation")
+	renameObservationNote = func(source, target string) error {
+		attempts++
+		if attempts < 3 {
+			return transientErr
+		}
+		return os.Rename(source, target)
+	}
+	want := observationWithMarker("", "new", false)
+	if err := atomicObservationNote(path, want); err != nil {
+		t.Fatalf("atomic note write failed after transient replace errors: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("replace attempts = %d, want 3", attempts)
+	}
+	if got := readObservationFixtureFile(t, path); got != want {
+		t.Fatalf("note content after retry = %q, want %q", got, want)
+	}
+}
+
+func TestObservationProjectionRetryExhaustionRecordsFailure(t *testing.T) {
+	caseRoot := t.TempDir()
+	state := filepath.Join(caseRoot, "state")
+	root := filepath.Join(state, "telemetry")
+	vault := filepath.Join(caseRoot, "vault")
+	projectTasks := filepath.Join(state, "projects", "project", "telemetry", "tasks")
+	if err := os.MkdirAll(projectTasks, 0700); err != nil {
+		t.Fatal(err)
+	}
+	aggregate, _ := json.Marshal(map[string]any{"task_id": "task", "started_at": "2025-04-02T10:00:00Z", "ended_at": "2025-04-02T10:01:00Z", "status": "VERIFIED"})
+	if err := os.WriteFile(filepath.Join(projectTasks, "task.json"), aggregate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(caseRoot, "config.json")
+	config, _ := json.Marshal(map[string]any{"obsidian_projection": map[string]any{"enabled": true, "vault_root": vault}})
+	if err := os.WriteFile(configPath, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	previousRename := renameObservationNote
+	t.Cleanup(func() { renameObservationNote = previousRename })
+	runNoteAttempts := 0
+	transientErr := errors.New("temporary sharing violation")
+	renameObservationNote = func(_, target string) error {
+		if filepath.Base(target) == "task.md" {
+			runNoteAttempts++
+		}
+		return transientErr
+	}
+	projectObservationTask(root, "task", "project", configPath, nil)
+	if runNoteAttempts != 3 {
+		t.Fatalf("run-note replace attempts = %d, want exhausted budget of 3", runNoteAttempts)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "telemetry_health.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health map[string]any
+	if err := json.Unmarshal(data, &health); err != nil {
+		t.Fatal(err)
+	}
+	projection := health["components"].(map[string]any)["projection"].(map[string]any)
+	if projection["status"] != "DEGRADED" || projection["last_error_code"] != "PROJECTION_RUN_NOTE_IO" {
+		t.Fatalf("exhausted retry error was not recorded: %#v", projection)
+	}
+}
+
 func TestObservationDatedRunNoteCleansMarkedUndatedNotes(t *testing.T) {
 	caseRoot := t.TempDir()
 	state := filepath.Join(caseRoot, "state")

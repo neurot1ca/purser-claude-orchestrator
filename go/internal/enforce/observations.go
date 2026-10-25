@@ -1848,6 +1848,7 @@ func atomicObservationJSON(path string, encoded []byte) error {
 }
 
 var observationProjectionNow = time.Now
+var renameObservationNote = os.Rename
 
 func atomicObservationNote(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -1874,7 +1875,13 @@ func atomicObservationNote(path, content string) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(tmp, path)
+	for attempt := 0; ; attempt++ {
+		err = renameObservationNote(tmp, path)
+		if err == nil || attempt == 2 {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
+	}
 }
 
 func observationErrorCategory(err error) string {

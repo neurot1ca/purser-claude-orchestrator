@@ -479,6 +479,32 @@ func TestRetentionProjectsPreserveConfigurationWhenOverLimit(t *testing.T) {
 	if health["last_error_code"] != "RETENTION_LIMIT_BREACH" {
 		t.Fatalf("unexpected warning: %#v", health)
 	}
+	component := health["components"].(map[string]any)["retention"].(map[string]any)
+	if component["path_class"] != "state-root-entry-projects" {
+		t.Fatalf("over-limit entry was not identified: %#v", component)
+	}
+}
+
+func TestRetentionThreadAndPlanFilesAgeOut(t *testing.T) {
+	const now = int64(100 * 86400)
+	for _, item := range []struct{ name, extension string }{{"threads", ".json"}, {"plans", ".md"}} {
+		t.Run(item.name, func(t *testing.T) {
+			root := t.TempDir()
+			old := filepath.Join(root, "old"+item.extension)
+			recent := filepath.Join(root, "recent"+item.extension)
+			putFile(t, old, []byte("old"), now-91*86400)
+			putFile(t, recent, []byte("recent"), now-86400)
+			if result := pruneResult(root, registry[item.name], float64(now)); result.overLimit || result.deletionFailed {
+				t.Fatalf("age pruning failed: %#v", result)
+			}
+			if _, err := os.Stat(old); !os.IsNotExist(err) {
+				t.Fatalf("expired file remains: %v", err)
+			}
+			if _, err := os.Stat(recent); err != nil {
+				t.Fatalf("recent file was removed: %v", err)
+			}
+		})
+	}
 }
 
 func TestRetentionGenericAllowlistPreservesOwnerManagedArtifacts(t *testing.T) {
@@ -486,10 +512,11 @@ func TestRetentionGenericAllowlistPreservesOwnerManagedArtifacts(t *testing.T) {
 	if ownership.owner != "worktree-retirement" || ownership.maxAgeDays != 3 {
 		t.Fatalf("worktree ownership policy = %#v", ownership)
 	}
+	allowed := map[string]string{"model-catalog": "catalog.json", "threads": "*.json", "plans": "*.md"}
 	for name, p := range registry {
-		if name == "model-catalog" {
-			if len(p.deleteGlobs) != 1 || p.deleteGlobs[0] != "catalog.json" {
-				t.Fatalf("model-catalog allowlist = %#v", p.deleteGlobs)
+		if pattern, ok := allowed[name]; ok {
+			if len(p.deleteGlobs) != 1 || p.deleteGlobs[0] != pattern {
+				t.Fatalf("%s allowlist = %#v", name, p.deleteGlobs)
 			}
 			continue
 		}

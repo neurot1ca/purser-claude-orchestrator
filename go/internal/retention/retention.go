@@ -243,11 +243,11 @@ var registry = map[string]policy{
 	"remote-dev":                     bounded("remote-bridge"),
 	"remote-pids":                    bounded("remote-bridge"),
 	"sessions":                       limits(1024, 16*mib),
-	"threads":                        aged(90, 1024, 8*mib),
+	"threads":                        {maxAgeDays: 90, maxFiles: 8192, maxBytes: 8 * mib, deleteGlobs: []string{"*.json"}},
 	"context_io":                     limits(256, 16*mib),
 	"active_tasks":                   limits(256, 8*mib),
 	"maintenance":                    byteLimit(4 * mib),
-	"plans":                          aged(90, 64, 16*mib),
+	"plans":                          {maxAgeDays: 90, maxFiles: 512, maxBytes: 16 * mib, deleteGlobs: []string{"*.md"}},
 	"opencode":                       limits(128, 16*mib),
 	"model-catalog":                  {maxAgeDays: 30, maxFiles: 1, maxBytes: 32 * mib, deleteGlobs: []string{"catalog.json"}},
 	"diagnostics.jsonl":              byteLimit(4 * mib),
@@ -333,10 +333,11 @@ func PruneState(root string, now float64, checkCeiling bool) {
 			continue
 		}
 		if result := pruneResult(path, p, now); result.overLimit && ok {
+			entryPathClass := "state-root-entry-" + strings.ReplaceAll(entry.Name(), ".", "-")
 			if result.deletionFailed {
-				warnings.record("RETENTION_DELETION_FAILED", "state-root-entry")
+				warnings.record("RETENTION_DELETION_FAILED", entryPathClass)
 			} else {
-				warnings.record("RETENTION_LIMIT_BREACH", "state-root-entry")
+				warnings.record("RETENTION_LIMIT_BREACH", entryPathClass)
 			}
 		}
 	}
