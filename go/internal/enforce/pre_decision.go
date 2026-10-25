@@ -87,7 +87,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		if parsed.Code == "CONFIG_INVALID" {
 			return nil, errors.New(parsed.Message)
 		}
-		return denyPre(parsed.Code, parsed.Message), nil
+		return denyPre(parsed.Code, parsed.DenialMessage()), nil
 	}
 
 	var live map[string]any
@@ -116,7 +116,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		live["_last_outcome"] = recovery.Record["last_outcome"]
 	}
 	if !parsed.Valid {
-		return denyPre(parsed.Code, parsed.Message), nil
+		return denyPre(parsed.Code, parsed.DenialMessage()), nil
 	}
 	if !reply {
 		loadAttempt(root, parsed)
@@ -794,6 +794,9 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		"reason_source":    observedReasonSource, "previous_route": optionalString(previousRoute), "new_route": optionalString(newRoute),
 		"task_type": observationTaskType, "suspected_route_mismatch": suspected,
 		"agent": selection.Agent, "provider": provider(selection.Agent, selection.Model)}
+	if len(parsed.Normalizations) > 0 {
+		obs["orch_normalizations"] = strings.Join(parsed.Normalizations, ",")
+	}
 	if routeAdjustmentReason != nil {
 		obs["route_adjustment_reason"] = *routeAdjustmentReason
 	}

@@ -42,6 +42,8 @@ type OrchParseResult struct {
 	Scope          []string `json:"scope"`
 	ETAMinutes     *int     `json:"eta_minutes"`
 	ReviewFindings []string `json:"review_findings,omitempty"`
+	Normalizations []string `json:"normalizations,omitempty"`
+	Correction     string   `json:"-"`
 }
 
 func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
@@ -64,6 +66,7 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 	}
 
 	values := make(map[string]string)
+	normalizations := []string{}
 	for _, field := range strings.Split(first, "|")[1:] {
 		key, value, hasValue := strings.Cut(field, "=")
 		if !hasValue {
@@ -83,6 +86,12 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 		}
 		if key == "task" && strings.TrimSpace(value) == "" {
 			return orchFailure(remainder, orchMalformedLine, "The ORCH task value cannot be empty.", values)
+		}
+		if key == "phase" || key == "reason" {
+			if normalized := normalizeOrchEnum(key, value); normalized != value {
+				normalizations = append(normalizations, key+"="+value+"->"+normalized)
+				value = normalized
+			}
 		}
 		values[key] = value
 	}
@@ -201,12 +210,16 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 		TaskID: stringPointer(values["task"]), Phase: stringPointer(values["phase"]), Route: stringPointer(values["route"]),
 		Reason: optionalStringPointer(values, "reason"), Basis: optionalStringPointer(values, "basis"),
 		Requested: optionalStringPointer(values, "requested"),
-		Scope:     scope, ETAMinutes: etaMinutes, ReviewFindings: reviewFindings,
+		Scope:     scope, ETAMinutes: etaMinutes, ReviewFindings: reviewFindings, Normalizations: normalizations,
 	}
 }
 
 func orchFailure(prompt, code, message string, values map[string]string) OrchParseResult {
-	result := OrchParseResult{Valid: false, Code: code, Message: message, Prompt: prompt, Scope: []string{}}
+	correction := ""
+	if values != nil && ((code == orchInvalidEnum && strings.HasPrefix(message, "ORCH ")) || (code == orchMissingRequiredKey && strings.Contains(message, "scope")) || code == orchNeedsBasis) {
+		correction = correctedOrchLine(values)
+	}
+	result := OrchParseResult{Valid: false, Code: code, Message: message, Prompt: prompt, Scope: []string{}, Correction: correction}
 	if values != nil {
 		result.TaskID = optionalStringPointer(values, "task")
 		result.Phase = optionalStringPointer(values, "phase")
@@ -216,6 +229,109 @@ func orchFailure(prompt, code, message string, values map[string]string) OrchPar
 		result.Requested = optionalStringPointer(values, "requested")
 	}
 	return result
+}
+
+func (result OrchParseResult) DenialMessage() string {
+	if result.Correction == "" {
+		return result.Message
+	}
+	return result.Message + "\nCorrected: " + result.Correction
+}
+
+func normalizeOrchEnum(key, value string) string {
+	normalized := strings.ToLower(strings.ReplaceAll(value, "-", "_"))
+	aliases := map[string]map[string]string{
+		"phase":  {"implement": "implementation", "impl": "implementation", "code": "implementation", "op": "operation", "ops": "operation"},
+		"reason": {"feedback": "fix", "review_feedback": "fix", "review": "fix", "sendback": "fix", "send_back": "fix", "new": "new_task", "cont": "continue"},
+	}
+	if canonical, ok := aliases[key][normalized]; ok {
+		return canonical
+	}
+	canonicalValues := map[string]map[string]bool{
+		"phase":  {"implementation": true, "operation": true, "plan": true},
+		"reason": {"new_task": true, "continue": true, "fix": true, "route_change": true, "reanchor": true, "repeated_failure": true, "user_override": true},
+	}
+	if canonicalValues[key][normalized] {
+		return normalized
+	}
+	return value
+}
+
+func correctedOrchLine(values map[string]string) string {
+	corrected := make(map[string]string, len(values)+2)
+	for key, value := range values {
+		corrected[key] = value
+	}
+	for _, key := range []string{"phase", "reason", "route", "requested"} {
+		if value, ok := corrected[key]; ok {
+			if candidate := closestOrchEnum(key, value); candidate != "" {
+				corrected[key] = candidate
+			}
+		}
+	}
+	if corrected["phase"] == "implementation" && corrected["scope"] == "" {
+		corrected["scope"] = "<paths>"
+	}
+	if _, ok := corrected["basis"]; !ok && (corrected["route"] == "normal" || corrected["route"] == "consequential" || corrected["route"] == "escalated") {
+		corrected["basis"] = "design:<...>"
+	}
+	keys := []string{"task", "phase", "route", "reason", "basis", "scope", "eta", "review_findings", "requested"}
+	line := "ORCH"
+	for _, key := range keys {
+		if value, ok := corrected[key]; ok {
+			line += "|" + key + "=" + value
+		}
+	}
+	return line
+}
+
+func closestOrchEnum(key, value string) string {
+	var candidates []string
+	switch key {
+	case "phase":
+		candidates = []string{"implementation", "operation", "plan"}
+	case "reason":
+		candidates = []string{"new_task", "continue", "fix", "route_change", "reanchor", "repeated_failure", "user_override"}
+	case "route":
+		candidates = []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard"}
+	case "requested":
+		candidates = []string{"user"}
+	default:
+		return ""
+	}
+	best, distance, tied := "", len(value)+1, false
+	for _, candidate := range candidates {
+		d := orchEditDistance(strings.ToLower(strings.ReplaceAll(value, "-", "_")), candidate)
+		if d < distance {
+			best, distance, tied = candidate, d, false
+		} else if d == distance {
+			tied = true
+		}
+	}
+	if distance <= 3 && !tied {
+		return best
+	}
+	return ""
+}
+
+func orchEditDistance(a, b string) int {
+	previous := make([]int, len(b)+1)
+	for j := range previous {
+		previous[j] = j
+	}
+	for i, left := range a {
+		current := make([]int, len(b)+1)
+		current[0] = i + 1
+		for j, right := range b {
+			cost := 0
+			if left != right {
+				cost = 1
+			}
+			current[j+1] = min(current[j]+1, previous[j+1]+1, previous[j]+cost)
+		}
+		previous = current
+	}
+	return previous[len(b)]
 }
 
 func implementationScope(value string) ([]string, string) {

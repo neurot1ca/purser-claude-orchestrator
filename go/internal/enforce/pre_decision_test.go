@@ -17,6 +17,7 @@ import (
 
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/policy"
 )
 
 func TestAppendPreCodeMapScopedExcerpt(t *testing.T) {
@@ -871,6 +872,29 @@ func TestDenyPreRoutingHelpTargetsORCHErrors(t *testing.T) {
 	scope := mapValue(mapValue(denyPre("INVALID_SCOPE", "Scope must contain repository-relative paths without traversal.")["hookSpecificOutput"]))
 	if reason := stringValue(scope["permissionDecisionReason"]); strings.Contains(reason, "Prepend this as the FIRST line") || !strings.Contains(reason, "Replace absolute or traversing paths") {
 		t.Fatalf("scope denial should give only its targeted repair: %q", reason)
+	}
+}
+
+func TestDenyPreIncludesCorrectedOrchLine(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := map[string]any{}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&config); err != nil {
+		t.Fatal(err)
+	}
+	parsed := policy.ParseOrchPrompt("ORCH|task=task-1|phase=implemetation|route=subtle", config)
+	if parsed.Valid {
+		t.Fatal("misspelled phase unexpectedly accepted")
+	}
+	denied := denyPre(parsed.Code, parsed.DenialMessage())
+	hook := mapValue(denied["hookSpecificOutput"])
+	reason := stringValue(hook["permissionDecisionReason"])
+	if !strings.Contains(reason, "Corrected: ORCH|task=task-1|phase=implementation|route=subtle|scope=<paths>") {
+		t.Fatalf("deny reason is missing the corrected ORCH line: %q", reason)
 	}
 }
 

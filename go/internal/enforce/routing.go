@@ -239,7 +239,7 @@ func recoverReply(event map[string]any, runtimeRoot string, explicitRoot *string
 		}
 	} else {
 		if !parsed.Valid {
-			return replyFailure(parsed.Code, parsed.Message)
+			return replyFailure(parsed.Code, parsed.DenialMessage())
 		}
 		failed := failedTask != nil && failedTask(root, parsed)
 		id, _ := threadID.(string)
