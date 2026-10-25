@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.196 — 2026-10-25
+
+- **Fixed:** the usage band keeps a quota pill after its window resets, showing 0% until the next snapshot instead of hiding it.
+
 ## 0.1.195 — 2026-10-24
 
 - **Fixed:** auto-compact no longer prints a failure line when the session is busy with a turn; it retries quietly after the next turn.
