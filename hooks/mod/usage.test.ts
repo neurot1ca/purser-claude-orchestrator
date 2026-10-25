@@ -70,6 +70,43 @@ test('selects the newest Codex artifact with quota and stops at twenty files', (
   expect(readQuotaSnapshot(Array.from({ length: 20 }, () => ({})).concat([quotaRecord()]), now)).toEqual({})
 })
 
+test('shows reset windows as renewed and keeps invalid windows hidden', () => {
+  const expired = quotaRecord(69, 90)
+  expired.codex_quota['5h_resets_at'] = '2026-10-04T11:59:59Z'
+  const codex = readQuotaSnapshot([expired], now)
+  const claude = mapSessionUsage({ context: { percent: 42.5 }, rateLimits: [
+    { kind: 'five_hour', percentUsed: 20, resetsAt: '2026-10-04T11:59:59Z' },
+    { kind: 'seven_day', percentUsed: 30, resetsAt: '2026-10-04T14:00:00Z' },
+  ] }, now)
+  const codexPills = usageGroups(codex, { quota: { fiveHour: undefined, sevenDay: undefined } }, now)[0]
+  const codexPill = codexPills[0]
+  const claudePill = usageGroups({}, claude, now)[0][0]
+  expect(codexPill).toMatchObject({
+    id: 'codex-5h', value: '0%', percent: 0,
+    detail: 'codex 5h quota renewed; no usage recorded since the reset',
+  })
+  expect(codexPill.tick).toBeUndefined()
+  expect(codexPill.countdown).toBeUndefined()
+  expect(codexPills.map(pill => pill.id)).toEqual(['codex-5h', 'codex-7d'])
+  expect(claudePill).toMatchObject({
+    id: 'claude-5h', value: '0%', percent: 0,
+    detail: 'claude 5h quota renewed; no usage recorded since the reset; context 42.5%',
+  })
+  expect(claudePill.tick).toBeUndefined()
+  expect(claudePill.countdown).toBeUndefined()
+
+  const invalid = quotaRecord()
+  invalid.codex_quota['5h_used_pct'] = 101
+  invalid.codex_quota['5h_resets_at'] = 'not a reset date'
+  invalid.codex_quota['7d_used_pct'] = Number.NaN
+  const invalidPills = usageGroups(readQuotaSnapshot([invalid], now), { quota: { fiveHour: undefined, sevenDay: undefined } }, now)
+  expect(invalidPills).toEqual([])
+
+  const futurePill = usageGroups(readQuotaSnapshot([quotaRecord()], now), { quota: { fiveHour: undefined, sevenDay: undefined } }, now)[0][0]
+  expect(futurePill).toMatchObject({ id: 'codex-5h', value: '69%', percent: 69, countdown: '2h 30m', tick: 0.5 })
+  expect(futurePill.detail).toBe('codex 5h quota 69.0% used; resets in 2h 30m')
+})
+
 test('uses a dark theme media query and an interactive title in each SVG', () => {
   const pill = usageGroups({}, mapSessionUsage(usage, now), now)[0][0]
   const svg = pillSvg(pill)

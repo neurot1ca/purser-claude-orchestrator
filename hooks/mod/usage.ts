@@ -1,11 +1,17 @@
 import { stateRoot } from './state-root.js'
 
-type Window = { percent: number; resetAt: number; windowMs: number }
+type Window = { percent: number; resetAt?: number; windowMs: number }
 type Quota = { fiveHour?: Window; sevenDay?: Window; model?: string; effort?: string }
 type SessionData = { quota: Quota; contextFill?: number; cost?: number }
 type Pill = { id: string; label: string; value: string; detail: string; icon: string; color: string; brandMark?: 'claude' | 'codex'; percent?: number; tick?: number; countdown?: string }
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+
+function quotaWindow(percent: unknown, reset: unknown, windowMs: number, now: number): Window | undefined {
+  const resetAt = typeof reset === 'string' ? Date.parse(reset) : Number.NaN
+  if (!finite(percent) || percent < 0 || percent > 100 || !Number.isFinite(resetAt)) return undefined
+  return resetAt <= now ? { percent: 0, windowMs } : { percent, resetAt, windowMs }
+}
 
 export function formatUsageNumber(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 1 : 2).replace(/\.?0+$/, '')}M`
@@ -31,10 +37,7 @@ const remaining = (resetAt: number, now: number) => {
 
 function rateLimit(rateLimits: any, kind: 'five_hour' | 'seven_day', windowMs: number, now: number): Window | undefined {
   const limit = Array.isArray(rateLimits) ? rateLimits.find(item => item?.kind === kind) : undefined
-  const percent = limit?.percentUsed
-  const resetAt = Date.parse(limit?.resetsAt)
-  if (!finite(percent) || percent < 0 || percent > 100 || !Number.isFinite(resetAt) || resetAt <= now) return undefined
-  return { percent, resetAt, windowMs }
+  return quotaWindow(limit?.percentUsed, limit?.resetsAt, windowMs, now)
 }
 
 export function mapSessionUsage(value: any, now = Date.now()): SessionData {
@@ -77,10 +80,7 @@ export function readQuotaSnapshot(records: unknown[], now = Date.now()): Quota {
     const quota = (item as any)?.codex_quota
     if (!quota || typeof quota !== 'object') continue
     const window = (name: '5h' | '7d', duration: number): Window | undefined => {
-      const percent = quota[`${name}_used_pct`]
-      const resetAt = Date.parse(quota[`${name}_resets_at`])
-      if (!finite(percent) || percent < 0 || percent > 100 || !Number.isFinite(resetAt) || resetAt <= now) return undefined
-      return { percent, resetAt, windowMs: duration }
+      return quotaWindow(quota[`${name}_used_pct`], quota[`${name}_resets_at`], duration, now)
     }
     return { fiveHour: window('5h', 5 * 60 * 60_000), sevenDay: window('7d', 7 * 24 * 60 * 60_000) }
   }
@@ -93,14 +93,17 @@ function quotaPills(quota: Quota, prefix: string, now: number, contextFill?: num
     ['5h', quota.fiveHour, '◴'], ['7d', quota.sevenDay, '▦'],
   ] as const) {
     if (!window) continue
-    const timeLeft = window.resetAt - now
+    const renewed = window.resetAt === undefined
+    const timeLeft = renewed ? undefined : window.resetAt - now
     const context = contextFill === undefined ? '' : `; context ${contextFill.toFixed(1)}%`
     pills.push({
       id: `${prefix}-${name}`, label: prefix === 'codex' ? `codex ${name}` : `${icon} ${name}`,
       value: `${Math.round(window.percent)}%`,
-      detail: `${prefix} ${name} quota ${window.percent.toFixed(1)}% used; resets in ${remaining(window.resetAt, now)}${context}`,
+      detail: renewed
+        ? `${prefix} ${name} quota renewed; no usage recorded since the reset${context}`
+        : `${prefix} ${name} quota ${window.percent.toFixed(1)}% used; resets in ${remaining(window.resetAt!, now)}${context}`,
       icon: '◷', color: prefix === 'claude' ? '#d97757' : '#6b7cff', percent: window.percent,
-      tick: timeElapsedTick(timeLeft, window.windowMs), countdown: remaining(window.resetAt, now),
+      ...(timeLeft === undefined ? {} : { tick: timeElapsedTick(timeLeft, window.windowMs), countdown: remaining(window.resetAt!, now) }),
     })
   }
   return pills
