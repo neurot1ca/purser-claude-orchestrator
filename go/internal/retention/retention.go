@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/telemetryhealth"
 )
 
 const (
@@ -217,35 +218,57 @@ func newerPluginVersion(a, b string) bool {
 }
 
 var registry = map[string]policy{
-	"preparations":              bounded("preparations"),
-	"wt":                        bounded("worktrees"),
-	"marketplace":               bounded("release"),
-	"telemetry":                 bounded("telemetry-distill"),
-	"projects":                  byteLimit(128 * mib),
-	"apply_validation":          bounded("validation-retention"),
-	"task_retries":              bounded("task-retry-evidence"),
-	"codex_exec_mcp":            bounded("jobs-cleanup"),
-	"raw_tool_outputs":          {maxAgeDays: 7, maxFiles: -1, maxBytes: 64 * mib},
-	"bundle_artifacts":          {maxAgeDays: 7, maxFiles: -1, maxBytes: 32 * mib},
-	"async_jobs":                bounded("jobs-cleanup"),
-	"worktree_ownership":        {owner: "worktree-retirement", maxAgeDays: 3, maxFiles: -1, maxBytes: -1},
-	"pending":                   bounded("jobs-cleanup"),
-	"mcp-handoffs":              bounded("mcp-handoff-sweep"),
-	"sessions":                  limits(1024, 16*mib),
-	"threads":                   aged(90, 1024, 8*mib),
-	"context_io":                limits(256, 16*mib),
-	"active_tasks":              limits(256, 8*mib),
-	"maintenance":               byteLimit(4 * mib),
-	"plans":                     aged(90, 64, 16*mib),
-	"opencode":                  limits(128, 16*mib),
-	"model-catalog":             {maxAgeDays: 30, maxFiles: 1, maxBytes: 32 * mib, deleteGlobs: []string{"catalog.json"}},
-	"diagnostics.jsonl":         byteLimit(4 * mib),
-	"codex-cli-version.json":    byteLimit(mib),
-	"model-version-notice.json": byteLimit(mib),
-	"plugin-version.json":       byteLimit(mib),
-	"auto-compact.json":         byteLimit(mib),
-	CeilingStamp:                bounded("retention"),
-	ceilingLock:                 bounded("retention"),
+	"preparations":                   bounded("preparations"),
+	"wt":                             bounded("worktrees"),
+	"marketplace":                    bounded("release"),
+	"telemetry":                      bounded("telemetry-distill"),
+	"projects":                       byteLimit(128 * mib),
+	"apply_validation":               bounded("validation-retention"),
+	"task_retries":                   bounded("task-retry-evidence"),
+	"codex_exec_mcp":                 bounded("jobs-cleanup"),
+	"raw_tool_outputs":               {maxAgeDays: 7, maxFiles: -1, maxBytes: 64 * mib},
+	"bundle_artifacts":               {maxAgeDays: 7, maxFiles: -1, maxBytes: 32 * mib},
+	"async_jobs":                     bounded("jobs-cleanup"),
+	"worktree_ownership":             {owner: "worktree-retirement", maxAgeDays: 3, maxFiles: -1, maxBytes: -1},
+	"pending":                        bounded("jobs-cleanup"),
+	"mcp-handoffs":                   bounded("mcp-handoff-sweep"),
+	"cache":                          bounded("jobs-cache-cleanup"),
+	"cleanup":                        bounded("jobs-cleanup"),
+	"gear-advice":                    limits(1024, 8*mib),
+	"receipt_deliveries":             limits(4096, 16*mib),
+	"diagnostics":                    limits(20, 4*mib),
+	"review_diffs":                   limits(1024, 64*mib),
+	"remote-token":                   bounded("remote-bridge"),
+	"remote.env":                     bounded("remote-bridge"),
+	"remote-dev":                     bounded("remote-bridge"),
+	"remote-pids":                    bounded("remote-bridge"),
+	"sessions":                       limits(1024, 16*mib),
+	"threads":                        aged(90, 1024, 8*mib),
+	"context_io":                     limits(256, 16*mib),
+	"active_tasks":                   limits(256, 8*mib),
+	"maintenance":                    byteLimit(4 * mib),
+	"plans":                          aged(90, 64, 16*mib),
+	"opencode":                       limits(128, 16*mib),
+	"model-catalog":                  {maxAgeDays: 30, maxFiles: 1, maxBytes: 32 * mib, deleteGlobs: []string{"catalog.json"}},
+	"diagnostics.jsonl":              byteLimit(4 * mib),
+	"codex-cli-version.json":         byteLimit(mib),
+	"model-version-notice.json":      byteLimit(mib),
+	"plugin-version.json":            byteLimit(mib),
+	"auto-compact.json":              byteLimit(mib),
+	"auto-compact.log":               byteLimit(mib),
+	"hook-activity.json":             byteLimit(mib),
+	"model-resolution.json":          byteLimit(mib),
+	"model-resolution.json.lock":     byteLimit(mib),
+	"model-version-notice.json.lock": byteLimit(mib),
+	"codex-cli-version.json.lock":    byteLimit(mib),
+	"update-check.json":              byteLimit(mib),
+	"update-check.json.lock":         byteLimit(mib),
+	"user-language.json":             byteLimit(mib),
+	"catalog-refresh.lock":           byteLimit(mib),
+	"catalog-refresh-error.json":     byteLimit(mib),
+	"catalog-refresh-error.json.tmp": byteLimit(mib),
+	CeilingStamp:                     bounded("retention"),
+	ceilingLock:                      bounded("retention"),
 }
 
 var defaultPolicy = policy{maxAgeDays: 30, maxFiles: -1, maxBytes: 64 * mib}
@@ -254,64 +277,46 @@ var defaultPolicy = policy{maxAgeDays: 30, maxFiles: -1, maxBytes: 64 * mib}
 func Warning(root string) {
 	warningOnce.Do(func() { _, _ = fmt.Fprintln(os.Stderr, "orchestrator telemetry degraded: STATE_RETENTION_LIMIT") })
 	defer func() { _ = recover() }()
-	if !safeRoot(root) {
+	newWarningRecorder(root).record("RETENTION_LIMIT_BREACH", "state-root")
+}
+
+type warningRecorder struct {
+	root string
+	seen map[string]bool
+}
+
+func newWarningRecorder(root string) *warningRecorder {
+	return &warningRecorder{root: root, seen: map[string]bool{}}
+}
+func (w *warningRecorder) record(reason, pathClass string) {
+	key := reason + "/" + pathClass
+	if w.seen[key] {
 		return
 	}
-	telemetryDir := filepath.Join(root, "telemetry")
-	if isReparsePath(telemetryDir) {
-		return
-	}
-	path := filepath.Join(telemetryDir, "telemetry_health.json")
-	if err := os.MkdirAll(telemetryDir, 0700); err != nil || isReparsePath(path) {
-		return
-	}
-	health := map[string]any{"schema_version": 1, "status": "OK", "failure_count": 0, "last_error_code": nil}
-	if data, err := os.ReadFile(path); err == nil {
-		var saved map[string]any
-		if json.Unmarshal(data, &saved) == nil && saved != nil {
-			health = saved
-		}
-	}
-	count, ok := health["failure_count"].(float64)
-	if !ok || count < 0 || count != float64(int64(count)) {
-		count = 0
-	}
-	health["schema_version"], health["status"] = 1, "DEGRADED"
-	health["failure_count"], health["last_error_code"] = int64(count)+1, "STATE_RETENTION_LIMIT"
-	health["updated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
-	data, err := json.Marshal(health)
-	if err != nil {
-		return
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".telemetry_health.*.tmp")
-	if err != nil {
-		return
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err = tmp.Chmod(0600); err == nil {
-		_, err = tmp.Write(data)
-	}
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if closeErr := tmp.Close(); err == nil {
-		err = closeErr
-	}
-	if err == nil {
-		_ = os.Rename(tmpName, path)
+	w.seen[key] = true
+	_ = telemetryhealth.Update(w.root, "retention", reason, pathClass, true)
+}
+func (w *warningRecorder) finish() {
+	if len(w.seen) == 0 {
+		_ = telemetryhealth.Update(w.root, "retention", "", "state-root", false)
 	}
 }
 
-// PruneState removes only explicitly regenerable files and performs the daily root check when requested.
+// PruneState applies registered policies and the fallback for unknown root entries.
 func PruneState(root string, now float64, checkCeiling bool) {
 	defer func() { _ = recover() }()
 	if !safeRoot(root) {
 		return
 	}
-	retireArtifacts(root, now, buildArtifactReferences(root))
+	warnings := newWarningRecorder(root)
+	refs := buildArtifactReferences(root)
+	if refs.uncertain {
+		warnings.record("RETENTION_CHECK_INCOMPLETE", "artifact-inventory")
+	}
+	retireArtifacts(root, now, refs, warnings.record)
 	entries, err := os.ReadDir(root)
 	if err != nil {
+		warnings.record("RETENTION_CHECK_INCOMPLETE", "state-root")
 		return
 	}
 	for _, entry := range entries {
@@ -322,18 +327,25 @@ func PruneState(root string, now float64, checkCeiling bool) {
 		p, ok := registry[entry.Name()]
 		if !ok {
 			p = defaultPolicy
-			Warning(root)
+			warnings.record("RETENTION_UNKNOWN_OWNERSHIP", "state-root-entry")
 		}
 		if p.owner != "" {
 			continue
 		}
-		if prune(path, p, now) {
-			Warning(root)
+		if result := pruneResult(path, p, now); result.overLimit && ok {
+			if result.deletionFailed {
+				warnings.record("RETENTION_DELETION_FAILED", "state-root-entry")
+			} else {
+				warnings.record("RETENTION_LIMIT_BREACH", "state-root-entry")
+			}
 		}
 	}
 	if checkCeiling {
-		checkRootCeiling(root, now)
+		if !checkRootCeiling(root, now, warnings.record) {
+			warnings.record("RETENTION_CHECK_INCOMPLETE", "state-root")
+		}
 	}
+	warnings.finish()
 }
 
 // Artifact deletion uses the producer's lock and rechecks disposition inside it.
@@ -422,7 +434,7 @@ func buildArtifactReferences(root string) artifactReferences {
 	return refs
 }
 
-func retireArtifacts(root string, now float64, refs artifactReferences) {
+func retireArtifacts(root string, now float64, refs artifactReferences, warn func(string, string)) {
 	bundleExcess := rootSize(filepath.Join(root, "bundle_artifacts")) - registry["bundle_artifacts"].maxBytes
 	projectExcess := rootSize(filepath.Join(root, "projects")) - registry["projects"].maxBytes
 	for _, path := range filesUnder(filepath.Join(root, "apply_validation")) {
@@ -458,11 +470,11 @@ func retireArtifacts(root string, now float64, refs artifactReferences) {
 			}
 			stamp, e := fileMtime(path)
 			if e == nil && now-stamp >= float64(days)*86400 {
-				retireArtifactFile(root, log, now, days, nil)
+				retireArtifactFile(root, log, now, days, nil, warn)
 			}
 			// Retain the summary if log removal was blocked: it is retry authority.
 			if !pathExists(log) {
-				retireArtifactFile(root, path, now, 14, nil)
+				retireArtifactFile(root, path, now, 14, nil, warn)
 			}
 		}
 		_ = unlock()
@@ -527,13 +539,13 @@ func retireArtifacts(root string, now float64, refs artifactReferences) {
 				if ageOnly {
 					rawLimit = nil
 				}
-				retireArtifactFile(root, raw, now, 7, rawLimit)
+				retireArtifactFile(root, raw, now, 7, rawLimit, warn)
 				if !pathExists(raw) {
 					bundleLimit := &bundleExcess
 					if ageOnly {
 						bundleLimit = nil
 					}
-					retireArtifactFile(root, bundle, now, 7, bundleLimit)
+					retireArtifactFile(root, bundle, now, 7, bundleLimit, warn)
 				}
 			}
 		}
@@ -551,7 +563,7 @@ func retireArtifacts(root string, now float64, refs artifactReferences) {
 			continue
 		}
 		if !pathExists(filepath.Join(project, "scope_leases.json")) && !pathExists(filepath.Join(project, "active_plan.json")) && !pathExists(filepath.Join(project, "active-coder.json")) && !artifactReferenced(refs, []string{parts[0]}) {
-			retireArtifactFile(root, path, now, 14, &projectExcess)
+			retireArtifactFile(root, path, now, 14, &projectExcess, warn)
 		}
 		_ = unlock()
 	}
@@ -594,7 +606,7 @@ func artifactLock(root, path string) (func() error, error) {
 	}, nil
 }
 
-func retireArtifactFile(root, path string, now float64, days int, excess *int64) bool {
+func retireArtifactFile(root, path string, now float64, days int, excess *int64, warn func(string, string)) bool {
 	if !artifactSafePath(root, path) || !regularFile(path) {
 		return false
 	}
@@ -604,7 +616,7 @@ func retireArtifactFile(root, path string, now float64, days int, excess *int64)
 	}
 	size := fileSize(path)
 	if removeRetainedFile(path) != nil || !errorsIsNotExist(path) {
-		Warning(root)
+		warn("RETENTION_DELETION_FAILED", "artifact")
 		return false
 	}
 	if excess != nil {
@@ -627,8 +639,13 @@ func artifactReferenced(refs artifactReferences, needles []string) bool {
 	return false
 }
 
-func prune(base string, p policy, now float64) bool {
+func prune(base string, p policy, now float64) bool { return pruneResult(base, p, now).overLimit }
+
+type pruneOutcome struct{ overLimit, deletionFailed bool }
+
+func pruneResult(base string, p policy, now float64) pruneOutcome {
 	files := filesUnder(base)
+	deletionFailed := false
 	cutoff := float64(0)
 	if p.maxAgeDays >= 0 {
 		cutoff = now - float64(p.maxAgeDays)*86400
@@ -639,6 +656,8 @@ func prune(base string, p policy, now float64) bool {
 			if stamp, err := fileMtime(path); err == nil && stamp < cutoff {
 				if os.Remove(path) == nil || errorsIsNotExist(path) {
 					files = removePath(files, path)
+				} else {
+					deletionFailed = true
 				}
 			}
 		}
@@ -657,9 +676,11 @@ func prune(base string, p policy, now float64) bool {
 		if os.Remove(path) == nil || errorsIsNotExist(path) {
 			count--
 			total -= size
+		} else {
+			deletionFailed = true
 		}
 	}
-	return overLimit(filesUnder(base), p, now)
+	return pruneOutcome{overLimit: overLimit(filesUnder(base), p, now), deletionFailed: deletionFailed}
 }
 
 func errorsIsNotExist(path string) bool {
@@ -807,47 +828,56 @@ func rootSize(root string) int64 {
 	return size
 }
 
-func checkRootCeiling(root string, now float64) {
+func checkRootCeiling(root string, now float64, warn ...func(string, string)) bool {
+	record := func(code, class string) {
+		if len(warn) > 0 {
+			warn[0](code, class)
+		} else {
+			Warning(root)
+		}
+	}
 	if !safeRoot(root) {
-		return
+		return false
 	}
 	lockPath := filepath.Join(root, ceilingLock)
 	if isReparsePath(lockPath) {
-		return
+		return false
 	}
 	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return
+		return false
 	}
 	defer file.Close()
 	if info, e := file.Stat(); e != nil {
-		return
+		return false
 	} else if info.Size() == 0 {
 		if _, e = file.WriteAt([]byte("0"), 0); e != nil {
-			return
+			return false
 		}
 	}
 	if err = contextio.TryLock(file); err != nil {
-		return
+		return false
 	}
 	defer contextio.Unlock(file)
 	stamp := filepath.Join(root, CeilingStamp)
 	if isReparsePath(stamp) {
-		return
+		return false
 	}
 	if mtime, e := fileMtime(stamp); e == nil && now-mtime < 86400 {
-		return
+		return true
 	}
 	if rootSize(root) > stateRootMaxBytes {
-		Warning(root)
+		record("RETENTION_LIMIT_BREACH", "state-root")
 	}
 	stampFile, err := os.OpenFile(stamp, os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
-		return
+		return false
 	}
-	_ = stampFile.Close()
+	if err := stampFile.Close(); err != nil {
+		return false
+	}
 	when := time.Unix(0, int64(now*1e9))
-	_ = os.Chtimes(stamp, when, when)
+	return os.Chtimes(stamp, when, when) == nil
 }
 
 // RetirePreparations removes completed or expired orphan replay generations.
@@ -914,9 +944,13 @@ func RetirePreparations(root string, now float64, checkBytes bool) {
 		}
 		_ = unlock()
 	}
-	if protectedCount > maxPrepCount || (checkBytes && protectedBytes > maxPrepBytes) ||
-		(removalFailed && (count > maxPrepCount || (checkBytes && total > maxPrepBytes))) {
-		Warning(root)
+	protectedOverLimit := protectedCount > maxPrepCount || (checkBytes && protectedBytes > maxPrepBytes)
+	remainingOverLimit := count > maxPrepCount || (checkBytes && total > maxPrepBytes)
+	warnings := newWarningRecorder(root)
+	if removalFailed && remainingOverLimit {
+		warnings.record("RETENTION_DELETION_FAILED", "preparations")
+	} else if protectedOverLimit {
+		warnings.record("RETENTION_LIMIT_BREACH", "preparations")
 	}
 }
 

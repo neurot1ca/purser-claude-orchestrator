@@ -349,13 +349,20 @@ func TestAppendOnlyDiagnosticsAreNotRotated(t *testing.T) {
 	}
 }
 
-func TestUnknownDirectoryUsesDefaultAndWarnsWithoutDeleting(t *testing.T) {
+func TestUnknownEntriesUseDefaultAndWarnWithoutDeleting(t *testing.T) {
 	root := t.TempDir()
-	stale := filepath.Join(root, "new-state", "stale")
-	putFile(t, stale, []byte("keep"), 1000)
+	entries := []string{
+		"new-state/stale", "new-state/nested/stale", "debug.log",
+		"changes.patch", "MIGRATED_FROM.txt", "release.ps1",
+	}
+	for _, entry := range entries {
+		putFile(t, filepath.Join(root, filepath.FromSlash(entry)), []byte("keep"), 1000)
+	}
 	PruneState(root, 1000+31*86400, false)
-	if _, err := os.Stat(stale); err != nil {
-		t.Fatalf("unknown-directory file was removed: %v", err)
+	for _, entry := range entries {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(entry))); err != nil {
+			t.Fatalf("unknown entry was removed: %s: %v", entry, err)
+		}
 	}
 	data, err := os.ReadFile(filepath.Join(root, "telemetry", "telemetry_health.json"))
 	if err != nil {
@@ -365,8 +372,52 @@ func TestUnknownDirectoryUsesDefaultAndWarnsWithoutDeleting(t *testing.T) {
 	if err := json.Unmarshal(data, &health); err != nil {
 		t.Fatal(err)
 	}
-	if health["status"] != "DEGRADED" || health["last_error_code"] != "STATE_RETENTION_LIMIT" {
+	if health["status"] != "DEGRADED" || health["last_error_code"] != "RETENTION_UNKNOWN_OWNERSHIP" {
 		t.Fatalf("unexpected health warning: %#v", health)
+	}
+	component := health["components"].(map[string]any)["retention"].(map[string]any)
+	if component["last_error_code"] != "RETENTION_UNKNOWN_OWNERSHIP" || component["path_class"] != "state-root-entry" {
+		t.Fatalf("unknown entry was misattributed: %#v", component)
+	}
+	if health["lifetime_failure_count"] != float64(1) {
+		t.Fatalf("same-pass ownership warnings were not coalesced: %#v", health)
+	}
+}
+
+func TestPurserProducedRootEntriesAreRegistered(t *testing.T) {
+	root := t.TempDir()
+	entries := []string{
+		"cache/tmp/job/output", "cleanup/child.json", "gear-advice/claims/id.json",
+		"receipt_deliveries/id.json", "diagnostics/reviewer/id.json", "review_diffs/id.diff",
+		"hook-activity.json", "model-resolution.json", "model-resolution.json.lock",
+		"model-version-notice.json.lock", "codex-cli-version.json.lock",
+		"update-check.json", "update-check.json.lock", "user-language.json",
+		"catalog-refresh.lock", "catalog-refresh-error.json", "catalog-refresh-error.json.tmp",
+		"remote-token", "remote.env", "remote-dev/config.json", "remote-pids", "auto-compact.log",
+	}
+	for _, entry := range entries {
+		p, ok := registry[strings.SplitN(entry, "/", 2)[0]]
+		if !ok || len(p.deleteGlobs) != 0 {
+			t.Fatalf("producer-owned entry lacks a protected policy: %s: %#v", entry, p)
+		}
+		putFile(t, filepath.Join(root, filepath.FromSlash(entry)), []byte("owned"), 1000)
+	}
+	PruneState(root, 1000+31*86400, false)
+	for _, entry := range entries {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(entry))); err != nil {
+			t.Errorf("producer-owned entry was pruned: %s: %v", entry, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(root, "telemetry", "telemetry_health.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health map[string]any
+	if err := json.Unmarshal(data, &health); err != nil {
+		t.Fatal(err)
+	}
+	if health["status"] != "OK" || health["lifetime_failure_count"] != float64(0) {
+		t.Fatalf("producer-owned entries reported as unknown: %#v", health)
 	}
 }
 
@@ -387,8 +438,16 @@ func TestMCPHandoffsDoNotTriggerUnknownDirectoryWarning(t *testing.T) {
 	root := t.TempDir()
 	putFile(t, filepath.Join(root, "mcp-handoffs", "old.json"), []byte("owned"), 1000)
 	PruneState(root, 1000+31*86400, false)
-	if _, err := os.Stat(filepath.Join(root, "telemetry", "telemetry_health.json")); !os.IsNotExist(err) {
-		t.Fatalf("owner-managed MCP handoffs triggered a retention warning: %v", err)
+	data, err := os.ReadFile(filepath.Join(root, "telemetry", "telemetry_health.json"))
+	if err != nil {
+		t.Fatalf("successful retention check was not recorded: %v", err)
+	}
+	var health map[string]any
+	if err := json.Unmarshal(data, &health); err != nil {
+		t.Fatal(err)
+	}
+	if health["status"] != "OK" || health["lifetime_failure_count"] != float64(0) {
+		t.Fatalf("owner-managed MCP handoffs triggered a retention warning: %#v", health)
 	}
 }
 
@@ -417,7 +476,7 @@ func TestRetentionProjectsPreserveConfigurationWhenOverLimit(t *testing.T) {
 	if err := json.Unmarshal(data, &health); err != nil {
 		t.Fatal(err)
 	}
-	if health["last_error_code"] != "STATE_RETENTION_LIMIT" {
+	if health["last_error_code"] != "RETENTION_LIMIT_BREACH" {
 		t.Fatalf("unexpected warning: %#v", health)
 	}
 }
@@ -687,7 +746,7 @@ func TestCeilingWarningWritesHealthOncePerDailyStamp(t *testing.T) {
 	if err = json.Unmarshal(data, &health); err != nil {
 		t.Fatal(err)
 	}
-	if health["last_error_code"] != "STATE_RETENTION_LIMIT" || health["failure_count"] != float64(1) {
+	if health["last_error_code"] != "RETENTION_LIMIT_BREACH" || health["lifetime_failure_count"] != float64(1) {
 		t.Fatalf("warning = %#v", health)
 	}
 }
@@ -806,7 +865,7 @@ func TestPreparationByteWalkOnlyRunsWhenRequested(t *testing.T) {
 	if err = json.Unmarshal(data, &health); err != nil {
 		t.Fatal(err)
 	}
-	if health["last_error_code"] != "STATE_RETENTION_LIMIT" {
+	if health["last_error_code"] != "RETENTION_LIMIT_BREACH" {
 		t.Fatalf("unexpected byte warning: %#v", health)
 	}
 }
