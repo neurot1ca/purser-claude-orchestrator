@@ -29,6 +29,8 @@ allowed-tools:
 
 Choose the concrete bundled binary for the current OS and architecture and invoke its quoted path directly: `purser-hook-windows-amd64.exe`, `purser-hook-windows-arm64.exe`, `purser-hook-darwin-amd64`, `purser-hook-darwin-arm64`, `purser-hook-linux-amd64`, or `purser-hook-linux-arm64`. Run `"${CLAUDE_PLUGIN_ROOT}/bin/<selected-binary>" optimize`.
 
+Run `"${CLAUDE_PLUGIN_ROOT}/bin/<selected-binary>" optimize telemetry` for the read-only reviewer telemetry report.
+
 Translate its English output into the user's language. Preserve the Markdown structure and table, numbers, names, ⚓, and bold formatting exactly. Then give at most one recommendation in the user's language. The report is read-only; never change settings, files, or plugins without the user's explicit yes.
 
 ## Maintenance report
