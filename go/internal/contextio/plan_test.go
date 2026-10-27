@@ -305,9 +305,6 @@ func TestPlanGraphRejectsInvalidAcceptance(t *testing.T) {
 		{"duplicate ID", strings.Replace(readyPlanArtifact, "### M2", "### M1", 1), []int{1, 2, 3}},
 		{"parallel scope", strings.Replace(readyPlanArtifact, "src/b.go", "src", 1), []int{1, 2, 3}},
 		{"unsafe path", strings.Replace(readyPlanArtifact, "src/b.go", "../outside", 1), []int{1, 2, 3}},
-		{"home-relative path", strings.Replace(readyPlanArtifact, "src/b.go", "~/outside/config.json", 1), []int{1, 2, 3}},
-		{"drive path", strings.Replace(readyPlanArtifact, "src/b.go", "C:/outside/config.json", 1), []int{1, 2, 3}},
-		{"UNC path", strings.Replace(readyPlanArtifact, "src/b.go", `\\server\share\config.json`, 1), []int{1, 2, 3}},
 		{"unbounded section", readyPlanArtifact + "### M4\n**Dependency:** none\n**Write paths:**\n- c.go\n" + strings.Repeat("x", 32769), []int{1, 2, 3, 4}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -458,9 +455,9 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 	if _, err := UpdatePlan(root, repo, "graph", state.Revision, "complete-milestone", "2"); err == nil {
 		t.Fatal("running milestone completed")
 	}
-	// The validation seam blocks dependent release whenever a state is present
-	// and not PASS; absence retains existing completion behavior.
+	// An unfinished prerequisite blocks dependent release unless its validation passes.
 	path, _, _ := planPath(root, repo)
+	state.CompletedMilestones = nil
 	for _, validation := range []string{"PENDING", "FAIL", "UNKNOWN", "SKIPPED"} {
 		state.Milestones[0].ValidationState = validation
 		if err := writePlans(path, []*PlanState{state}); err != nil {
@@ -472,6 +469,7 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 		}
 	}
 	state.Milestones[0].ValidationState = "PASS"
+	state.CompletedMilestones = []int{1}
 	if err := writePlans(path, []*PlanState{state}); err != nil {
 		t.Fatal(err)
 	}
@@ -486,6 +484,90 @@ func TestPlanReadyLeavesAndImmediateDependentRelease(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	}
+	state.CompletedMilestones = []int{1}
+}
+
+func TestCompletedPassedMilestoneRemainsReadyAfterLaterValidation(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := AcceptPlan(root, repo, "graph", artifact, []int{1, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeJob := func(id string, appliedAt int) {
+		t.Helper()
+		jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
+		if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(map[string]any{"jobId": id, "appliedAt": appliedAt})
+		if err := os.WriteFile(jobPath, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, pass := range []struct {
+		task, job string
+		at        int
+	}{{"graph-m1of3", "job-1", 1}, {"graph-m2of3", "job-2", 2}} {
+		if _, _, err := BindPlanJob(root, repo, pass.task, pass.job); err != nil {
+			t.Fatal(err)
+		}
+		if err := RecordPlanApply(root, repo, pass.task, pass.job); err != nil {
+			t.Fatal(err)
+		}
+		writeJob(pass.job, pass.at)
+	}
+	if err := RecordPlanValidation(root, repo, "graph-m1of3", "job-1", "PASS"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = ReadPlanForTask(root, repo, "graph")
+	if err != nil || !containsMilestone(state.CompletedMilestones, 1) || !planDependenciesDone(state, 3) {
+		t.Fatalf("passed completion did not satisfy M3: %+v %v", state, err)
+	}
+	if err := RecordPlanValidation(root, repo, "graph-m2of3", "job-2", "FAILED"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = ReadPlanForTask(root, repo, "graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Milestones[0].ValidationState != "PASS" || !containsMilestone(state.CompletedMilestones, 1) || !planDependenciesDone(state, 3) {
+		t.Fatalf("later validation revoked completed M1: %+v", state)
+	}
+	if !containsReady(state.ReadyMilestones, "M3") {
+		t.Fatalf("completed M1 did not keep M3 ready: %+v", state.ReadyMilestones)
+	}
+	if _, err := UpdatePlan(root, repo, "graph", state.Revision, "complete-milestone", "3"); err != nil {
+		t.Fatalf("M3 completion rejected after M1 completion: %v", err)
+	}
+}
+
+func TestAcceptPlanDropsExternalWritePathsWithWarnings(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	content := "## Milestones\n### M1\n**Dependency:** none\n**Write paths:**\n- src\\safe.go\n- ~/.claude/hooks/prompt_context.py\n- /outside/file.go\n- C:\\outside\\file.go\n"
+	if err := os.WriteFile(artifact, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := AcceptPlan(root, repo, "paths", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(state.Milestones[0].WritePaths, []string{"src/safe.go"}) {
+		t.Fatalf("leased paths = %v", state.Milestones[0].WritePaths)
+	}
+	want := []string{
+		"Dropped out-of-repository write path for M1: ~/.claude/hooks/prompt_context.py",
+		"Dropped out-of-repository write path for M1: /outside/file.go",
+		"Dropped out-of-repository write path for M1: C:/outside/file.go",
+	}
+	if !reflect.DeepEqual(state.Warnings, want) {
+		t.Fatalf("warnings = %q, want %q", state.Warnings, want)
+	}
+	if _, err := parsePlanMilestones([]byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:**\n- ../escape\n"), []int{1}); err == nil {
+		t.Fatal("escaping traversal path was accepted")
 	}
 }
 
@@ -586,7 +668,7 @@ func TestRecordPlanValidationRejectsUnknownStatus(t *testing.T) {
 	}
 }
 
-func TestLaterPassingValidationSettlesStaleMilestone(t *testing.T) {
+func TestLaterPassingValidationDoesNotSettleAnotherMilestone(t *testing.T) {
 	for _, priorState := range []string{"STALE", "INTERRUPTED"} {
 		t.Run(priorState, func(t *testing.T) {
 			root, repo := planValidationSettlementFixture(t, priorState)
@@ -597,24 +679,24 @@ func TestLaterPassingValidationSettlesStaleMilestone(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if state.Milestones[0].ValidationState != "PASS" {
-				t.Fatalf("%s prerequisite state = %q, want PASS", priorState, state.Milestones[0].ValidationState)
+			if state.Milestones[0].ValidationState != priorState {
+				t.Fatalf("%s prerequisite state = %q, want unchanged", priorState, state.Milestones[0].ValidationState)
 			}
-			if !containsMilestone(state.CompletedMilestones, 1) {
-				t.Fatalf("passing later validation did not complete prerequisite: %+v", state)
+			if containsMilestone(state.CompletedMilestones, 1) {
+				t.Fatalf("later validation completed another milestone: %+v", state)
 			}
 		})
 	}
 }
 
-func TestCrossPlanValidationSettlesStaleMilestone(t *testing.T) {
+func TestCrossPlanValidationDoesNotSettleStaleMilestone(t *testing.T) {
 	for _, tc := range []struct {
-		name, status, want string
-		otherProject       bool
+		name, status string
+		otherProject bool
 	}{
-		{"pass", "PASS", "PASS", false},
-		{"timeout", "TIMEOUT", "STALE", false},
-		{"other-project", "PASS", "STALE", true},
+		{"pass", "PASS", false},
+		{"timeout", "TIMEOUT", false},
+		{"other-project", "PASS", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, repo, artifact := planFixture(t)
@@ -666,22 +748,22 @@ func TestCrossPlanValidationSettlesStaleMilestone(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := a.Milestones[1].ValidationState; got != tc.want {
-				t.Fatalf("M3 validation = %q, want %q", got, tc.want)
+			if got := a.Milestones[1].ValidationState; got != "STALE" {
+				t.Fatalf("M3 validation = %q, want unchanged STALE", got)
 			}
 			for _, n := range []int{2, 5} {
-				if got := planDependenciesDone(a, n); got != (tc.want == "PASS") {
-					t.Fatalf("M%d dependencies done = %v, validation %s", n, got, tc.want)
+				if got := planDependenciesDone(a, n); !got {
+					t.Fatalf("M%d dependency on completed M3 is not done", n)
 				}
 			}
-			if tc.want == "PASS" && (len(a.ReadyMilestones) != 2 || a.ReadyMilestones[0].ID != "M2" || a.ReadyMilestones[1].ID != "M5") {
+			if len(a.ReadyMilestones) != 2 || a.ReadyMilestones[0].ID != "M2" || a.ReadyMilestones[1].ID != "M5" {
 				t.Fatalf("dependents not ready: %+v", a.ReadyMilestones)
 			}
 		})
 	}
 }
 
-func TestLaterFailingValidationSettlesStaleMilestoneAsFailed(t *testing.T) {
+func TestLaterFailingValidationDoesNotAttributeToStaleMilestone(t *testing.T) {
 	root, repo := planValidationSettlementFixture(t, "STALE")
 	if err := RecordPlanValidation(root, repo, "graph-m2of3", "job-2", "FAILED"); err != nil {
 		t.Fatal(err)
@@ -690,8 +772,8 @@ func TestLaterFailingValidationSettlesStaleMilestoneAsFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Milestones[0].ValidationState != "FAILED" {
-		t.Fatalf("stale prerequisite state = %q, want FAILED", state.Milestones[0].ValidationState)
+	if state.Milestones[0].ValidationState != "STALE" {
+		t.Fatalf("stale prerequisite state = %q, want STALE", state.Milestones[0].ValidationState)
 	}
 	if containsMilestone(state.CompletedMilestones, 1) || planDependenciesDone(state, 3) {
 		t.Fatalf("failed later validation released prerequisite: %+v", state)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -61,15 +62,17 @@ type PlanState struct {
 	AppliedPasses       []PlanPass       `json:"applied_passes,omitempty"`
 	Milestones          []PlanMilestone  `json:"milestones,omitempty"`
 	ReadyMilestones     []ReadyMilestone `json:"ready_milestones,omitempty"`
+	Warnings            []string         `json:"warnings,omitempty"`
 	staleChecked        bool             `json:"-"`
 }
 
 type PlanMilestone struct {
-	ID              string   `json:"id"`
-	Dependencies    []int    `json:"dependencies,omitempty"`
-	WritePaths      []string `json:"write_paths,omitempty"`
-	TaskSection     string   `json:"task_section"`
-	ValidationState string   `json:"validation_state,omitempty"`
+	ID                string   `json:"id"`
+	Dependencies      []int    `json:"dependencies,omitempty"`
+	WritePaths        []string `json:"write_paths,omitempty"`
+	TaskSection       string   `json:"task_section"`
+	ValidationState   string   `json:"validation_state,omitempty"`
+	DroppedWritePaths []string `json:"-"`
 }
 
 type ReadyMilestone struct {
@@ -194,6 +197,7 @@ func validatePlanArtifact(state *PlanState) error {
 		for i, m := range expected {
 			saved := state.Milestones[i]
 			saved.ValidationState = ""
+			m.DroppedWritePaths = nil
 			if !reflect.DeepEqual(m, saved) {
 				return errors.New("active plan metadata does not match artifact")
 			}
@@ -344,11 +348,13 @@ func parsePlanMilestonesMode(data []byte, accepted []int, enforcePrerequisites b
 								return nil, fmt.Errorf("invalid write path for %s", m.ID)
 							}
 							for _, candidate := range expanded {
-								if strings.HasPrefix(candidate, "~/") {
-									return nil, fmt.Errorf("invalid write path for %s", m.ID)
+								normalized := strings.ReplaceAll(candidate, `\`, "/")
+								if strings.HasPrefix(normalized, "~") || strings.HasPrefix(normalized, "/") || len(normalized) >= 3 && normalized[1] == ':' && normalized[2] == '/' && (normalized[0] >= 'A' && normalized[0] <= 'Z' || normalized[0] >= 'a' && normalized[0] <= 'z') {
+									m.DroppedWritePaths = append(m.DroppedWritePaths, candidate)
+									continue
 								}
-								clean := filepath.ToSlash(filepath.Clean(candidate))
-								if clean == "." || filepath.IsAbs(clean) || strings.Contains(clean, ":") || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(clean, "*?[]{}") {
+								clean := pathpkg.Clean(normalized)
+								if clean == "." || strings.Contains(clean, ":") || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(clean, "*?[]{}") {
 									return nil, fmt.Errorf("invalid write path for %s", m.ID)
 								}
 								m.WritePaths = append(m.WritePaths, clean)
@@ -367,7 +373,7 @@ func parsePlanMilestonesMode(data []byte, accepted []int, enforcePrerequisites b
 	byID := map[int]PlanMilestone{}
 	for _, m := range result {
 		n := milestoneNumber(m.ID)
-		if _, duplicate := byID[n]; duplicate || depLine.FindStringSubmatch(m.TaskSection) == nil || (containsMilestone(accepted, n) && len(m.WritePaths) == 0) {
+		if _, duplicate := byID[n]; duplicate || depLine.FindStringSubmatch(m.TaskSection) == nil {
 			return nil, fmt.Errorf("duplicate or incomplete milestone %s", m.ID)
 		}
 		byID[n] = m
@@ -716,6 +722,12 @@ func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (*P
 		return nil, err
 	}
 	state := &PlanState{Version: planSchemaVersion, Revision: 1, ProjectKey: ProjectKey(canonical), ProjectRoot: canonical, TaskID: taskID, ArtifactPath: artifactPath, ArtifactDigest: hex.EncodeToString(digest[:]), AcceptedMilestones: accepted, CurrentMilestone: accepted[0], PendingNextAction: "dispatch", Milestones: metadata}
+	for i := range state.Milestones {
+		for _, dropped := range state.Milestones[i].DroppedWritePaths {
+			state.Warnings = append(state.Warnings, fmt.Sprintf("Dropped out-of-repository write path for %s: %s", state.Milestones[i].ID, dropped))
+		}
+		state.Milestones[i].DroppedWritePaths = nil
+	}
 	state.BaseHead, _ = runGit(canonical, "rev-parse", "--verify", "HEAD")
 	state.BaseHead = strings.TrimSpace(state.BaseHead)
 	states = append(states, state)
@@ -879,13 +891,6 @@ func missingPlanDependencies(state *PlanState, milestone int) []string {
 		for _, dependency := range item.Dependencies {
 			if !containsMilestone(state.CompletedMilestones, dependency) {
 				missing = append(missing, fmt.Sprintf("M%d", dependency))
-				continue
-			}
-			for _, prerequisite := range state.Milestones {
-				if milestoneNumber(prerequisite.ID) == dependency && prerequisite.ValidationState != "" && prerequisite.ValidationState != "PASS" {
-					missing = append(missing, fmt.Sprintf("M%d", dependency))
-					break
-				}
 			}
 		}
 		return missing
@@ -980,65 +985,17 @@ func RecordPlanValidation(root, repository, taskID, jobID, status string) error 
 		return nil
 	}
 	changed := false
-	passIndex := -1
-	for i, pass := range state.AppliedPasses {
-		if pass.JobID == jobID {
-			passIndex = i
-			break
-		}
-	}
+	passMilestone := milestoneForPass(state, jobID)
 	for i := range state.Milestones {
-		if milestoneNumber(state.Milestones[i].ID) == milestoneForPass(state, jobID) && state.Milestones[i].ValidationState != status {
+		if milestoneNumber(state.Milestones[i].ID) == passMilestone && !(containsMilestone(state.CompletedMilestones, passMilestone) && state.Milestones[i].ValidationState == "PASS") && state.Milestones[i].ValidationState != status {
 			state.Milestones[i].ValidationState = status
 			changed = true
 		}
 	}
-	settled := ""
-	switch status {
-	case "PASS":
-		settled = "PASS"
-	case "FAILED", "FAIL", "TIMEOUT":
-		settled = "FAILED"
-	}
-	validatedJob, _ := readSmallObject(filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json"))
-	validatedAt, validatedOK := numeric(validatedJob["appliedAt"])
-	ownerChanged := changed
-	changed = false
-	changedStates := make([]*PlanState, 0, len(states))
-	for _, candidate := range states {
-		candidateChanged := candidate == state && ownerChanged
-		if settled != "" {
-			for index, prior := range candidate.AppliedPasses {
-				if candidate != state || index >= passIndex {
-					if status != "PASS" {
-						continue
-					}
-					priorJob, ok := readSmallObject(filepath.Join(root, "codex_exec_mcp", "jobs", prior.JobID+".json"))
-					priorAt, priorOK := numeric(priorJob["appliedAt"])
-					if !ok || !priorOK || !validatedOK || priorJob["jobId"] != prior.JobID || validatedJob["jobId"] != jobID || !(priorAt > 0 && priorAt < validatedAt) {
-						continue
-					}
-				}
-				for i := range candidate.Milestones {
-					m := &candidate.Milestones[i]
-					if milestoneNumber(m.ID) == prior.Milestone && (m.ValidationState == "STALE" || m.ValidationState == "INTERRUPTED") {
-						m.ValidationState = settled
-						candidateChanged = true
-					}
-				}
-			}
-		}
-		if candidateChanged {
-			advanceAppliedMilestone(root, candidate, states)
-			candidate.Revision++
-			changed = true
-			changedStates = append(changedStates, candidate)
-		}
-	}
 	if changed {
-		for _, candidate := range changedStates {
-			candidate.ReadyMilestones = readyMilestones(root, candidate, states)
-		}
+		advanceAppliedMilestone(root, state, states)
+		state.Revision++
+		state.ReadyMilestones = readyMilestones(root, state, states)
 		return writePlans(path, states)
 	}
 	return nil
@@ -1375,11 +1332,6 @@ func planDependenciesDone(state *PlanState, n int) bool {
 		for _, dep := range m.Dependencies {
 			if !containsMilestone(state.CompletedMilestones, dep) {
 				return false
-			}
-			for _, prerequisite := range state.Milestones {
-				if milestoneNumber(prerequisite.ID) == dep && prerequisite.ValidationState != "" && prerequisite.ValidationState != "PASS" {
-					return false
-				}
 			}
 		}
 		return true
