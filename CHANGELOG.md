@@ -3,6 +3,17 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.203 — 2026-10-28
+
+- **Fixed:** a finalized failed job shows as failed on the job board, and a replay failure keeps the job's thread.
+- **Fixed:** an idle session is compacted before the hour-long prompt cache expires.
+- **Fixed:** worktree snapshots copy nested untracked repositories as files, and in-scope writes to the main checkout are flagged.
+- **Fixed:** completed plan milestones satisfy dependencies, and out-of-repository write paths are dropped from a plan with a warning.
+- **Fixed:** read-only jobs disable inherited MCP servers (user, profile and project Codex config), connectors and browser tools; OpenCode and agy now run read-only for plan and research jobs while keeping their report output.
+- **Fixed:** more ORCH value aliases are accepted, and a corrected ORCH line never suggests an invalid value.
+- **Fixed:** agy workers run commands in the foreground instead of stalling on background tasks.
+- **Fixed:** OpenCode and Cursor reviewers can read the whole review packet; its lines stay under the read tool's 2000-character limit.
+- **Fixed:** host validation also tests the changes of earlier applies whose validation was left stale.
 ## 0.1.202 — 2026-10-27
 
 - **Added:** a read-only `research` route (`phase=operation|route=research`) that runs on GPT-6.1 Terra at medium effort, falls back to Luna or Sol when Terra is unavailable, and uses the coder's own operation route when the coder is not Codex.
