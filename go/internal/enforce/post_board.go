@@ -181,7 +181,14 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 		j, idx := item.job, item.index
 		id, _ := j["jobId"].(string)
 		label := strings.NewReplacer("|", "\\|", "\r", " ", "\n", " ").Replace(fmt.Sprint(j["label"]))
-		state := map[string]string{"QUEUED": "queued", "RUNNING": "coding", "SUCCEEDED": "done", "FAILED": "failed", "TIMED_OUT": "failed", "CANCELLED": "cancelled", "UNKNOWN_OR_IN_PROGRESS": "coding"}[fmt.Sprint(j["state"])]
+		jobState := j["state"]
+		// Result finalization is recorded in the async index. It can fail after
+		// the worker job itself reached SUCCEEDED, so the index's terminal
+		// failure must take precedence for board display.
+		if idx["stage"] == "FAILED" || idx["terminal_failure"] == true {
+			jobState = "FAILED"
+		}
+		state := map[string]string{"QUEUED": "queued", "RUNNING": "coding", "SUCCEEDED": "done", "FAILED": "failed", "TIMED_OUT": "failed", "CANCELLED": "cancelled", "UNKNOWN_OR_IN_PROGRESS": "coding"}[fmt.Sprint(jobState)]
 		if state == "" {
 			state = "failed"
 		}
@@ -233,7 +240,7 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 		if apply == "—" && j["state"] != "QUEUED" && j["state"] != "RUNNING" && j["state"] != "UNKNOWN_OR_IN_PROGRESS" && ok && len(changed) == 0 {
 			apply = "no change"
 		}
-		if j["state"] == "SUCCEEDED" {
+		if jobState == "SUCCEEDED" {
 			switch {
 			case len(bundle) == 0:
 				state = "coded · fetching result"
@@ -248,10 +255,10 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 				state = "in review"
 			}
 		}
-		if j["applyState"] == "superseded" || j["applyState"] == "rejected" {
+		if jobState != "FAILED" && (j["applyState"] == "superseded" || j["applyState"] == "rejected") {
 			state = "done"
 		}
-		if applied {
+		if applied && jobState != "FAILED" {
 			state = "done"
 		}
 		if j["discarded"] == true {

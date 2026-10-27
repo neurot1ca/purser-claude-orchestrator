@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/policy"
 	"purser-hook/internal/testutil"
 )
 
@@ -173,6 +174,30 @@ func TestFailureSharedParityFixture(t *testing.T) {
 	}
 	if err := cleanupFailureTail(root, pendingPath, nil, map[string]any{}, false); err == nil {
 		t.Fatal("non-empty pending directory removal succeeded")
+	}
+}
+
+func TestReplayPreparationFailurePreservesPriorThreadIdentity(t *testing.T) {
+	root := t.TempDir()
+	pending := map[string]any{"task_id": "replay-task", "project_key": "replay-project",
+		"prior_thread_id": "live-thread", "route": "normal", "model": "gpt-6-sol", "effort": "medium"}
+	event := map[string]any{"error_code": "JOB_REPLAY_PREPARATION_FAILED"}
+	if err := saveFailureSession(root, event, pending, map[string]any{"status": "AMBIGUOUS_TOOL_FAILURE"}); err != nil {
+		t.Fatal(err)
+	}
+	path, err := ledger.PathForTask(filepath.Join(root, "projects", "replay-project"), "replay-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := ledger.Load(path, "replay-task")
+	thread := mapValue(saved.Record["live_thread"])
+	if saved.Status != ledger.OK || thread["thread_id"] != "live-thread" || thread["task_id"] != "replay-task" ||
+		thread["route"] != "normal" || thread["model"] != "gpt-6-sol" || thread["effort"] != "medium" {
+		t.Fatalf("replay failure lost complete prior thread identity: status=%q live_thread=%#v", saved.Status, thread)
+	}
+	requested := map[string]any{"task_id": "replay-task", "route": "normal", "model": "gpt-6-sol", "effort": "medium"}
+	if decision := policy.ThreadCompatibility(requested, thread); !decision.Compatible {
+		t.Fatalf("send-back identity rejected after replay failure: %#v", decision)
 	}
 }
 

@@ -179,10 +179,11 @@ func TestPostProjectJobBoardAddsKnownLanguageInstruction(t *testing.T) {
 func TestPostBoardTerminalAndQueuedStates(t *testing.T) {
 	id := strings.Repeat("a", 64)
 	tests := []struct {
-		name   string
-		job    map[string]any
-		want   string
-		unwant string
+		name       string
+		job        map[string]any
+		indexStage string
+		want       string
+		unwant     string
 	}{
 		{name: "cancelled", job: map[string]any{"state": "SUCCEEDED", "label": "Task cancelled", "discarded": true, "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "| Task cancelled | — | discarded |", unwant: "fetching result"},
 		{name: "failed", job: map[string]any{"state": "FAILED", "label": "Task failed", "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "| Task failed | — | failed |", unwant: "coding"},
@@ -190,12 +191,16 @@ func TestPostBoardTerminalAndQueuedStates(t *testing.T) {
 		{name: "rejected is done", job: map[string]any{"state": "SUCCEEDED", "label": "Task rejected", "applyState": "rejected", "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "| Task rejected | — | done |", unwant: "in review"},
 		{name: "superseded hides after usual count", job: map[string]any{"state": "SUCCEEDED", "label": "Task superseded", "applyState": "superseded", "finishedAt": 1800000000, "boardDisplayCount": 2}, want: ""},
 		{name: "running coded", job: map[string]any{"state": "SUCCEEDED", "label": "Task coded", "finishedAt": 1800000000, "boardDisplayCount": 0}, want: "coded · fetching result"},
+		{name: "finalization failure overrides succeeded worker", job: map[string]any{"state": "SUCCEEDED", "label": "Task failed", "finishedAt": 1800000000, "boardDisplayCount": 0}, indexStage: "FAILED", want: "| Task failed | — | failed |", unwant: "fetching result"},
 		{name: "queued without label", job: map[string]any{"state": "QUEUED", "taskId": "task-queued"}, want: "| task-queued | — | queued |"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			index := map[string]any{"project_key": "fixture", "jobId": id, "call": "call-1", "call_key": "key-1"}
+			if tc.indexStage != "" {
+				index["stage"] = tc.indexStage
+			}
 			job := map[string]any{"jobId": id, "call": "call-1"}
 			for key, value := range tc.job {
 				job[key] = value

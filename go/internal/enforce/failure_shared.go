@@ -123,7 +123,9 @@ func saveFailureSession(root string, event, pending map[string]any, outcome map[
 	}
 	threadID := stringValue(pending["prior_thread_id"])
 	if event["error_code"] == "JOB_REPLAY_PREPARATION_FAILED" {
-		threadID = stringValue(event["replay_thread_id"])
+		if replayThreadID := stringValue(event["replay_thread_id"]); replayThreadID != "" {
+			threadID = replayThreadID
+		}
 	}
 	var thread *string
 	if threadID != "" {
