@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/fsretry"
+
 	"purser-hook/internal/contextio"
 )
 
@@ -218,19 +220,7 @@ func publish(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	tries := 1
-	if runtime.GOOS == "windows" {
-		tries = 5
-	}
-	for i := 0; i < tries; i++ {
-		err = renameHealth(tmpName, path)
-		if err == nil {
-			break
-		}
-		if i+1 < tries {
-			time.Sleep(time.Duration(20*(i+1)) * time.Millisecond)
-		}
-	}
+	err = fsretry.ReplaceWith(renameHealth, tmpName, path)
 	if err != nil {
 		return err
 	}

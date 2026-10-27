@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"purser-hook/internal/fsretry"
+
 	"purser-hook/internal/lease"
 )
 
@@ -91,5 +93,5 @@ func writeReviewerCircuit(path string, state reviewerCircuit) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(tmp.Name(), path)
+	return fsretry.Replace(tmp.Name(), path)
 }

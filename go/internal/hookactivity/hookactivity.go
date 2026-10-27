@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"purser-hook/internal/fsretry"
 )
 
 const fileName = "hook-activity.json"
@@ -59,7 +61,7 @@ func Record(stateRoot, event string, now time.Time) {
 	if err != nil {
 		return
 	}
-	_ = os.Rename(tempPath, path)
+	_ = fsretry.Replace(tempPath, path)
 }
 
 // Load returns valid timestamps from the activity file. Missing or unreadable

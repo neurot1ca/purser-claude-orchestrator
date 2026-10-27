@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/models"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/policy"
@@ -296,7 +297,7 @@ func replaceActive(path string, active map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	return fsretry.Replace(name, path)
 }
 
 func randomID() (string, error) {

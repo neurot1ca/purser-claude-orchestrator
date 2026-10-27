@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/jobs"
 	"purser-hook/internal/proc"
 )
@@ -320,13 +321,7 @@ func remoteHostWrite(c *remoteConfig, args map[string]any) map[string]any {
 	if hex.EncodeToString(latestHash[:]) != base {
 		return legacyError(nil, "NEXT.md changed; read it again")
 	}
-	for attempt := 0; ; attempt++ {
-		err = os.Rename(tmpName, path)
-		if err == nil || runtime.GOOS != "windows" || attempt == 4 {
-			break
-		}
-		time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
-	}
+	err = fsretry.Replace(tmpName, path)
 	if err != nil {
 		return legacyError(nil, err.Error())
 	}

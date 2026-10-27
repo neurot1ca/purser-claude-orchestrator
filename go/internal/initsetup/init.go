@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/jobs"
 	modelversion "purser-hook/internal/models"
 	cursormodel "purser-hook/internal/models/cursor"
@@ -1927,7 +1928,7 @@ func atomicWrite(path string, content []byte, exclusive bool) error {
 		}
 		return nil
 	}
-	return os.Rename(tmp, path)
+	return fsretry.Replace(tmp, path)
 }
 func backup(path string, raw []byte) error {
 	stamp := time.Now().UTC().Format("20060102T150405000000Z")

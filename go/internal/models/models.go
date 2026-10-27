@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/models/cursor"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/policy"
@@ -1176,7 +1177,7 @@ func atomicJSON(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(temporary, path)
+	return fsretry.Replace(temporary, path)
 }
 
 func routeModel(route any) string {

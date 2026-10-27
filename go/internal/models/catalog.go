@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"purser-hook/internal/fsretry"
 )
 
 const catalogURL = "https://models.dev/api.json"
@@ -251,5 +253,5 @@ func atomicCatalogWrite(path string, data []byte) error {
 	if err = temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tempName, path)
+	return fsretry.Replace(tempName, path)
 }

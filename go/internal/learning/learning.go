@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/fsretry"
 )
 
 const (
@@ -778,7 +779,7 @@ func replaceCheckpoint(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err = os.Rename(tmp, path); err != nil {
+	if err = fsretry.Replace(tmp, path); err != nil {
 		return err
 	}
 	if runtime.GOOS != "windows" {

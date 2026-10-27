@@ -12,6 +12,7 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/maintenance"
 	"purser-hook/internal/models"
 )
@@ -192,7 +193,7 @@ func catalogRefreshFailure(state string, err error) int {
 			payload, _ := json.Marshal(map[string]string{"error": message})
 			tmp := filepath.Join(root, "catalog-refresh-error.json.tmp")
 			if os.WriteFile(tmp, append(payload, '\n'), 0600) == nil {
-				_ = os.Rename(tmp, filepath.Join(root, "catalog-refresh-error.json"))
+				_ = fsretry.Replace(tmp, filepath.Join(root, "catalog-refresh-error.json"))
 			}
 		}
 	}

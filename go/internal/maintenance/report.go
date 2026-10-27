@@ -18,6 +18,7 @@ import (
 	"purser-hook/internal/checkreport"
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
@@ -329,7 +330,7 @@ func writeAtomic(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	return fsretry.Replace(name, path)
 }
 
 // RunAndPersistReport is the pass-5 prompt -> Runner -> parse -> persistence

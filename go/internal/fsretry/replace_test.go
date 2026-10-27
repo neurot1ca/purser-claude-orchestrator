@@ -102,3 +102,27 @@ func TestReplaceDoesNotRetryErrno5OnNonWindows(t *testing.T) {
 		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }
+
+func TestReplaceRetriesWindowsSharingErrors(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows sharing errors are transient only on Windows")
+	}
+	attempts := 0
+	withRename(t, func(string, string) error {
+		attempts++
+		switch attempts {
+		case 1:
+			return syscall.Errno(5)
+		case 2:
+			return syscall.Errno(32)
+		default:
+			return nil
+		}
+	})
+	if err := Replace("src", "dst"); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}

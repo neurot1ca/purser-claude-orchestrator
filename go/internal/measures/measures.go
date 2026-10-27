@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/profile"
 )
@@ -359,7 +360,7 @@ func writeProjected(path, content string) (bool, error) {
 	if err = tmp.Close(); err != nil {
 		return false, err
 	}
-	if err = os.Rename(name, path); err != nil {
+	if err = fsretry.Replace(name, path); err != nil {
 		return false, err
 	}
 	return true, nil

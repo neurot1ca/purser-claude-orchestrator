@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/proc"
 )
 
@@ -78,7 +79,7 @@ func writeCommandJSON(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	return fsretry.Replace(name, path)
 }
 
 func Control(state, command, repository, decision, report string, acted []string) (string, error) {

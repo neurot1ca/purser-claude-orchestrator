@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/lease"
 )
 
@@ -193,5 +194,5 @@ func writeWorktreeOwnership(path string, owned WorktreeOwnership) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	return fsretry.Replace(name, path)
 }
