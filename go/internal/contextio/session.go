@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode"
 
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/measures"
 	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/waiter"
@@ -1317,7 +1318,7 @@ func writeJSONAtomically(path string, state any) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	return fsretry.Replace(name, path)
 }
 
 func number(value any) int {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/fsretry"
 )
 
 const (
@@ -207,7 +208,7 @@ func writeActiveTaskJSON(path string, record map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(tempPath, path)
+	return fsretry.Replace(tempPath, path)
 }
 
 func taskUsageUnknown(reason string) map[string]any {

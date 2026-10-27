@@ -17,10 +17,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/proc"
 )
 
@@ -357,32 +357,7 @@ func writeTurn(path string, t map[string]any) error {
 	return replaceWithRetry(name, path)
 }
 func replaceWithRetry(source, destination string) error {
-	deadline := time.Now().Add(30 * time.Millisecond)
-	for attempt := 0; attempt < 4; attempt++ {
-		err := os.Rename(source, destination)
-		if err == nil {
-			return nil
-		}
-		if !isPermissionError(err) || attempt == 3 {
-			return err
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return err
-		}
-		delay := time.Duration(5*(1<<attempt)) * time.Millisecond
-		if delay > remaining {
-			delay = remaining
-		}
-		time.Sleep(delay)
-	}
-	return nil
-}
-func isPermissionError(err error) bool {
-	if errors.Is(err, os.ErrPermission) {
-		return true
-	}
-	return runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(32))
+	return fsretry.Replace(source, destination)
 }
 func isOSError(err error) bool {
 	var pathErr *os.PathError

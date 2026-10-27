@@ -8,10 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"syscall"
-	"time"
+
+	"purser-hook/internal/fsretry"
 )
 
 // Record keeps top-level fields in their original order and retains raw values,
@@ -191,35 +190,7 @@ func atomicWrite(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	delay := 25 * time.Millisecond
-	for {
-		err = replaceFile(tmp, path)
-		if err == nil || !transientReplace(err) {
-			return err
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return err
-		}
-		if delay > remaining {
-			delay = remaining
-		}
-		time.Sleep(delay)
-		delay *= 2
-		if delay > 250*time.Millisecond {
-			delay = 250 * time.Millisecond
-		}
-	}
-}
-
-func transientReplace(err error) bool {
-	var errno syscall.Errno
-	if !errors.As(err, &errno) {
-		return false
-	}
-	return errno == syscall.EACCES || errno == syscall.EBUSY ||
-		runtime.GOOS == "windows" && (errno == syscall.Errno(5) || errno == syscall.Errno(32))
+	return fsretry.ReplaceWith(replaceFile, tmp, path)
 }
 
 var ErrClaimConflict = errors.New("job generation claim conflict")

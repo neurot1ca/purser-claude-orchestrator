@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/review"
 )
 
@@ -384,5 +385,5 @@ func atomicWrite(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	return fsretry.Replace(name, path)
 }

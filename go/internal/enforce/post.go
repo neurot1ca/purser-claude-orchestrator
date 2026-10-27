@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/lease"
 )
 
@@ -133,7 +134,7 @@ func persistRawOutputAs(root, name string, value any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err = os.Rename(tmpName, path); err != nil {
+	if err = fsretry.Replace(tmpName, path); err != nil {
 		return "", err
 	}
 	absolute, err := filepath.Abs(path)

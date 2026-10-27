@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"unicode/utf8"
 
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
@@ -200,7 +201,7 @@ func atomicAdmissionJSON(path string, value any) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(tmp.Name(), path)
+	return fsretry.Replace(tmp.Name(), path)
 }
 
 func threadIndexFile(root, threadID string) string {

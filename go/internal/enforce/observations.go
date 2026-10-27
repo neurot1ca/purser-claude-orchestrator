@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/telemetryhealth"
 )
@@ -1844,7 +1845,7 @@ func atomicObservationJSON(path string, encoded []byte) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(tmp, path)
+	return fsretry.Replace(tmp, path)
 }
 
 var observationProjectionNow = time.Now
@@ -1875,13 +1876,7 @@ func atomicObservationNote(path, content string) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	for attempt := 0; ; attempt++ {
-		err = renameObservationNote(tmp, path)
-		if err == nil || attempt == 2 {
-			return err
-		}
-		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
-	}
+	return fsretry.ReplaceWith(renameObservationNote, tmp, path)
 }
 
 func observationErrorCategory(err error) string {

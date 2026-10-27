@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
@@ -310,7 +311,7 @@ func writeBypass(root string, event map[string]any, reason string, metadata map[
 	if err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return fsretry.Replace(tmp.Name(), path)
 }
 
 func WriteUndeliveredMarker(root string, event map[string]any) error {
@@ -366,7 +367,7 @@ func WriteUndeliveredMarker(root string, event map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return fsretry.Replace(tmp.Name(), path)
 }
 
 func cleanupUndeliveredAsyncStart(root, pendingPath, markerPath string) error {

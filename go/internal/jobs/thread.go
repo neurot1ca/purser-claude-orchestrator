@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"purser-hook/internal/fsretry"
 )
 
 const outputTokenLimitPrefix = "tool_output_token_limit="
@@ -97,7 +99,7 @@ func SaveRecord(stateDir string, record map[string]any) error {
 	if err = file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temp, RecordPath(stateDir, threadID))
+	return fsretry.Replace(temp, RecordPath(stateDir, threadID))
 }
 
 func marshalPythonJSON(value any) ([]byte, error) {
