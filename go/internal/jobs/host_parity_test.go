@@ -88,6 +88,8 @@ func TestHostPythonOracleReplay(t *testing.T) {
 			deadline := time.Now().Add(30 * time.Second)
 			if fixture.Name == "deadline" {
 				deadline = time.Now().Add(2 * time.Second)
+			} else if fixture.Name == "cancel" || fixture.Name == "stall" {
+				deadline = time.Now().Add(hostTestWaitBudget(30 * time.Second))
 			}
 			job := map[string]any{"jobId": jobID, "call": hostParityCall, "acceptedAt": float64(time.Now().UnixNano()) / 1e9, "state": "QUEUED", "generation": 1,
 				"ownershipToken": "host-owner-token", "signalToken": "host-signal-token", "deadlineAt": float64(deadline.UnixNano()) / 1e9,
@@ -123,7 +125,9 @@ func TestHostPythonOracleReplay(t *testing.T) {
 			})
 			_ = os.Setenv("PURSER_HOST_FAKE_WORKER", "1")
 			mode := fixture.Name
-			if mode == "deadline" || mode == "cancel" || mode == "cancel_queued" || mode == "stall" {
+			if mode == "cancel" || mode == "stall" {
+				mode = "wait_for_release"
+			} else if mode == "deadline" || mode == "cancel_queued" {
 				mode = "sleep"
 			}
 			_ = os.Setenv("PURSER_HOST_FAKE_MODE", mode)
