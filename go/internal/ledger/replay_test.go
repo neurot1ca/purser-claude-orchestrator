@@ -192,6 +192,71 @@ func TestPrepareJobReplayFailureRestoresWorkerDiff(t *testing.T) {
 	}
 }
 
+func TestPrepareJobReplayFailurePreservesWorkerWhenIgnoredReadonlyTreeExists(t *testing.T) {
+	base := gitTempDir(t)
+	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
+	initReplayRepository(t, repo, "")
+	writePatchTestFile(t, filepath.Join(repo, ".gitignore"), []byte(".tmp/\n"))
+	git(t, repo, "add", ".gitignore")
+	git(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "ignore temp")
+	snapshot := stringsOutput(t, repo, "rev-parse", "HEAD^{tree}")
+	git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
+	writePatchTestFile(t, filepath.Join(worker, "tracked.txt"), []byte("worker change\n"))
+	ignored := filepath.Join(worker, ".tmp", "nested", "repo", ".git", "objects", "2c", "object")
+	if err := os.MkdirAll(filepath.Dir(ignored), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ignored, []byte("git object"), 0444); err != nil {
+		t.Fatal(err)
+	}
+	recovery := filepath.Join(base, "recovery")
+	if err := os.Mkdir(recovery, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyReplayTree(worker, filepath.Join(recovery, "worker-tree")); err != nil {
+		t.Fatal(err)
+	}
+	patch, err := JobPatch(worker, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(recovery, "worker.patch"), []byte(patch), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := json.Marshal(map[string]any{"state": "PREPARING", "snapshot": snapshot, "target": snapshot, "paths": []string{"tracked.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(recovery, "state.json"), state, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(recovery, "worker-tree", ".tmp")); !os.IsNotExist(err) {
+		t.Fatalf("ignored .tmp tree was copied into replay recovery: err=%v", err)
+	}
+	failed := false
+	runner := func(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
+		if operation == "clearing replay worktree" && !failed {
+			failed = true
+			out, runErr := runGit(root, args, timeout, operation, input, env)
+			if runErr != nil {
+				return out, runErr
+			}
+			return out, fmt.Errorf("simulated replay preparation failure after clearing worker tree")
+		}
+		return runGit(root, args, timeout, operation, input, env)
+	}
+	if _, err = prepareJobReplay(repo, worker, snapshot, recovery, nil, runner); err == nil {
+		t.Fatal("replay unexpectedly succeeded")
+	}
+	got, err := JobPatch(worker, snapshot)
+	if err != nil || got != patch {
+		t.Fatalf("failed replay lost worker changes: err=%v\n got=%q\nwant=%q", err, got, patch)
+	}
+	if data, err := os.ReadFile(ignored); err != nil || string(data) != "git object" {
+		t.Fatalf("ignored read-only file changed: data=%q err=%v", data, err)
+	}
+}
+
 func TestPrepareJobReplayThreeWayStagesAddedFile(t *testing.T) {
 	base := gitTempDir(t)
 	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")

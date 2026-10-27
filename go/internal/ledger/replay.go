@@ -109,6 +109,7 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 			if !ok {
 				base = snapshot
 			}
+			mutatingWorktree = true
 			if err := restore(base); err != nil {
 				return nil, err
 			}
@@ -187,6 +188,7 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 		}
 	}
 	if prior != nil {
+		mutatingWorktree = true
 		if err := restore(snapshot); err != nil {
 			return nil, err
 		}
@@ -531,6 +533,12 @@ func copyReplayTree(source, destination string) error {
 			}
 			return nil
 		}
+		if rel == ".tmp" || strings.HasPrefix(rel, ".tmp"+string(filepath.Separator)) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		target := destination
 		if rel != "." {
 			target = filepath.Join(destination, rel)
@@ -565,6 +573,19 @@ func copyReplayTree(source, destination string) error {
 		if err != nil {
 			return err
 		}
+		if err = removeReplayTarget(target); err != nil {
+			return err
+		}
 		return os.WriteFile(target, data, info.Mode().Perm())
 	})
+}
+
+func removeReplayTarget(path string) error {
+	if err := os.Chmod(path, 0600); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }

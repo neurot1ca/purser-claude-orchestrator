@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +42,15 @@ func jobsScratchDir(t *testing.T, pattern string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			_ = os.Chmod(path, 0700)
+			return nil
+		})
+		_ = os.RemoveAll(dir)
+	})
 	return dir
 }

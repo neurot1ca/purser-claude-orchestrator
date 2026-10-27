@@ -379,6 +379,20 @@ func TestCheckoutRevisionFailsWhenDirectoryReplacesTrackedFile(t *testing.T) {
 	}
 }
 
+func TestCheckoutRevisionHandlesDeletedTrackedFile(t *testing.T) {
+	_, repo, _ := validationFixture(t, []string{"main.go"})
+	if err := os.Remove(filepath.Join(repo, "main.go")); err != nil {
+		t.Fatal(err)
+	}
+	revision, snapshot, err := checkoutRevision(repo)
+	if err != nil {
+		t.Fatalf("checkoutRevision with deleted tracked file: %v", err)
+	}
+	if revision == "" || snapshot == "" {
+		t.Fatalf("checkoutRevision returned empty revisions: revision=%q snapshot=%q", revision, snapshot)
+	}
+}
+
 func TestValidationAllSkippedIsNotPassing(t *testing.T) {
 	if got := mapValidationState("skipped", "no Go packages or plugin paths were changed"); got != "SKIPPED" {
 		t.Fatalf("all-skipped validation state=%q, want SKIPPED", got)

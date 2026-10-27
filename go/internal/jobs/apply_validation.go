@@ -456,7 +456,10 @@ func checkoutRevisionOnce(repo string, backoff *[]time.Duration) (string, string
 		return "", "", err
 	}
 	env := replaceValidationEnv(os.Environ(), "GIT_INDEX_FILE", tempPath)
-	if _, err = runGitWithBackoff(repo, env, backoff, "add", "--renormalize", "-A"); err != nil {
+	if _, err = runGitWithBackoff(repo, env, backoff, "add", "-A"); err != nil {
+		return "", "", err
+	}
+	if _, err = runGitWithBackoff(repo, env, backoff, "add", "--renormalize", "--", "."); err != nil {
 		return "", "", err
 	}
 	tree, err := runGitWithBackoff(repo, env, backoff, "write-tree")
