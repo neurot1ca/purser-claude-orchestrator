@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -276,6 +277,16 @@ func TestValidationPackageSelectionIncludesDeletedGoAndTouchedModule(t *testing.
 	_, modules, packages, err = selectValidationPackages(root, repo, []string{"go.mod"})
 	if err != nil || len(modules) != 1 || len(packages) == 0 {
 		t.Fatalf("module configuration selection: modules=%v packages=%v err=%v", modules, packages, err)
+	}
+}
+
+func TestValidationPackageSelectionDropsMissingDirectories(t *testing.T) {
+	root, repo, _ := validationFixture(t, []string{"main.go"})
+	_, modules, packages, err := selectValidationPackages(root, repo, []string{
+		"main.go", filepath.Join("removed", "go.mod"), filepath.Join("removed", "pkg", "old.go"),
+	})
+	if err != nil || len(modules) != 1 || modules[0] != repo || len(packages) != 1 || packages[0] != repo+"|." {
+		t.Fatalf("missing path selection: modules=%v packages=%v err=%v", modules, packages, err)
 	}
 }
 
@@ -779,6 +790,91 @@ func TestValidationStaleRevision(t *testing.T) {
 	write(t, filepath.Join(repo, "main.go"), "package validation\nfunc Value() int { return 4 }\n")
 	if got := ApplyValidationResult(root, repo, record.JobID); got["status"] != "stale" {
 		t.Fatalf("source edit retained validation receipt: %#v", got)
+	}
+}
+
+func TestValidationCarriesStaleApplyPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name, status string
+		covered      bool
+	}{
+		{name: "passed", status: "passed", covered: true},
+		{name: "failed", status: "failed", covered: true},
+		{name: "stale", status: "stale"},
+		{name: "test_not_started", status: "failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, repo, record := validationFixture(t, []string{"main.go"})
+			write(t, filepath.Join(repo, "pkg", "extra.go"), "package pkg\nfunc Extra() int { return 1 }\n")
+			revision, snapshot, err := checkoutRevision(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record.Revision, record.Snapshot = revision, snapshot
+			key := validationRepositoryKey(repo)
+			path := validationRecordPath(root, key, record.JobID)
+			if err := writeApplyValidation(path, record); err != nil {
+				t.Fatal(err)
+			}
+			prior := applyValidation{
+				JobID: strings.Repeat("b", 64), Repository: repo, Snapshot: strings.Repeat("c", 64),
+				Paths: []string{filepath.Join("pkg", "extra.go")}, Status: "stale",
+			}
+			if err := writeApplyValidation(validationRecordPath(root, key, prior.JobID), prior); err != nil {
+				t.Fatal(err)
+			}
+			oldRunner := runApplyValidationCommand
+			var testedArgs []string
+			runApplyValidationCommand = func(_ string, _ []string, args []string, _ time.Duration, _ io.Writer, _ *applyValidation) error {
+				if tc.name == "test_not_started" {
+					if args[0] == "vet" {
+						return errors.New("vet failed")
+					}
+					return &exec.Error{Name: "go", Err: exec.ErrNotFound}
+				}
+				if len(args) > 0 && args[0] == "test" {
+					testedArgs = append([]string(nil), args...)
+					if tc.name == "failed" {
+						return errors.New("test failed")
+					}
+					if tc.name == "stale" {
+						write(t, filepath.Join(repo, "main.go"), "package validation\nfunc Value() int { return 99 }\n")
+					}
+				}
+				return nil
+			}
+			t.Cleanup(func() { runApplyValidationCommand = oldRunner })
+			if err := RunApplyValidation(root, key, record.JobID); err != nil {
+				t.Fatal(err)
+			}
+			got, err := readApplyValidation(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(got.Paths, "pkg/extra.go") || (tc.name != "test_not_started" && !slices.Contains(testedArgs, "./pkg")) || got.Status != tc.status {
+				t.Fatalf("carried paths=%v test args=%v", got.Paths, testedArgs)
+			}
+			prior, err = readApplyValidation(validationRecordPath(root, key, prior.JobID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCoveredBy := ""
+			if tc.covered {
+				wantCoveredBy = record.JobID
+			}
+			if prior.CoveredBy != wantCoveredBy || got.CoveredBy != wantCoveredBy {
+				t.Fatalf("prior coverage=%q current coverage=%q, want %q", prior.CoveredBy, got.CoveredBy, wantCoveredBy)
+			}
+			next := applyValidation{JobID: strings.Repeat("d", 64), Repository: repo, Snapshot: "next", Paths: []string{"main.go"}}
+			// A later apply makes completed records stale, too; those must stay covered.
+			invalidatePriorApplyValidations(root, filepath.Dir(path), next.JobID, next.Snapshot)
+			if err := carryUnvalidatedApplyPaths(validationRecordPath(root, key, next.JobID), &next); err != nil {
+				t.Fatal(err)
+			}
+			if slices.Contains(next.Paths, "pkg/extra.go") == tc.covered {
+				t.Fatalf("next validation paths=%v, prior covered=%t", next.Paths, tc.covered)
+			}
+		})
 	}
 }
 

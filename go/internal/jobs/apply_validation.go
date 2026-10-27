@@ -91,10 +91,13 @@ type applyValidation struct {
 	FailedTests    []string       `json:"failing_tests,omitempty"`
 	FailedPackages []string       `json:"failing_packages,omitempty"`
 	RunningPackage string         `json:"running_package,omitempty"`
+	CoveredBy      string         `json:"covered_by,omitempty"`
 	UpdatedAt      string         `json:"updated_at"`
 	PID            int            `json:"pid,omitempty"`
 	Identity       int64          `json:"identity,omitempty"`
 	TreeReceipt    string         `json:"tree_receipt,omitempty"`
+	carriedRecords map[string]string
+	testsRan       bool
 }
 
 // enqueueAppliedValidation is the single idempotent enqueue point for every successful apply outcome.
@@ -628,6 +631,10 @@ func RunApplyValidation(stateRoot, key, id string) error {
 		return err
 	}
 	defer lock()
+	record, err = readApplyValidation(path)
+	if err != nil {
+		return err
+	}
 	cacheUser, err := acquireCacheUser(stateRoot)
 	if err != nil {
 		return err
@@ -643,6 +650,9 @@ func RunApplyValidation(stateRoot, key, id string) error {
 	}
 	if snapshot != record.Snapshot {
 		return finishValidation(stateRoot, path, &record, "stale", "checkout changed before validation started")
+	}
+	if err = carryUnvalidatedApplyPaths(path, &record); err != nil {
+		return finishValidation(stateRoot, path, &record, "launch_error", err.Error())
 	}
 	goRoot, modules, packages, err := selectValidationPackages(stateRoot, record.Repository, record.Paths)
 	validationState, validationReason := "", ""
@@ -706,6 +716,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 			} else if validationState == "" && record.Reason != "" {
 				validationReason = record.Reason
 			}
+			record.testsRan = record.testsRan || err == nil || validationFailureState(err) == "failed"
 		}
 	}
 	if customCommand != "" {
@@ -721,6 +732,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 				}
 				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), "validation command failed")
 			}
+			record.testsRan = record.testsRan || err == nil || validationFailureState(err) == "failed"
 		}
 	} else {
 		for _, check := range ecosystemCommands {
@@ -742,6 +754,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 				}
 				setValidationOutcome(&validationState, &validationReason, validationFailureState(err), check.label+" failed")
 			}
+			record.testsRan = record.testsRan || err == nil || validationFailureState(err) == "failed"
 		}
 	}
 	if touchesPlugin(record.Paths) {
@@ -770,6 +783,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 						record.PluginStatus, record.PluginReason = validationFailureState(err), "claude plugin test failed"
 						setValidationOutcome(&validationState, &validationReason, record.PluginStatus, record.PluginReason)
 					}
+					record.testsRan = record.testsRan || err == nil || validationFailureState(err) == "failed"
 				}
 			}
 		}
@@ -778,6 +792,42 @@ func RunApplyValidation(stateRoot, key, id string) error {
 		return finishValidation(stateRoot, path, &record, validationState, validationReason)
 	}
 	return finishValidation(stateRoot, path, &record, "passed", validationReason)
+}
+
+func carryUnvalidatedApplyPaths(path string, current *applyValidation) error {
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	paths := append([]string(nil), current.Paths...)
+	current.carriedRecords = map[string]string{}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || entry.Name() == filepath.Base(path) {
+			continue
+		}
+		priorPath := filepath.Join(filepath.Dir(path), entry.Name())
+		unlock, lockErr := lease.Lock(priorPath + ".lock")
+		if lockErr != nil {
+			continue
+		}
+		prior, readErr := readApplyValidation(priorPath)
+		_ = unlock()
+		if readErr != nil {
+			continue
+		}
+		if prior.CoveredBy != "" || prior.Repository != current.Repository || prior.Snapshot == current.Snapshot ||
+			(prior.Status != "pending" && prior.Status != "stale" && prior.Status != "superseded") {
+			continue
+		}
+		paths = append(paths, prior.Paths...)
+		current.carriedRecords[priorPath] = prior.Snapshot
+	}
+	for i, value := range paths {
+		paths[i] = filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+	}
+	sort.Strings(paths)
+	current.Paths = uniqueStrings(paths)
+	return nil
 }
 
 func validationFailureState(err error) string {
@@ -884,8 +934,27 @@ func finishValidation(root, path string, record *applyValidation, status, reason
 		record.TreeReceipt = current.TreeReceipt
 	}
 	record.Status, record.Reason = status, reason
+	completed := record.testsRan && (status == "passed" || status == "failed")
+	if completed {
+		// Later applies can mark this receipt stale without undoing its completed tests.
+		record.CoveredBy = record.JobID
+	}
 	if err = writeApplyValidation(path, *record); err != nil {
 		return err
+	}
+	if completed {
+		for priorPath, snapshot := range record.carriedRecords {
+			unlock, lockErr := lease.Lock(priorPath + ".lock")
+			if lockErr != nil {
+				continue
+			}
+			prior, readErr := readApplyValidation(priorPath)
+			if readErr == nil && prior.Snapshot == snapshot && prior.CoveredBy == "" {
+				prior.CoveredBy = record.JobID
+				_ = writeApplyValidationUnlocked(priorPath, prior)
+			}
+			_ = unlock()
+		}
 	}
 	jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", record.JobID+".json")
 	if job, e := Read(jobPath); e == nil {
@@ -1367,6 +1436,9 @@ func selectValidationPackages(stateRoot, repo string, paths []string) (string, [
 	for _, name := range paths {
 		clean := filepath.Clean(filepath.FromSlash(name))
 		full := filepath.Join(repo, clean)
+		if _, err := os.Stat(filepath.Dir(full)); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if filepath.Base(clean) == "go.mod" || filepath.Base(clean) == "go.work" {
 			modules[filepath.Dir(full)] = true
 			continue
