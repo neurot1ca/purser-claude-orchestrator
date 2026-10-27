@@ -27,33 +27,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup Dev Drive
-        if: runner.os == 'Windows'
-        uses: samypr100/setup-dev-drive@30f0f98ae5636b2b6501e181dfb3631b9974818d # v4.0.0
-        with:
-          drive-size: 10GB
-          env-mapping: |
-            GOCACHE,{{ DEV_DRIVE }}/go-build
-            GOMODCACHE,{{ DEV_DRIVE }}/go-mod
-            TEMP,{{ DEV_DRIVE }}
-            TMP,{{ DEV_DRIVE }}
-
       - uses: actions/setup-go@v7
-        id: setup-go
         with:
           go-version-file: go/go.mod
-          cache: ${{ runner.os != 'Windows' }}
-
-      - name: Restore Windows Go caches
-        if: runner.os == 'Windows'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ env.GOCACHE }}
-            ${{ env.GOMODCACHE }}
-          key: go-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            go-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-
 
       - name: Vet Go packages
         run: go vet ./...
@@ -62,15 +38,6 @@ jobs:
       - name: Test Go packages
         run: go test ./...
         working-directory: go
-
-      - name: Save Windows Go caches
-        if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ env.GOCACHE }}
-            ${{ env.GOMODCACHE }}
-          key: go-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v7
         with:
