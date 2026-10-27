@@ -159,14 +159,21 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			return denyPre("FULL_SUITE_REQUEST", "Ask the worker for focused tests only. Matched phrase: \""+phrase+"\"."), nil
 		}
 	}
+	research := *parsed.Route == "research"
 	gearUp := false
-	if root != nil && !reply && config["coder_agent"] == "codex" {
+	if root != nil && !reply && !research && config["coder_agent"] == "codex" {
 		gearUp, err = contextio.Gear(defaultPreStateRoot(runtimeRoot), projectKey(root))
 		if err != nil {
 			return nil, fmt.Errorf("gear state unreadable: %w", err)
 		}
 	}
-	route := policy.ResolveRoute(*parsed.Route, config, gearUp)
+	var route policy.RouteResolution
+	if research {
+		effort := stringValue(mapValue(input["config"])["model_reasoning_effort"])
+		route = resolveResearch(config, effort, pointerValue(parsed.Basis))
+	} else {
+		route = policy.ResolveRoute(*parsed.Route, config, gearUp)
+	}
 	if !route.Valid {
 		if route.Code == "CONFIG_INVALID" {
 			return nil, errors.New(route.Message)
@@ -192,7 +199,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			}}, nil
 		}
 	}
-	if !reply {
+	if !reply && !research {
 		if resolved := models.ResolveLatest(stringValue(config["coder_agent"]), *route.Model); resolved != "" {
 			*route.Model = resolved
 		}
@@ -210,7 +217,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			}
 		}
 	}
-	if !reply && root != nil && config["coder_agent"] == "codex" {
+	if !reply && !research && root != nil && config["coder_agent"] == "codex" {
 		if effort, effortErr := contextio.CoderEffort(defaultPreStateRoot(runtimeRoot), projectKey(root)); effortErr == nil && effort != "" &&
 			supportsPreCoderEffort(*route.Model, effort) {
 			*route.Effort = effort
@@ -237,6 +244,9 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	}
 	afterPreMetadata()
 	requested := map[string]any{"task_id": *parsed.TaskID, "route": *parsed.Route, "model": *route.Model, "effort": *route.Effort}
+	if reply && research {
+		requested["model"], requested["effort"] = live["model"], live["effort"]
+	}
 	if reply {
 		compat := policy.ThreadCompatibility(requested, live)
 		if !compat.Compatible {
@@ -288,10 +298,19 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	}
 	quota, _ := contextio.LatestQuota(quotaHome, time.Now().UTC())
 	selection := SelectCoder(*parsed.Route, *route.Model, *route.Effort, reason(parsed), !reply, reply, config, input, live, active, preOpenCodeCandidates(runtimeRoot), gearUp)
+	if research {
+		selection = CoderSelection{Agent: stringValue(config["coder_agent"]), Model: *route.Model, Effort: *route.Effort, ModelSource: "route", Reason: reason(parsed), Code: "VALID"}
+		if reply {
+			selection.Agent, selection.Model, selection.Effort = stringValue(live["agent"]), stringValue(live["model"]), stringValue(live["effort"])
+			if selection.Agent == "" {
+				selection.Agent = stringValue(config["coder_agent"])
+			}
+		}
+	}
 	if selection.Code == "THREAD_AGENT_MISMATCH" {
 		return denyPre(selection.Code, "thread belongs to a different coding agent; start a fresh thread."), nil
 	}
-	if !reply && stringValue(config["coder_agent"]) == "codex" {
+	if !reply && !research && stringValue(config["coder_agent"]) == "codex" {
 		fallback := mapValue(config["fallback"])
 		var launchFailure map[string]any
 		if root != nil {
@@ -462,7 +481,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		if outputLimit := config["tool_output_token_limit"]; selection.Agent == "codex" && outputLimit != nil {
 			updatedConfig["tool_output_token_limit"] = outputLimit
 		}
-		if pointerValue(parsed.Phase) == "plan" && (selection.Agent == "codex" || selection.Agent == "claude") {
+		if (pointerValue(parsed.Phase) == "plan" || research) && (selection.Agent == "codex" || selection.Agent == "claude") {
 			updated["sandbox"], updated["approval-policy"] = "read-only", "never"
 		}
 		updated["config"] = updatedConfig
@@ -717,7 +736,7 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		admitted := AdmitPending(PendingAdmission{RuntimeRoot: runtimeRoot, ProjectKey: project, OwnerKey: owner,
 			TaskID: taskID, Pending: pending, Session: session, PendingPath: path, Scope: leaseScope, JobID: jobID,
 			TimeoutSeconds: timeout, Now: float64(time.Now().UnixNano()) / 1e9,
-			ReadOnly: phase == "plan", AllowOverlap: worktreeStart || worktreeReply, HotPathQueue: worktreeStart || worktreeReply,
+			ReadOnly: phase == "plan" || routeName == "research", AllowOverlap: worktreeStart || worktreeReply, HotPathQueue: worktreeStart || worktreeReply,
 			ThreadID: threadID, Repository: repository, OnAdmission: func(status, code string) {
 				if code == "SCOPE_LEASE_CONFLICT" {
 					preEmit(runtimeRoot, event, repository, taskID, project, "SCOPE_CONFLICT_OUTCOME", map[string]any{"action": "denied", "job_id": observationJobID(jobID)})

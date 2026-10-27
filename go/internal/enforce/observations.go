@@ -662,7 +662,7 @@ func prepareObservationRun(a map[string]any) (observationRun, error) {
 	for _, enum := range []struct{ key, allowed string }{
 		{"status", "UNKNOWN_OR_IN_PROGRESS IN_PROGRESS FINISHED FAILED ACCEPTED REJECTED APPLIED VERIFIED NOT_VERIFIED INCONCLUSIVE NO_CHANGE"},
 		{"phase", "implementation operation plan"}, {"task_type", "implementation operation plan unknown"},
-		{"route", "mechanical subtle normal consequential escalated operation plan_standard"}, {"effort", "low medium high xhigh"},
+		{"route", "mechanical subtle normal consequential escalated operation plan_standard research"}, {"effort", "low medium high xhigh max ultra"},
 		{"validation", "PASS FAIL UNKNOWN"}, {"claude_review_mode", "AUDIT FULL"},
 		{"reviewer1_result", "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE CHANGES_REQUIRED UNCERTAIN REVIEWER1_UNAVAILABLE"},
 		{"reviewer1_skipped_reason", "PHASE_OPERATION NO_DELTA BELOW_THRESHOLD REVIEWER_UNAVAILABLE"},
@@ -2326,10 +2326,10 @@ func init() {
 	setObservationRule("int", "applied_paths_count")
 	setObservationRule("number", "queue_wait_ms claude_5h_start_pct claude_5h_end_pct claude_7d_start_pct claude_7d_end_pct claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms")
 	setObservationRule("enum:implementation operation plan", "phase")
-	setObservationRule("enum:mechanical subtle normal consequential escalated operation plan_standard", "route previous_route new_route")
+	setObservationRule("enum:mechanical subtle normal consequential escalated operation plan_standard research", "route previous_route new_route")
 	setObservationRule("enum:no_open_design_decision_or_user_request", "route_adjustment_reason")
 	setObservationRule("enum:override route", "model_source")
-	setObservationRule("enum:low medium high xhigh none", "effort")
+	setObservationRule("enum:low medium high xhigh max ultra none", "effort")
 	setObservationRule("enum:new_task continue fix route_change reanchor repeated_failure user_override", "reason")
 	setObservationRule("enum:CODEX_CALL_FAILED CODEX_CALL_INTERRUPTED REVIEWER1_UNAVAILABLE REVIEWER1_INCOMPLETE", "failure_code")
 	setObservationRule("enum:NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE CHANGES_REQUIRED UNCERTAIN REVIEWER1_UNAVAILABLE", "reviewer1_result")
