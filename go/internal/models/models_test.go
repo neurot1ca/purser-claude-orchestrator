@@ -779,6 +779,96 @@ func TestListingCommandFailureIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestCodexResearchCapabilities(t *testing.T) {
+	candidates := []CodexCapabilityCandidate{
+		{Model: "gpt-6.1-terra", Effort: "medium"},
+		{Model: "gpt-6.1-terra", Effort: "ultra"},
+		{Model: "missing-model", Effort: "medium"},
+	}
+	listing := []byte(`{"models":[{"slug":"gpt-6.1-terra","visibility":"list","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}]},{"slug":"hidden-model","visibility":"hide","supported_reasoning_levels":[{"effort":"medium"}]}]}`)
+
+	tests := []struct {
+		name      string
+		binary    bool
+		output    []byte
+		runErr    error
+		timeout   bool
+		wantState CodexCapabilityStatus
+	}{
+		{name: "timeout", binary: true, runErr: context.DeadlineExceeded, timeout: true},
+		{name: "malformed listing", binary: true, output: []byte(`{"models":[`)},
+		{name: "launch failure", binary: true, runErr: errors.New("launch failed")},
+		{name: "missing codex binary"},
+		{name: "capabilities", binary: true, output: listing, wantState: CodexCapabilityAvailable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			oldLookPath, oldRun := lookPath, runListingCommand
+			t.Cleanup(func() { lookPath, runListingCommand = oldLookPath, oldRun })
+			lookPath = func(name string) (string, error) {
+				if name != "codex" {
+					t.Fatalf("lookup name = %q", name)
+				}
+				if !test.binary {
+					return "", errors.New("not found")
+				}
+				return "mock-codex", nil
+			}
+			calls := 0
+			runListingCommand = func(ctx context.Context, command *exec.Cmd) ([]byte, error) {
+				calls++
+				if !reflect.DeepEqual(command.Args[1:], []string{"debug", "models"}) {
+					t.Fatalf("args = %v", command.Args)
+				}
+				if command.Cancel == nil {
+					t.Fatal("listing command has no timeout cancellation")
+				}
+				if test.timeout {
+					return nil, context.DeadlineExceeded
+				}
+				return test.output, test.runErr
+			}
+
+			result := CodexResearchCapabilities(candidates)
+			if test.name == "capabilities" {
+				if result.Unknown {
+					t.Fatal("successful listing was unknown")
+				}
+				want := []CodexCapabilityStatus{CodexCapabilityAvailable, CodexCapabilityUnsupportedEffort, CodexCapabilityAbsent}
+				if len(result.Candidates) != len(want) {
+					t.Fatalf("candidate count = %d, want %d", len(result.Candidates), len(want))
+				}
+				for i, status := range want {
+					if result.Candidates[i].Status != status {
+						t.Errorf("candidate %d status = %q, want %q", i, result.Candidates[i].Status, status)
+					}
+				}
+				if calls != 1 {
+					t.Fatalf("listing calls = %d, want exactly one", calls)
+				}
+				if !CodexSupportsEffort(candidates[0].Model, candidates[0].Effort) {
+					t.Fatal("CodexSupportsEffort rejected a supported effort")
+				}
+				return
+			}
+			if !result.Unknown || len(result.Candidates) != len(candidates) {
+				t.Fatalf("failed listing result = %#v, want unknown for all candidates", result)
+			}
+			for i, candidate := range result.Candidates {
+				if candidate.Status != CodexCapabilityUnknown {
+					t.Errorf("candidate %d status = %q, want unknown", i, candidate.Status)
+				}
+			}
+			if test.binary && calls != 1 {
+				t.Fatalf("listing calls = %d, want exactly one", calls)
+			}
+			if !test.binary && calls != 0 {
+				t.Fatalf("listing calls = %d, want none when binary is missing", calls)
+			}
+		})
+	}
+}
+
 func TestCatalogDropsInvalidModelsAndRequiresOneValidModel(t *testing.T) {
 	data := []byte(`{"p":{"models":{"valid":{"id":"valid","name":"Valid","reasoning":true,"limit":{"context":10}},"bad":{"id":"bad","name":"","reasoning":true},"wrong-limit":{"id":"wrong-limit","name":"Bad limit","reasoning":false,"limit":{"output":0}}}}}`)
 	providers, err := validateProviders(data)

@@ -75,16 +75,51 @@ func SameFamily(a, b string) bool {
 
 // CodexSupportsEffort checks an effort against the installed Codex model listing.
 func CodexSupportsEffort(model, effort string) bool {
+	result := CodexResearchCapabilities([]CodexCapabilityCandidate{{Model: model, Effort: effort}})
+	return !result.Unknown && result.Candidates[0].Status == CodexCapabilityAvailable
+}
+
+type CodexCapabilityCandidate struct {
+	Model  string
+	Effort string
+}
+
+type CodexCapabilityStatus string
+
+const (
+	CodexCapabilityAvailable         CodexCapabilityStatus = "available"
+	CodexCapabilityAbsent            CodexCapabilityStatus = "absent"
+	CodexCapabilityUnsupportedEffort CodexCapabilityStatus = "unsupported_effort"
+	CodexCapabilityUnknown           CodexCapabilityStatus = "unknown"
+)
+
+type CodexCapability struct {
+	Candidate CodexCapabilityCandidate
+	Status    CodexCapabilityStatus
+}
+
+type CodexCapabilityResult struct {
+	Unknown    bool
+	Candidates []CodexCapability
+}
+
+// CodexResearchCapabilities resolves all requested model/effort pairs from one
+// bounded Codex listing. Unknown means the listing could not be trusted.
+func CodexResearchCapabilities(candidates []CodexCapabilityCandidate) CodexCapabilityResult {
+	unknown := CodexCapabilityResult{Unknown: true, Candidates: make([]CodexCapability, len(candidates))}
+	for i, candidate := range candidates {
+		unknown.Candidates[i] = CodexCapability{Candidate: candidate, Status: CodexCapabilityUnknown}
+	}
 	binary, args := listingCommand("codex")
 	if binary == "" {
-		return false
+		return unknown
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	command := proc.Hide(exec.CommandContext(ctx, binary, args...))
 	output, err := runListingCommand(ctx, command)
 	if err != nil {
-		return false
+		return unknown
 	}
 	var listing struct {
 		Models []struct {
@@ -95,21 +130,30 @@ func CodexSupportsEffort(model, effort string) bool {
 			} `json:"supported_reasoning_levels"`
 		} `json:"models"`
 	}
-	if json.Unmarshal(output, &listing) != nil || listing.Models == nil {
-		return false
+	if _, err := parseListing("codex", string(output)); err != nil || json.Unmarshal(output, &listing) != nil || listing.Models == nil {
+		return unknown
 	}
-	for _, item := range listing.Models {
-		if item.Slug != model || item.Visibility != "list" {
-			continue
-		}
-		for _, level := range item.Levels {
-			if level.Effort == effort {
-				return true
+	result := CodexCapabilityResult{Candidates: make([]CodexCapability, len(candidates))}
+	for i, candidate := range candidates {
+		status := CodexCapabilityAbsent
+		for _, item := range listing.Models {
+			if item.Slug != candidate.Model || item.Visibility != "list" {
+				continue
+			}
+			status = CodexCapabilityUnsupportedEffort
+			for _, level := range item.Levels {
+				if level.Effort == candidate.Effort {
+					status = CodexCapabilityAvailable
+					break
+				}
+			}
+			if status == CodexCapabilityAvailable {
+				break
 			}
 		}
-		return false
+		result.Candidates[i] = CodexCapability{Candidate: candidate, Status: status}
 	}
-	return false
+	return result
 }
 
 // AtLeast accepts the floor or a newer ID in its family.
