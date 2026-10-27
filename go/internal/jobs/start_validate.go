@@ -279,7 +279,11 @@ func validateStartLaunch(a map[string]any, agent, mode, name string, opt StartVa
 				return strconv.ErrSyntax
 			}
 		}
-		_, err = BuildAgentCommand(AgentCommandInput{Agent: agent, Tool: name, CWD: cwdText, Model: stringArg(a["model"]), ConfigArgs: configArgs, Prompt: stringArg(a["prompt"])})
+		var sandbox *string
+		if value, ok := a["sandbox"].(string); ok {
+			sandbox = &value
+		}
+		_, err = BuildAgentCommand(AgentCommandInput{Agent: agent, Tool: name, CWD: cwdText, Model: stringArg(a["model"]), ConfigArgs: configArgs, Sandbox: sandbox, Prompt: stringArg(a["prompt"])})
 		return err
 	}
 	if agent == "claude" {

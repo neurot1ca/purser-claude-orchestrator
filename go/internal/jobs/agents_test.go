@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +61,9 @@ func TestAgentCommandPythonParity(t *testing.T) {
 			if test.Kind == "unsupported_sandbox" {
 				input.Sandbox = stringPointer("read-only")
 			}
+			if test.Kind == "read_only" {
+				input.Sandbox = stringPointer("read-only")
+			}
 			if test.Kind == "unsupported_config" {
 				input.ConfigArgs = []string{"unsupported_option=true"}
 			}
@@ -75,6 +79,57 @@ func TestAgentCommandPythonParity(t *testing.T) {
 				t.Fatalf("argv mismatch\n got: %#v\nwant: %#v", got, test.Argv)
 			}
 		})
+	}
+}
+
+func TestOpenCodeReadOnlyEnvironmentKeepsReportStream(t *testing.T) {
+	input := AgentCommandInput{Agent: "opencode", Prefix: []string{"opencode"}, Tool: "codex", Model: "google/gemini-test",
+		ConfigArgs: []string{`model_reasoning_effort="high"`}, Sandbox: stringPointer("read-only"), Prompt: "plan"}
+	command, err := BuildAgentCommand(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAgent := false
+	for i := range command {
+		if command[i] == "--agent" && i+1 < len(command) && command[i+1] == openCodeReadOnlyAgent {
+			wantAgent = true
+		}
+	}
+	if !wantAgent {
+		t.Fatalf("read-only OpenCode argv missing named agent: %#v", command)
+	}
+	environment := AgentCommandEnvironment(input)
+	if len(environment) != 1 || !strings.HasPrefix(environment[0], "OPENCODE_CONFIG_CONTENT=") {
+		t.Fatalf("read-only OpenCode environment = %#v", environment)
+	}
+	var config struct {
+		Permission map[string]string `json:"permission"`
+		Agent      map[string]struct {
+			Permission map[string]string `json:"permission"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(environment[0], "OPENCODE_CONFIG_CONTENT=")), &config); err != nil {
+		t.Fatal(err)
+	}
+	for _, permission := range []string{"edit", "write", "bash", "webfetch", "task", "external_directory"} {
+		if config.Permission[permission] != "deny" || config.Agent[openCodeReadOnlyAgent].Permission[permission] != "deny" {
+			t.Errorf("permission %q is not denied in global and named agent config: %#v", permission, config)
+		}
+	}
+	stream := NewEventStream("opencode")
+	stream.Write([]byte("{\"type\":\"text\",\"part\":{\"text\":\"plan report\"}}\n{\"type\":\"step_finish\",\"part\":{\"reason\":\"stop\"}}\n"))
+	result := stream.Result(false, 0, "")
+	if result.Status != "success" || result.Final != "plan report" {
+		t.Fatalf("read-only report stream result = %#v", result)
+	}
+}
+
+func TestAgyPlanKeepsJSONReportChannel(t *testing.T) {
+	stream := NewEventStream("agy")
+	stream.Write([]byte("{\"status\":\"success\",\"response\":\"plan report\",\"conversation_id\":\"plan-session\"}\n"))
+	result := stream.Result(false, 0, "")
+	if result.Status != "success" || result.ThreadID != "plan-session" || result.Final != "plan report" {
+		t.Fatalf("agy plan report result = %#v", result)
 	}
 }
 
@@ -150,6 +205,25 @@ func TestValidateStartAcceptsClaudePlanJob(t *testing.T) {
 	request, failure := ValidateStart(args, StartValidationOptions{Agent: "claude", FixedAgent: true})
 	if failure != nil || request.Agent != "claude" {
 		t.Fatalf("Claude plan start failed validation: request=%#v failure=%#v", request, failure)
+	}
+}
+
+func TestValidateStartSandboxDoesNotDropAlternateAgentReadOnly(t *testing.T) {
+	for _, tc := range []struct {
+		agent string
+		model string
+	}{
+		{agent: "opencode", model: "google/gemini-test"},
+		{agent: "agy", model: "gemini-test"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			args := map[string]any{"call": "00000000-0000-0000-0000-000000000001", "prompt": "plan", "cwd": t.TempDir(),
+				"model": tc.model, "sandbox": "read-only", "config": map[string]any{"model_reasoning_effort": "high"}}
+			request, failure := ValidateStart(args, StartValidationOptions{Agent: tc.agent, FixedAgent: true})
+			if failure != nil || request.Agent != tc.agent {
+				t.Fatalf("read-only start failed validation: request=%#v failure=%#v", request, failure)
+			}
+		})
 	}
 }
 

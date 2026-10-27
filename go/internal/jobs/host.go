@@ -360,7 +360,11 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				if args.Sandbox != "" {
 					sandbox = &args.Sandbox
 				}
-				commandArgs, err = BuildAgentCommand(AgentCommandInput{Agent: agent, Prefix: prefix, Tool: launch.Name, CWD: args.Cwd, Model: args.Model, ConfigArgs: configArgs, Sandbox: sandbox, ThreadID: args.ThreadID, Prompt: prompt})
+				input := AgentCommandInput{Agent: agent, Prefix: prefix, Tool: launch.Name, CWD: args.Cwd, Model: args.Model, ConfigArgs: configArgs, Sandbox: sandbox, ThreadID: args.ThreadID, Prompt: prompt}
+				commandArgs, err = BuildAgentCommand(input)
+				if err == nil {
+					childEnv = append(childEnv, AgentCommandEnvironment(input)...)
+				}
 			}
 		}
 	}

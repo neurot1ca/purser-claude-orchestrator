@@ -58,6 +58,11 @@ func TestHostFakeWorker(t *testing.T) {
 		os.Exit(0)
 	}
 	if os.Getenv("PURSER_HOST_FAKE_AGENT") == "opencode" {
+		if capture := os.Getenv("PURSER_HOST_FAKE_ENV_CAPTURE"); capture != "" {
+			if err := os.WriteFile(capture, []byte(os.Getenv("OPENCODE_CONFIG_CONTENT")), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
 		_, _ = os.Stdout.WriteString("{\"type\": \"step_start\", \"sessionID\": \"fake-session\"}\r\n")
 		if mode == "agent_failure" {
 			_, _ = os.Stdout.WriteString("{\"type\": \"error\", \"message\": \"fake agent failure\"}\r\n")
@@ -113,6 +118,59 @@ func TestHostFakeWorker(t *testing.T) {
 		os.Exit(7)
 	}
 	os.Exit(0)
+}
+
+func TestHostPassesOpenCodeReadOnlyPolicyAndCapturesFinalReport(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	deadline := float64(time.Now().Add(time.Minute).UnixNano()) / 1e9
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": deadline, "repoRoot": root,
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex", "agent": "opencode", "args": map[string]any{
+			"cwd": root, "prompt": "plan", "model": "google/gemini-test", "sandbox": "read-only",
+			"config": map[string]any{"model_reasoning_effort": "high"},
+		},
+	})
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "environment")
+	t.Setenv("PURSER_HOST_FAKE_AGENT", "opencode")
+	configCapture := filepath.Join(root, "opencode-config.json")
+	t.Setenv("PURSER_HOST_FAKE_ENV_CAPTURE", configCapture)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+	}}
+	if _, err := RunHostGeneration(dir, hostTestID, 1, "owner", options); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(configCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("invalid OpenCode config env: %s: %v", data, err)
+	}
+	job, err := Read(filepath.Join(dir, hostTestID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state, outputFile string
+	if !job.Get("state", &state) || state != "SUCCEEDED" || !job.Get("outputFile", &outputFile) {
+		t.Fatalf("worker final report was not captured in terminal job: %s", job.original)
+	}
+	if content, err := os.ReadFile(filepath.Join(dir, outputFile)); err != nil || string(content) != "fake answer" {
+		t.Fatalf("worker report output = %q, err=%v", content, err)
+	}
 }
 
 func TestRunHostGenerationPreservesPromptBytesOnStdin(t *testing.T) {

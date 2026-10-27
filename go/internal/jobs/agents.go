@@ -106,6 +106,22 @@ type AgentCommandInput struct {
 	Prompt     string
 }
 
+const openCodeReadOnlyAgent = "purser-read-only"
+
+// AgentCommandEnvironment adds launch-time policy that cannot be expressed in
+// argv. OpenCode reads OPENCODE_CONFIG_CONTENT before resolving the agent.
+func AgentCommandEnvironment(in AgentCommandInput) []string {
+	if in.Agent != "opencode" || in.Sandbox == nil || *in.Sandbox != "read-only" {
+		return nil
+	}
+	permissions := map[string]string{"edit": "deny", "write": "deny", "bash": "deny", "webfetch": "deny", "task": "deny", "external_directory": "deny"}
+	config, _ := json.Marshal(map[string]any{
+		"permission": permissions,
+		"agent":      map[string]any{openCodeReadOnlyAgent: map[string]any{"mode": "primary", "permission": permissions}},
+	})
+	return []string{"OPENCODE_CONFIG_CONTENT=" + string(config)}
+}
+
 // BuildAgentCommand maps the OpenCode and Antigravity bridge options to argv.
 func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 	switch in.Agent {
@@ -137,7 +153,7 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 		if !agyModel.MatchString(in.Model) {
 			return nil, errors.New("Antigravity model must be a Gemini model from agy models")
 		}
-		if in.Sandbox != nil || len(in.ConfigArgs) != 1 || len(in.ConfigArgs[0]) <= len("model_reasoning_effort=") || in.ConfigArgs[0][:len("model_reasoning_effort=")] != "model_reasoning_effort=" {
+		if in.Sandbox != nil && *in.Sandbox != "read-only" || len(in.ConfigArgs) != 1 || len(in.ConfigArgs[0]) <= len("model_reasoning_effort=") || in.ConfigArgs[0][:len("model_reasoning_effort=")] != "model_reasoning_effort=" {
 			return nil, errors.New("unsupported Antigravity sandbox or config")
 		}
 		var effort string
@@ -146,8 +162,13 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 		}
 		command := append([]string{}, in.Prefix...)
 		prompt := in.Prompt + "\nRun every command in the foreground and wait for it; never start background tasks."
-		command = append(command, "--print", prompt, "--output-format", "json", "--model", in.Model,
-			"--mode", "accept-edits", "--dangerously-skip-permissions", "--effort", effort)
+		command = append(command, "--print", prompt, "--output-format", "json", "--model", in.Model)
+		if in.Sandbox != nil {
+			command = append(command, "--mode", "plan", "--sandbox")
+		} else {
+			command = append(command, "--mode", "accept-edits", "--dangerously-skip-permissions")
+		}
+		command = append(command, "--effort", effort)
 		if in.Tool == "codex-reply" {
 			command = append(command, "--conversation", in.ThreadID)
 		} else {
@@ -205,7 +226,7 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 		if in.Model == "" || !strings.Contains(in.Model, "/") || in.Model[0] == '/' || in.Model[len(in.Model)-1] == '/' {
 			return nil, errors.New("OpenCode model must be provider/model")
 		}
-		if in.Sandbox != nil {
+		if in.Sandbox != nil && *in.Sandbox != "read-only" {
 			return nil, errors.New("OpenCode sandbox has no verified equivalent")
 		}
 		variants := make([]string, 0, 1)
@@ -220,6 +241,9 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 		}
 		command := append([]string{}, in.Prefix...)
 		command = append(command, "run", "--format", "json", "--model", in.Model)
+		if in.Sandbox != nil {
+			command = append(command, "--agent", openCodeReadOnlyAgent)
+		}
 		if len(variants) != 0 {
 			var variant string
 			if err := json.Unmarshal([]byte(variants[0]), &variant); err != nil || variant == "" {
