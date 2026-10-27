@@ -145,7 +145,8 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 			return nil, errors.New("Antigravity effort must be low, medium, high or max")
 		}
 		command := append([]string{}, in.Prefix...)
-		command = append(command, "--print", in.Prompt, "--output-format", "json", "--model", in.Model,
+		prompt := in.Prompt + "\nRun every command in the foreground and wait for it; never start background tasks."
+		command = append(command, "--print", prompt, "--output-format", "json", "--model", in.Model,
 			"--mode", "accept-edits", "--dangerously-skip-permissions", "--effort", effort)
 		if in.Tool == "codex-reply" {
 			command = append(command, "--conversation", in.ThreadID)

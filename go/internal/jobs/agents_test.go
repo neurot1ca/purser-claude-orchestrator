@@ -102,6 +102,26 @@ func TestClaudeWorkerCarriesEffortAndSuppressesNestedHooks(t *testing.T) {
 	}
 }
 
+func TestAgyWorkerPromptRequestsForegroundCommands(t *testing.T) {
+	command, err := BuildAgentCommand(AgentCommandInput{Agent: "agy", Prefix: []string{"agy"}, Tool: "codex", CWD: t.TempDir(),
+		Model: "gemini-test", ConfigArgs: []string{`model_reasoning_effort="high"`}, Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const foregroundInstruction = "Run every command in the foreground and wait for it; never start background tasks."
+	if command[2] != "work\n"+foregroundInstruction {
+		t.Fatalf("agy prompt = %q, want foreground instruction appended", command[2])
+	}
+
+	nonAgy, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "haiku", Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nonAgy[len(nonAgy)-1]; got != "work" {
+		t.Fatalf("non-agy prompt changed: %q", got)
+	}
+}
+
 func TestClaudeResearchIsReadOnlyAndAliasNoneOmitsEffort(t *testing.T) {
 	command, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "opus",
 		Sandbox: stringPointer("read-only"), Prompt: "plan"})
