@@ -178,6 +178,9 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 		}
 		command := append([]string{}, in.Prefix...)
 		command = append(command, "--setting-sources", "", "--restricted")
+		if readOnly {
+			command = append(command, "--safe-mode", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--no-chrome")
+		}
 		if !readOnly {
 			command = append(command, "--permission-mode", "bypassPermissions")
 		}

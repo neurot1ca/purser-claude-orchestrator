@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 // OrderedObject preserves JSON object order where Python's dict iteration order
@@ -359,6 +361,16 @@ func BuildCodexCommand(args LaunchArgs) ([]string, error) {
 			configArgs = append(configArgs, option.key+"="+mustTOMLString(*option.value))
 		}
 	}
+	if args.Sandbox == "read-only" {
+		configArgs = append(configArgs,
+			"features.apps=false",
+			"features.plugins=false",
+			"features.browser_use=false",
+			"features.browser_use_external=false",
+			"features.computer_use=false",
+		)
+		configArgs = append(configArgs, codexMCPOverrides(prefix, args.Cwd)...)
+	}
 	command := append([]string{}, prefix...)
 	command = append(command, "exec")
 	if args.Name == "codex-reply" {
@@ -385,6 +397,68 @@ func BuildCodexCommand(args LaunchArgs) ([]string, error) {
 		command = append(command, args.ThreadID)
 	}
 	return append(command, "-"), nil
+}
+
+func codexMCPOverrides(prefix []string, cwd string) []string {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return nil
+		}
+		home = filepath.Join(userHome, ".codex")
+	} else if !filepath.IsAbs(home) {
+		home = filepath.Join(cwd, home)
+	}
+	paths := []string{filepath.Join(home, "config.toml")}
+	profile := ""
+	for i := 1; i < len(prefix); i++ {
+		if (prefix[i] == "--profile" || prefix[i] == "-p") && i+1 < len(prefix) {
+			i++
+			profile = prefix[i]
+		} else if strings.HasPrefix(prefix[i], "--profile=") {
+			profile = strings.TrimPrefix(prefix[i], "--profile=")
+		}
+	}
+	if profile != "" {
+		paths = append(paths, filepath.Join(home, profile+".config.toml"))
+	}
+	servers := make(map[string]bool)
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var config struct {
+			MCPServers map[string]any `toml:"mcp_servers"`
+		}
+		if _, err := toml.Decode(string(data), &config); err != nil {
+			continue
+		}
+		for name := range config.MCPServers {
+			servers[name] = true
+		}
+	}
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var overrides, quoted []string
+	for _, name := range names {
+		key := (toml.Key{name}).String()
+		if key == name {
+			overrides = append(overrides, "mcp_servers."+key+".enabled=false")
+		} else {
+			quoted = append(quoted, key+"={enabled=false}")
+		}
+	}
+	if len(quoted) > 0 {
+		// Codex 0.163 splits dotted override paths without unquoting keys.
+		// Combine quoted keys: repeated root overrides replace each other.
+		overrides = append([]string{"mcp_servers={" + strings.Join(quoted, ",") + "}"}, overrides...)
+	}
+	return overrides
 }
 
 func mustTOMLString(value string) string {

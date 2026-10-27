@@ -77,6 +77,117 @@ func TestBuildCodexCommandOmitsAbsentOptionsAndKeepsPromptOffArgv(t *testing.T) 
 	}
 }
 
+func TestBuildCodexResearchDisablesExternalIntegrations(t *testing.T) {
+	args := LaunchArgs{BinaryOverride: `"codex"`, Name: "codex", Cwd: `C:\work`, Sandbox: "read-only", OutputPath: `C:\temp\last.txt`}
+	research, err := BuildCodexCommand(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"features.apps=false", "features.plugins=false", "features.browser_use=false", "features.browser_use_external=false", "features.computer_use=false"}
+	for _, value := range want {
+		if !containsPair(research, "-c", value) {
+			t.Errorf("read-only launch is missing -c %s: %#v", value, research)
+		}
+	}
+
+	args.Sandbox = "workspace-write"
+	implementation, err := BuildCodexCommand(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range want {
+		if containsPair(implementation, "-c", value) {
+			t.Errorf("implementation launch unexpectedly has -c %s: %#v", value, implementation)
+		}
+	}
+}
+
+func TestBuildCodexReadOnlyMCPOverrides(t *testing.T) {
+	for _, mode := range []string{"CODEX_HOME", "relative CODEX_HOME", "user home"} {
+		t.Run(mode, func(t *testing.T) {
+			root := scratch(t)
+			userHome := filepath.Join(root, "user")
+			t.Setenv("HOME", userHome)
+			t.Setenv("USERPROFILE", userHome)
+			codexHome := filepath.Join(root, "selected config")
+			switch mode {
+			case "CODEX_HOME":
+				t.Setenv("CODEX_HOME", codexHome)
+			case "relative CODEX_HOME":
+				t.Setenv("CODEX_HOME", "selected config")
+			case "user home":
+				t.Setenv("CODEX_HOME", "")
+				codexHome = filepath.Join(userHome, ".codex")
+			}
+			if err := os.MkdirAll(codexHome, 0700); err != nil {
+				t.Fatal(err)
+			}
+			for file, data := range map[string]string{
+				"config.toml":          "[mcp_servers.base]\ncommand = 'unused'\n[mcp_servers.\"dotted.server\"]\ncommand = 'unused'\n[mcp_servers.\"space server\"]\ncommand = 'unused'\n",
+				"research.config.toml": "[mcp_servers.from_profile]\ncommand = 'unused'\n[mcp_servers.base]\nenabled = true\n",
+			} {
+				if err := os.WriteFile(filepath.Join(codexHome, file), []byte(data), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			args := LaunchArgs{BinaryOverride: `["codex","--profile","research"]`, Name: "codex", Cwd: root, Sandbox: "read-only"}
+			for _, sandbox := range []string{"read-only", "workspace-write"} {
+				args.Sandbox = sandbox
+				command, err := BuildCodexCommand(args)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var overrides []string
+				for i := 0; i+1 < len(command); i++ {
+					if command[i] == "-c" && strings.HasPrefix(command[i+1], "mcp_servers") {
+						overrides = append(overrides, command[i+1])
+					}
+				}
+				var want []string
+				if sandbox == "read-only" {
+					want = []string{`mcp_servers={"dotted.server"={enabled=false},"space server"={enabled=false}}`, "mcp_servers.base.enabled=false", "mcp_servers.from_profile.enabled=false"}
+				}
+				if !reflect.DeepEqual(overrides, want) {
+					t.Fatalf("%s overrides = %#v, want %#v", sandbox, overrides, want)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildCodexReadOnlyUnavailableConfig(t *testing.T) {
+	for _, unavailable := range []string{"missing", "unreadable"} {
+		t.Run(unavailable, func(t *testing.T) {
+			root := scratch(t)
+			t.Setenv("CODEX_HOME", root)
+			if unavailable == "unreadable" {
+				// A directory reliably fails os.ReadFile on every supported OS.
+				if err := os.Mkdir(filepath.Join(root, "config.toml"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			command, err := BuildCodexCommand(LaunchArgs{BinaryOverride: `"codex"`, Name: "codex", Cwd: root, Sandbox: "read-only"})
+			if err != nil {
+				t.Fatalf("%s config failed launch: %v", unavailable, err)
+			}
+			for _, arg := range command {
+				if strings.HasPrefix(arg, "mcp_servers") {
+					t.Fatalf("%s config emitted MCP overrides: %#v", unavailable, command)
+				}
+			}
+		})
+	}
+}
+
+func containsPair(args []string, key, value string) bool {
+	for index := 0; index+1 < len(args); index++ {
+		if args[index] == key && args[index+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
 func TestResolveCodexPrefixWindowsLaunchers(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows launcher resolution")

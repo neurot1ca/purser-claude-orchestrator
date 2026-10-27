@@ -102,15 +102,15 @@ func TestClaudeWorkerCarriesEffortAndSuppressesNestedHooks(t *testing.T) {
 	}
 }
 
-func TestClaudePlanIsReadOnlyAndAliasNoneOmitsEffort(t *testing.T) {
+func TestClaudeResearchIsReadOnlyAndAliasNoneOmitsEffort(t *testing.T) {
 	command, err := BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "opus",
 		Sandbox: stringPointer("read-only"), Prompt: "plan"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"claude", "--setting-sources", "", "--restricted", "--print", "--output-format", "json", "--model", "opus", "--tools", "Read,Glob,Grep", "plan"}
+	want := []string{"claude", "--setting-sources", "", "--restricted", "--safe-mode", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--no-chrome", "--print", "--output-format", "json", "--model", "opus", "--tools", "Read,Glob,Grep", "plan"}
 	if !reflect.DeepEqual(command, want) {
-		t.Fatalf("Claude plan argv mismatch\n got: %#v\nwant: %#v", command, want)
+		t.Fatalf("Claude research argv mismatch\n got: %#v\nwant: %#v", command, want)
 	}
 	command, err = BuildAgentCommand(AgentCommandInput{Agent: "claude", Prefix: []string{"claude"}, Tool: "codex", Model: "haiku",
 		ConfigArgs: []string{`model_reasoning_effort="none"`}, Prompt: "work"})
