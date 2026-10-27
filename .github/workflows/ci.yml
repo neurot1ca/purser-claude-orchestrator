@@ -22,7 +22,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        include:
+          - os: windows-latest
+            shard: 1
+          - os: windows-latest
+            shard: 2
+          - os: ubuntu-latest
+          - os: macos-latest
+    name: test (${{ matrix.os }}${{ matrix.shard && format(', {0}/2', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -32,11 +39,25 @@ jobs:
           go-version-file: go/go.mod
 
       - name: Vet Go packages
+        if: matrix.os != 'windows-latest' || matrix.shard == 1
         run: go vet ./...
         working-directory: go
 
       - name: Test Go packages
+        if: matrix.os != 'windows-latest'
         run: go test ./...
+        working-directory: go
+
+      - name: Test Go packages outside enforce
+        if: matrix.os == 'windows-latest' && matrix.shard == 1
+        run: go test $(go list ./... | grep -v '/internal/enforce$')
+        shell: bash
+        working-directory: go
+
+      - name: Test enforce package
+        if: matrix.os == 'windows-latest' && matrix.shard == 2
+        run: go test ./internal/enforce
+        shell: bash
         working-directory: go
 
       - uses: actions/setup-node@v7
@@ -48,9 +69,11 @@ jobs:
         shell: bash
 
       - name: Validate Claude plugin
+        if: matrix.os != 'windows-latest' || matrix.shard == 1
         run: claude plugin validate . --strict
         shell: bash
 
       - name: Test Claude plugin
+        if: matrix.os != 'windows-latest' || matrix.shard == 1
         run: claude plugin test .
         shell: bash
