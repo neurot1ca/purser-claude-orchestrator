@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.201 — 2026-10-27
+
+- **Fixed:** on Windows, every Purser state and config write retries for up to two seconds when an antivirus or indexer handle briefly blocks the replace, instead of failing.
+
 ## 0.1.200 — 2026-10-27
 
 - **Fixed:** a failed result replay no longer discards the coder's changes, and leftover read-only files under `.tmp/` no longer block it.
