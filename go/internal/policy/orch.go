@@ -87,7 +87,7 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 		if key == "task" && strings.TrimSpace(value) == "" {
 			return orchFailure(remainder, orchMalformedLine, "The ORCH task value cannot be empty.", values)
 		}
-		if key == "phase" || key == "reason" {
+		if key == "phase" || key == "reason" || key == "route" {
 			if normalized := normalizeOrchEnum(key, value); normalized != value {
 				normalizations = append(normalizations, key+"="+value+"->"+normalized)
 				value = normalized
@@ -244,18 +244,34 @@ func (result OrchParseResult) DenialMessage() string {
 func normalizeOrchEnum(key, value string) string {
 	normalized := strings.ToLower(strings.ReplaceAll(value, "-", "_"))
 	aliases := map[string]map[string]string{
-		"phase":  {"implement": "implementation", "impl": "implementation", "code": "implementation", "op": "operation", "ops": "operation"},
-		"reason": {"feedback": "fix", "review_feedback": "fix", "review": "fix", "sendback": "fix", "send_back": "fix", "new": "new_task", "cont": "continue"},
+		"phase": {
+			"implement": "implementation", "impl": "implementation", "code": "implementation", "coding": "implementation",
+			"op": "operation", "ops": "operation",
+			"planning": "plan",
+		},
+		"reason": {
+			"feedback": "fix", "review_feedback": "fix", "review": "fix", "review_fix": "fix",
+			"sendback": "fix", "send_back": "fix", "repair": "fix", "bugfix": "fix", "bug_fix": "fix", "rework": "fix",
+			"new": "new_task",
+			"cont": "continue", "resume": "continue",
+			"reroute": "route_change", "re_route": "route_change",
+			"re_anchor": "reanchor",
+			"override": "user_override",
+		},
+		"route": {
+			"mech": "mechanical",
+			"op": "operation", "ops": "operation",
+			"plan": "plan_standard",
+			"escalate": "escalated",
+		},
 	}
 	if canonical, ok := aliases[key][normalized]; ok {
 		return canonical
 	}
-	canonicalValues := map[string]map[string]bool{
-		"phase":  {"implementation": true, "operation": true, "plan": true},
-		"reason": {"new_task": true, "continue": true, "fix": true, "route_change": true, "reanchor": true, "repeated_failure": true, "user_override": true},
-	}
-	if canonicalValues[key][normalized] {
-		return normalized
+	for _, candidate := range orchEnumCandidates(key) {
+		if normalized == candidate {
+			return normalized
+		}
 	}
 	return value
 }
@@ -269,13 +285,26 @@ func correctedOrchLine(values map[string]string) string {
 		if value, ok := corrected[key]; ok {
 			if candidate := closestOrchEnum(key, value); candidate != "" {
 				corrected[key] = candidate
+			} else if candidates := orchEnumCandidates(key); len(candidates) > 0 {
+				corrected[key] = "<" + strings.Join(candidates, "|") + ">"
 			}
 		}
 	}
-	if corrected["phase"] == "implementation" && corrected["scope"] == "" {
+	if _, ok := corrected["review_findings"]; ok {
+		corrected["reason"] = "fix"
+	}
+	if corrected["route"] == "plan_standard" && corrected["phase"] != "plan" {
+		corrected["phase"] = "plan"
+	} else if corrected["phase"] == "plan" && corrected["route"] != "plan_standard" {
+		corrected["route"] = "plan_standard"
+	}
+	if corrected["route"] == "research" && corrected["phase"] != "operation" {
+		corrected["phase"] = "operation"
+	}
+	if corrected["phase"] == "implementation" && strings.TrimSpace(corrected["scope"]) == "" {
 		corrected["scope"] = "<paths>"
 	}
-	if _, ok := corrected["basis"]; !ok && (corrected["route"] == "normal" || corrected["route"] == "consequential" || corrected["route"] == "escalated") {
+	if strings.TrimSpace(corrected["basis"]) == "" && (corrected["route"] == "normal" || corrected["route"] == "consequential" || corrected["route"] == "escalated") && corrected["requested"] != "user" {
 		corrected["basis"] = "design:<...>"
 	}
 	keys := []string{"task", "phase", "route", "reason", "basis", "scope", "eta", "review_findings", "requested"}
@@ -288,30 +317,46 @@ func correctedOrchLine(values map[string]string) string {
 	return line
 }
 
-func closestOrchEnum(key, value string) string {
-	var candidates []string
+func orchEnumCandidates(key string) []string {
 	switch key {
 	case "phase":
-		candidates = []string{"implementation", "operation", "plan"}
+		return []string{"implementation", "operation", "plan"}
 	case "reason":
-		candidates = []string{"new_task", "continue", "fix", "route_change", "reanchor", "repeated_failure", "user_override"}
+		return []string{"new_task", "continue", "fix", "route_change", "reanchor", "repeated_failure", "user_override"}
 	case "route":
-		candidates = []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard", "research"}
+		return []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard", "research"}
 	case "requested":
-		candidates = []string{"user"}
+		return []string{"user"}
 	default:
+		return nil
+	}
+}
+
+func closestOrchEnum(key, value string) string {
+	candidates := orchEnumCandidates(key)
+	if len(candidates) == 0 {
 		return ""
 	}
-	best, distance, tied := "", len(value)+1, false
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	normalized := normalizeOrchEnum(key, value)
 	for _, candidate := range candidates {
-		d := orchEditDistance(strings.ToLower(strings.ReplaceAll(value, "-", "_")), candidate)
+		if normalized == candidate {
+			return candidate
+		}
+	}
+	clean := strings.ToLower(strings.ReplaceAll(value, "-", "_"))
+	best, distance, tied := "", len(clean)+1, false
+	for _, candidate := range candidates {
+		d := orchEditDistance(clean, candidate)
 		if d < distance {
 			best, distance, tied = candidate, d, false
 		} else if d == distance {
 			tied = true
 		}
 	}
-	if distance <= 3 && !tied {
+	if distance <= 3 && distance <= len(best)/2 && distance <= len(clean)/2 && !tied {
 		return best
 	}
 	return ""
