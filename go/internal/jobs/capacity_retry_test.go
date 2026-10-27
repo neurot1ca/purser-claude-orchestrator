@@ -173,7 +173,7 @@ func TestRunHostCapacityRetries(t *testing.T) {
 			}
 			for _, line := range lines {
 				var entry []string
-				if err := json.Unmarshal([]byte(line), &entry); err != nil || entry[0] != prompt || line != lines[0] {
+				if err := json.Unmarshal([]byte(line), &entry); err != nil || entry[0] != prompt+worktreeRootNote || line != lines[0] {
 					t.Fatalf("retry input changed: %q err=%v", line, err)
 				}
 			}

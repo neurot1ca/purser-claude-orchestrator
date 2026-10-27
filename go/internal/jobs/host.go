@@ -40,6 +40,9 @@ type HostOptions struct {
 	StateRoot     string
 }
 
+// worktreeRootNote tells a worktree worker to map absolute checkout paths into its worktree.
+const worktreeRootNote = "\nUse the job worktree as project root; map absolute checkout paths to the same relative path here."
+
 // RunHostGeneration owns and executes one queued agent generation.
 func RunHostGeneration(dir, jobID string, generation int64, token string, options ...HostOptions) (map[string]any, error) {
 	if len(jobID) != 64 || !validJobID(jobID) || generation < 1 || token == "" {
