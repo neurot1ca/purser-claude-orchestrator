@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"purser-hook/internal/contextio"
 )
 
 const (
@@ -54,7 +56,7 @@ func acquireTaskUsageLock(root, session string, timeout time.Duration) (*os.File
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		if err = lockTaskUsageFile(file); err == nil {
+		if err = contextio.TryLock(file); err == nil {
 			return file, true
 		}
 		if !time.Now().Before(deadline) {
@@ -67,7 +69,7 @@ func acquireTaskUsageLock(root, session string, timeout time.Duration) (*os.File
 
 func releaseTaskUsageLock(file *os.File) {
 	if file != nil {
-		_ = unlockTaskUsageFile(file)
+		_ = contextio.Unlock(file)
 		_ = file.Close()
 	}
 }

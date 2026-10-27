@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
 )
 
@@ -65,7 +66,7 @@ func TestPostAsyncFailureFollowupPythonFixture(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err = lockTaskUsageFile(blocker); err != nil {
+				if err = contextio.TryLock(blocker); err != nil {
 					t.Fatal(err)
 				}
 				got := PostToolUseFailureAsyncFollowup(event, root)

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"purser-hook/internal/contextio"
 )
 
 var errAsyncClaimLock = errors.New("async result claim lock unavailable")
@@ -33,7 +35,7 @@ func claimAsyncResult(root string, event map[string]any, repoRoot string) (*os.F
 			}
 		}
 		if err == nil {
-			err = lockTaskUsageFile(lock)
+			err = contextio.TryLock(lock)
 			if err == nil {
 				break
 			}

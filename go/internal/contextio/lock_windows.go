@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"runtime"
 	"strconv"
 	"syscall"
 	"unsafe"
@@ -20,6 +21,7 @@ var (
 func tryLock(f *os.File) error {
 	var overlapped syscall.Overlapped
 	r1, _, e := lockFileEx.Call(f.Fd(), 3, 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))
+	runtime.KeepAlive(&overlapped)
 	if r1 == 0 {
 		return e
 	}
@@ -28,6 +30,7 @@ func tryLock(f *os.File) error {
 func lockBlocking(f *os.File) error {
 	var overlapped syscall.Overlapped
 	r1, _, e := lockFileEx.Call(f.Fd(), 2, 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))
+	runtime.KeepAlive(&overlapped)
 	if r1 == 0 {
 		return e
 	}
@@ -36,6 +39,7 @@ func lockBlocking(f *os.File) error {
 func unlock(f *os.File) error {
 	var overlapped syscall.Overlapped
 	r1, _, e := unlockFileEx.Call(f.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))
+	runtime.KeepAlive(&overlapped)
 	if r1 == 0 {
 		return e
 	}
