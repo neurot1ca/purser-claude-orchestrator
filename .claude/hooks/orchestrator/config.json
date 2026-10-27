@@ -57,6 +57,19 @@
       "model": "gpt-6-luna",
       "effort": "high"
     },
+    "research": {
+      "model": "gpt-6.1-terra",
+      "effort": "medium",
+      "scoped_fallback": {
+        "model": "gpt-6-luna",
+        "effort": "medium"
+      },
+      "synthesis_fallback": {
+        "model": "gpt-6.1-sol",
+        "effort": "requested",
+        "minimum_effort": "high"
+      }
+    },
     "plan_standard": {
       "model": "gpt-6.1-sol",
       "effort": "high"

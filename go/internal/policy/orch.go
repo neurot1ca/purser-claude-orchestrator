@@ -182,6 +182,9 @@ func ParseOrchPrompt(prompt any, config map[string]any) OrchParseResult {
 	if (values["phase"] == "plan") != (values["route"] == "plan_standard") {
 		return orchFailure(remainder, orchInvalidEnum, "The valid plan pairing is phase=plan with route=plan_standard; phase=plan cannot use other routes and route=plan_standard cannot use other phases.", values)
 	}
+	if values["route"] == "research" && values["phase"] != "operation" {
+		return orchFailure(remainder, orchInvalidEnum, "route=research requires phase=operation.", values)
+	}
 	if solRoutes[values["route"]] && strings.TrimSpace(values["basis"]) == "" && values["requested"] != "user" {
 		route := values["route"]
 		message := fmt.Sprintf("route=%s runs the Sol model. Add basis=<the design choice left to the worker> (for escalated: the concrete miss). If the prompt already states the decisions, use route=subtle instead.", route)
@@ -293,7 +296,7 @@ func closestOrchEnum(key, value string) string {
 	case "reason":
 		candidates = []string{"new_task", "continue", "fix", "route_change", "reanchor", "repeated_failure", "user_override"}
 	case "route":
-		candidates = []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard"}
+		candidates = []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard", "research"}
 	case "requested":
 		candidates = []string{"user"}
 	default:

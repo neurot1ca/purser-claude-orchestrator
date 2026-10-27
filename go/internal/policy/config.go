@@ -34,6 +34,10 @@ func LoadCoderConfigForRepository(configPath, userPath, repository string) (map[
 	if err := decoder.Decode(&config); err != nil {
 		return nil, err
 	}
+	var researchEntry any
+	if routes, ok := config["routes"].(map[string]any); ok {
+		researchEntry = routes["research"]
+	}
 	rolePath := profile.ProjectRolesPath(profile.StateRoot(), repository)
 	_, globalErr := os.Stat(userPath)
 	_, projectErr := os.Stat(rolePath)
@@ -283,6 +287,11 @@ func LoadCoderConfigForRepository(configPath, userPath, repository string) (map[
 			config["routes"] = routeMap
 		}
 	}
+	if researchEntry != nil {
+		if routes, ok := config["routes"].(map[string]any); ok {
+			routes["research"] = researchEntry
+		}
+	}
 	config["coder_agent"] = agent
 	if fallback, exists := user["fallback"]; exists {
 		table, valid := fallback.(map[string]any)
@@ -515,10 +524,28 @@ func ValidateConfig(config map[string]any) error {
 	if !ok || len(routes) == 0 {
 		return configError("INVALID_CONFIG_FIELD", "routes must be a non-empty mapping")
 	}
-	if !sameKeys(routes, requiredRouteSet) {
+	validRouteKeys := sameKeys(routes, requiredRouteSet)
+	if !validRouteKeys && len(routes) == len(requiredRouteSet)+1 {
+		if _, hasResearch := routes["research"]; hasResearch {
+			validRouteKeys = true
+			for route := range routes {
+				if route != "research" && !requiredRouteSet[route] {
+					validRouteKeys = false
+					break
+				}
+			}
+		}
+	}
+	if !validRouteKeys {
 		return configError("ROUTE_TABLE_INCOMPLETE", "routes must contain exactly the configured required_routes")
 	}
 	for route, rawEntry := range routes {
+		if route == "research" {
+			if err := validateResearchEntry(rawEntry, allowedEffortSet); err != nil {
+				return err
+			}
+			continue
+		}
 		entry, ok := rawEntry.(map[string]any)
 		if !ok {
 			return configError("INVALID_ROUTE_ENTRY", "invalid route entry for "+pythonRepr(route))
@@ -646,6 +673,33 @@ func sameKeys(values map[string]any, expected map[string]bool) bool {
 		}
 	}
 	return true
+}
+
+func validateResearchEntry(raw any, allowedEfforts map[string]bool) error {
+	entry, ok := raw.(map[string]any)
+	if !ok || len(entry) != 4 {
+		return configError("INVALID_ROUTE_ENTRY", "research route must contain the primary model and effort and both fallback pairs")
+	}
+	scoped, scopedOK := entry["scoped_fallback"].(map[string]any)
+	if !scopedOK || len(scoped) != 2 {
+		return configError("INVALID_ROUTE_ENTRY", "research scoped_fallback must contain a model and effort pair")
+	}
+	synthesis, synthesisOK := entry["synthesis_fallback"].(map[string]any)
+	if !synthesisOK || len(synthesis) != 3 {
+		return configError("INVALID_ROUTE_ENTRY", "research synthesis_fallback must contain model, effort, and minimum_effort")
+	}
+	for name, pair := range map[string]map[string]any{"primary": entry, "scoped_fallback": scoped, "synthesis_fallback": synthesis} {
+		model, modelOK := pair["model"].(string)
+		effort, effortOK := pair["effort"].(string)
+		if !modelOK || model == "" || !codexModel.MatchString(model) || !effortOK || (!allowedEfforts[effort] && !(name == "synthesis_fallback" && effort == "requested")) {
+			return configError("INVALID_ROUTE_ENTRY", "research "+name+" model or effort is invalid")
+		}
+	}
+	minimum, minimumOK := synthesis["minimum_effort"].(string)
+	if !minimumOK || !allowedEfforts[minimum] {
+		return configError("INVALID_ROUTE_EFFORT", "research synthesis_fallback minimum_effort is unsupported")
+	}
+	return nil
 }
 
 func sameStrings(values []string, expected map[string]bool) bool {

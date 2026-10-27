@@ -39,7 +39,10 @@ func clonePolicyConfig(t *testing.T, config map[string]any) map[string]any {
 func TestPythonRouteAndConfigAssertions(t *testing.T) {
 	config := policyTestConfig(t)
 	config["coder_agent"] = "opencode"
-	for _, raw := range config["routes"].(map[string]any) {
+	for route, raw := range config["routes"].(map[string]any) {
+		if route == "research" {
+			continue
+		}
 		raw.(map[string]any)["model"] = "opencode/big-pickle"
 		raw.(map[string]any)["effort"] = "none"
 	}

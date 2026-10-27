@@ -63,6 +63,69 @@ func ResolveRoute(route any, config map[string]any, gearUp bool) RouteResolution
 	}
 }
 
+// ResolveResearch uses the primary model at the requested effort, defaulting to
+// its configured effort. Only an unavailable primary selects a fallback, using
+// the synthesis minimum effort as the threshold. Other providers use their own
+// operation route.
+func ResolveResearch(config map[string]any, requestedEffort string, primaryUnavailable bool) RouteResolution {
+	if err := ValidateConfig(config); err != nil {
+		message := err.Error()
+		if _, detail, found := strings.Cut(message, ": "); found {
+			message = detail
+		}
+		return RouteResolution{Code: "CONFIG_INVALID", Message: message, Route: "research"}
+	}
+	if requestedEffort != "" && !containsString(config["allowed_efforts"].([]any), requestedEffort) {
+		return RouteResolution{Code: "INVALID_EFFORT", Message: "Research effort is unsupported; no model or effort was selected.", Route: "research"}
+	}
+	agent := "codex"
+	if value, ok := config["coder_agent"].(string); ok && value != "" {
+		agent = value
+	}
+	routes, _ := config["routes"].(map[string]any)
+	selectedRoute := "research"
+	var entry map[string]any
+	if agent != "codex" {
+		selectedRoute = "operation"
+		entry, _ = routes[selectedRoute].(map[string]any)
+	} else {
+		entry, _ = routes["research"].(map[string]any)
+		if entry == nil {
+			return RouteResolution{Code: "INVALID_ROUTE_ENTRY", Message: "Research route is not configured; no model or effort was selected.", Route: "research"}
+		}
+		if requestedEffort == "" {
+			requestedEffort, _ = entry["effort"].(string)
+		}
+		if primaryUnavailable {
+			synthesis := entry["synthesis_fallback"].(map[string]any)
+			minimum := synthesis["minimum_effort"].(string)
+			if effortRank(requestedEffort) >= effortRank(minimum) {
+				entry = synthesis
+			} else {
+				entry, _ = entry["scoped_fallback"].(map[string]any)
+			}
+		}
+	}
+	model, modelOK := entry["model"].(string)
+	effort, effortOK := entry["effort"].(string)
+	if agent == "codex" && (!primaryUnavailable || effort == "requested") {
+		effort = requestedEffort
+	}
+	if !modelOK || !effortOK {
+		return RouteResolution{Code: "INVALID_ROUTE_ENTRY", Message: "Research route is invalid; no model or effort was selected.", Route: selectedRoute}
+	}
+	return RouteResolution{Valid: true, Code: "VALID", Message: "Research route is valid.", Route: selectedRoute, Model: stringPointer(model), Effort: stringPointer(effort)}
+}
+
+func effortRank(effort string) int {
+	for rank, candidate := range []string{"low", "medium", "high", "xhigh", "max", "ultra"} {
+		if effort == candidate {
+			return rank
+		}
+	}
+	return -1
+}
+
 // GearTarget returns the configured Codex gear-up target for an eligible pair.
 func GearTarget(config map[string]any, model, effort string) (string, string, bool) {
 	if config["coder_agent"] != nil && config["coder_agent"] != "codex" {
