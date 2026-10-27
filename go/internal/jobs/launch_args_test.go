@@ -155,6 +155,64 @@ func TestBuildCodexReadOnlyMCPOverrides(t *testing.T) {
 	}
 }
 
+func TestBuildCodexReadOnlyProjectMCPOverrides(t *testing.T) {
+	root := scratch(t)
+	codexHome := filepath.Join(root, "home")
+	t.Setenv("CODEX_HOME", codexHome)
+	outerRepo := filepath.Join(root, "outer")
+	innerRepo := filepath.Join(outerRepo, "inner")
+	parentDir := filepath.Join(innerRepo, "parent")
+	midDir := filepath.Join(parentDir, "mid")
+	cwd := filepath.Join(midDir, "cwd")
+	for _, dir := range []string{
+		codexHome,
+		filepath.Join(outerRepo, ".git"),
+		filepath.Join(outerRepo, ".codex"),
+		filepath.Join(innerRepo, ".git"),
+		filepath.Join(innerRepo, ".codex"),
+		filepath.Join(parentDir, ".codex"),
+		filepath.Join(midDir, ".codex"),
+		filepath.Join(cwd, ".codex"),
+	} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, data := range map[string]string{
+		filepath.Join(codexHome, "config.toml"):            "[mcp_servers.home_base]\ncommand = 'unused'\n[profiles.research.mcp_servers.home_profile]\ncommand = 'unused'\n[profiles.other.mcp_servers.ignored_profile]\ncommand = 'unused'\n",
+		filepath.Join(outerRepo, ".codex", "config.toml"):  "[mcp_servers.outer_ignored]\ncommand = 'unused'\n",
+		filepath.Join(innerRepo, ".codex", "config.toml"):  "[mcp_servers.repo_root]\ncommand = 'unused'\n[profiles.research.mcp_servers.\"repo.profile\"]\ncommand = 'unused'\n",
+		filepath.Join(parentDir, ".codex", "config.toml"):  "[mcp_servers.parent_srv]\ncommand = 'unused'\n[mcp_servers.\"parent space\"]\ncommand = 'unused'\n",
+		filepath.Join(midDir, ".codex", "config.toml"):     "=unparsable",
+		filepath.Join(cwd, ".codex", "config.toml"):        "[mcp_servers.cwd_srv]\ncommand = 'unused'\n[mcp_servers.\"cwd.dotted\"]\ncommand = 'unused'\n[profiles.other.mcp_servers.cwd_ignored]\ncommand = 'unused'\n",
+	} {
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command, err := BuildCodexCommand(LaunchArgs{BinaryOverride: `["codex","--profile=research"]`, Name: "codex", Cwd: cwd, Sandbox: "read-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overrides []string
+	for i := 0; i+1 < len(command); i++ {
+		if command[i] == "-c" && strings.HasPrefix(command[i+1], "mcp_servers") {
+			overrides = append(overrides, command[i+1])
+		}
+	}
+	want := []string{
+		`mcp_servers={"cwd.dotted"={enabled=false},"parent space"={enabled=false},"repo.profile"={enabled=false}}`,
+		"mcp_servers.cwd_srv.enabled=false",
+		"mcp_servers.home_base.enabled=false",
+		"mcp_servers.home_profile.enabled=false",
+		"mcp_servers.parent_srv.enabled=false",
+		"mcp_servers.repo_root.enabled=false",
+	}
+	if !reflect.DeepEqual(overrides, want) {
+		t.Fatalf("overrides = %#v, want %#v", overrides, want)
+	}
+}
+
 func TestBuildCodexReadOnlyUnavailableConfig(t *testing.T) {
 	for _, unavailable := range []string{"missing", "unreadable"} {
 		t.Run(unavailable, func(t *testing.T) {

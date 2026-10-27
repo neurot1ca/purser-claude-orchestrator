@@ -402,15 +402,12 @@ func BuildCodexCommand(args LaunchArgs) ([]string, error) {
 func codexMCPOverrides(prefix []string, cwd string) []string {
 	home := os.Getenv("CODEX_HOME")
 	if home == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			return nil
+		if userHome, err := os.UserHomeDir(); err == nil {
+			home = filepath.Join(userHome, ".codex")
 		}
-		home = filepath.Join(userHome, ".codex")
 	} else if !filepath.IsAbs(home) {
 		home = filepath.Join(cwd, home)
 	}
-	paths := []string{filepath.Join(home, "config.toml")}
 	profile := ""
 	for i := 1; i < len(prefix); i++ {
 		if (prefix[i] == "--profile" || prefix[i] == "-p") && i+1 < len(prefix) {
@@ -420,8 +417,25 @@ func codexMCPOverrides(prefix []string, cwd string) []string {
 			profile = strings.TrimPrefix(prefix[i], "--profile=")
 		}
 	}
-	if profile != "" {
-		paths = append(paths, filepath.Join(home, profile+".config.toml"))
+	var paths []string
+	if home != "" {
+		paths = append(paths, filepath.Join(home, "config.toml"))
+		if profile != "" {
+			paths = append(paths, filepath.Join(home, profile+".config.toml"))
+		}
+	}
+	if cwd != "" {
+		for dir := filepath.Clean(cwd); ; {
+			paths = append(paths, filepath.Join(dir, ".codex", "config.toml"))
+			if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+				break
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
 	}
 	servers := make(map[string]bool)
 	for _, path := range paths {
@@ -431,12 +445,20 @@ func codexMCPOverrides(prefix []string, cwd string) []string {
 		}
 		var config struct {
 			MCPServers map[string]any `toml:"mcp_servers"`
+			Profiles   map[string]struct {
+				MCPServers map[string]any `toml:"mcp_servers"`
+			} `toml:"profiles"`
 		}
 		if _, err := toml.Decode(string(data), &config); err != nil {
 			continue
 		}
 		for name := range config.MCPServers {
 			servers[name] = true
+		}
+		if profile != "" {
+			for name := range config.Profiles[profile].MCPServers {
+				servers[name] = true
+			}
 		}
 	}
 	names := make([]string, 0, len(servers))
