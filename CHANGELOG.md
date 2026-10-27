@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.202 — 2026-10-27
+
+- **Added:** a read-only `research` route (`phase=operation|route=research`) that runs on GPT-6.1 Terra at medium effort, falls back to Luna or Sol when Terra is unavailable, and uses the coder's own operation route when the coder is not Codex.
+
 ## 0.1.201 — 2026-10-27
 
 - **Fixed:** on Windows, every Purser state and config write retries for up to two seconds when an antivirus or indexer handle briefly blocks the replace, instead of failing.
