@@ -168,7 +168,7 @@ func assemblePostDelta(repoRoot string, pending, bundle map[string]any, protecte
 		forceFull = applyOutOfScopeResult(bundle, anomaly, protectedPaths) || forceFull
 	}
 	if _, recorded := pending["main_checkout_baseline"]; recorded && worktree != "" && phase == "implementation" {
-		forceFull = inspectMainCheckout(repoRoot, mapValue(pending["main_checkout_baseline"]), bundle) || forceFull
+		forceFull = inspectMainCheckout(repoRoot, mapValue(pending["main_checkout_baseline"]), scope, delta, bundle) || forceFull
 	}
 	if delta["status"] != ledger.OK {
 		forceFull = true
@@ -240,7 +240,7 @@ func mainCheckoutFingerprint(root, path string) (string, error) {
 	return fmt.Sprintf("sha256:%x", hash.Sum(nil)), nil
 }
 
-func inspectMainCheckout(root string, baseline, bundle map[string]any) bool {
+func inspectMainCheckout(root string, baseline map[string]any, scope []string, delta, bundle map[string]any) bool {
 	baselinePaths, baselineOK := postStatusEntries(baseline["status_entries"])
 	fingerprints, fingerprintsOK := baseline["fingerprints"].(map[string]any)
 	entries, err := ledger.StatusEntries(root)
@@ -279,6 +279,15 @@ func inspectMainCheckout(root string, baseline, bundle map[string]any) bool {
 	if len(paths) > 0 {
 		preview := postFirst(paths, mainCheckoutPathCap)
 		message := "Main checkout changed during this worktree job: " + strings.Join(preview, ", ") + ". The worker may have written outside its worktree, or someone else edited these files."
+		files, filesOK := pythonInt(delta["changed_file_count"])
+		lines, linesOK := pythonInt(delta["changed_line_count"])
+		allInScope := len(paths) > 0
+		for _, path := range paths {
+			allInScope = allInScope && postPathInScope(path, scope)
+		}
+		if filesOK && linesOK && files == 0 && lines == 0 && allInScope {
+			message += " These changed files are within the job scope, but the worktree has no delta; Claude may adopt them after review."
+		}
 		bundle["findings"] = appendPostFinding(bundle["findings"], "MAIN_CHECKOUT_CHANGED_DURING_WORKTREE_JOB", message)
 		findings := bundle["findings"].([]any)
 		finding := findings[len(findings)-1].(map[string]any)

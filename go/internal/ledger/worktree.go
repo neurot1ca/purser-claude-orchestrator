@@ -109,7 +109,14 @@ func copyUntrackedFiles(root, worktree string, raw []byte) error {
 		if !filepath.IsLocal(name) {
 			return &inspectionError{Code: "GIT_OUTPUT_INVALID", Message: "Git returned an unsafe untracked path."}
 		}
-		if err := copyPath(filepath.Join(root, name), filepath.Join(worktree, name), false); err != nil {
+		source := filepath.Join(root, name)
+		recursive := false
+		if info, statErr := os.Lstat(source); statErr == nil && info.IsDir() {
+			if _, gitErr := os.Lstat(filepath.Join(source, ".git")); gitErr == nil {
+				recursive = true
+			}
+		}
+		if err := copyPath(source, filepath.Join(worktree, name), recursive); err != nil {
 			return fmt.Errorf("copying untracked path %q: %w", item, err)
 		}
 	}
@@ -168,6 +175,11 @@ func copyPath(source, target string, recursive bool) error {
 			return e
 		}
 		for _, entry := range entries {
+			// Embedded repositories are snapshot inputs, not submodules. Copy
+			// their working files as ordinary files, never their Git metadata.
+			if strings.EqualFold(entry.Name(), ".git") {
+				continue
+			}
 			if e = copyPath(filepath.Join(source, entry.Name()), filepath.Join(target, entry.Name()), true); e != nil {
 				return e
 			}

@@ -187,7 +187,7 @@ func TestJobWorktreeCopiesManyUntrackedFixtureFiles(t *testing.T) {
 	}
 }
 
-func TestJobWorktreeRejectsEmbeddedGitMetadata(t *testing.T) {
+func TestJobWorktreeCopiesEmbeddedRepositoryAsPlainFiles(t *testing.T) {
 	base := gitTempDir(t)
 	repo, parent := filepath.Join(base, "repo"), filepath.Join(base, "jobs")
 	if err := os.MkdirAll(repo, 0700); err != nil {
@@ -210,12 +210,20 @@ func TestJobWorktreeRejectsEmbeddedGitMetadata(t *testing.T) {
 		t.Fatalf("embedded repository enumeration = %q", listed)
 	}
 
-	_, err := CreateJobWorktree(repo, "embedded", parent)
-	if err == nil || !strings.Contains(err.Error(), "UNTRACKED_FILE_UNSUPPORTED") || !strings.Contains(err.Error(), "Runtime/tests/.fixture-embedded") {
-		t.Fatalf("CreateJobWorktree error = %v, want unsupported embedded repository path", err)
+	result, err := CreateJobWorktree(repo, "embedded", parent)
+	if err != nil {
+		t.Fatalf("CreateJobWorktree: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(parent, "embedded")); !os.IsNotExist(statErr) {
-		t.Fatalf("failed worktree remains after embedded repository rejection: %v", statErr)
+	files := worktreeFiles(t, result["path"])
+	if got := files["Runtime/tests/.fixture-embedded/nested.txt"]; got != "embedded" {
+		t.Fatalf("embedded working file = %q, want copied plain file", got)
+	}
+	if _, ok := files["Runtime/tests/.fixture-embedded/.git/config"]; ok {
+		t.Fatal("embedded repository Git metadata was copied")
+	}
+	tree := stringsOutput(t, result["path"], "ls-tree", "-r", result["snapshot"])
+	if strings.Contains(tree, "160000 commit") {
+		t.Fatalf("snapshot contains a gitlink: %q", tree)
 	}
 }
 

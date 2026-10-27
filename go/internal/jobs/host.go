@@ -313,6 +313,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			}
 		}
 		args.Cwd = mapped
+		prompt += "\nUse the job worktree as project root; map absolute checkout paths to the same relative path here."
 	}
 	if agent == "codex" {
 		stateRoot := opt.StateRoot

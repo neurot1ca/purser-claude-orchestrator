@@ -182,6 +182,38 @@ func TestAssemblePostDeltaReportsMainCheckoutChangesDuringWorktreeJob(t *testing
 	}
 }
 
+func TestAssemblePostDeltaOffersScopedMainCheckoutRecoveryWhenWorktreeIsEmpty(t *testing.T) {
+	repo := postDeltaRepo(t)
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	git(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+	mainBaseline := CaptureMainCheckoutBaseline(repo, nil)
+	worktreeBaseline := postScopeBaseline(t, worktree, []string{"scope"})
+	snapshotOut, err := testutil.Hide(exec.Command("git", "-C", worktree, "rev-parse", "HEAD^{tree}")).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "scope", "file.txt"), []byte("worker wrote main checkout\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pending := map[string]any{
+		"phase": "implementation", "scope": []string{"scope"}, "baseline": worktreeBaseline, "lease_owner": "fixture-owner",
+		"worktree_path": worktree, "worktree_snapshot": strings.TrimSpace(string(snapshotOut)),
+		"main_checkout_baseline": mainBaseline,
+	}
+	bundle := baseBundle("")
+	if _, err := assemblePostDelta(repo, pending, bundle, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	findings := bundle["findings"].([]any)
+	if len(findings) != 1 {
+		t.Fatalf("findings = %#v", findings)
+	}
+	message := findings[0].(map[string]any)["message"].(string)
+	if !strings.Contains(message, "within the job scope") || !strings.Contains(message, "Claude may adopt them after review") {
+		t.Fatalf("recovery guidance missing from finding: %q", message)
+	}
+}
+
 func TestAssemblePostDeltaLeavesBundleCleanWhenMainCheckoutUnchanged(t *testing.T) {
 	repo := postDeltaRepo(t)
 	worktree := filepath.Join(t.TempDir(), "worktree")
