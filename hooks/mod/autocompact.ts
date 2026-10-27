@@ -19,6 +19,8 @@ const RETRY_DELAYS_MS = [1_000, 3_000, 10_000]
 const DEFAULT_CACHE_TTL_MS = 5 * 60_000
 const LONG_CACHE_TTL_MS = 60 * 60_000
 const CACHE_MARGIN_MS = 30_000
+const LONG_CACHE_MARGIN_MS = 5 * 60_000
+const IDLE_COMPACT_MIN_TOKENS = 100_000
 const LONG_GAP_MS = 5 * 60_000
 
 const LOG_LINES = 40
@@ -217,12 +219,13 @@ export function registerAutoCompact(on) {
       const compacting = tokens !== undefined && tokens >= threshold
       await trace($, `turn ${e.turnId}: ${tokens ?? 'no'} tokens, threshold ${threshold}, ${compacting ? 'compacting' : 'below'}`)
       if (!compacting) {
-        if (idle && tokens !== undefined && tokens >= threshold / 2) {
+        if (idle && tokens !== undefined && tokens >= IDLE_COMPACT_MIN_TOKENS) {
           const ttl = cacheTtlMs
+          const margin = ttl === LONG_CACHE_TTL_MS ? LONG_CACHE_MARGIN_MS : CACHE_MARGIN_MS
           const generation = ++idleGeneration
           idleTimerTokens = tokens
           await trace($, `idle timer armed at ${tokens} tokens, TTL ${ttl}ms`)
-          idleTimer = $.clock.after(Math.max(0, ttl - CACHE_MARGIN_MS), async () => {
+          idleTimer = $.clock.after(Math.max(0, ttl - margin), async () => {
             if (generation !== idleGeneration) return
             idleTimer = undefined
             await trace($, `idle timer fired at ${tokens} tokens, TTL ${ttl}ms`)

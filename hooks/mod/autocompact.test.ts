@@ -51,15 +51,15 @@ test('leaves turns under the threshold alone', async ($, on) => {
   expect(calls.compacts).toBe(0)
 })
 
-test('arms the idle timer only from half threshold through just below threshold', async ($, on) => {
+test('arms the idle timer at the 100K floor through just below the main threshold', async ($, on) => {
   const { calls, clock } = engine(on, 130_000)
   await $.turn.complete(TURN)
   await clock.advance(271_000)
   expect(calls.compacts).toBe(1)
 })
 
-test('does not arm the idle timer below half threshold', async ($, on) => {
-  const { calls, clock } = engine(on, 124_999)
+test('does not arm the idle timer below 100K tokens', async ($, on) => {
+  const { calls, clock } = engine(on, 99_999)
   await $.turn.complete(TURN)
   await clock.advance(271_000)
   expect(calls.compacts).toBe(0)
@@ -73,7 +73,7 @@ test('a prompt before the cache timer fires prevents compaction', async ($, on) 
   expect(calls.compacts).toBe(0)
 })
 
-test('the cache timer compacts at the default TTL minus its margin', async ($, on) => {
+test('the five minute cache timer compacts just before its TTL', async ($, on) => {
   const { calls, clock } = engine(on, 130_000)
   await $.turn.complete(TURN)
   await clock.advance(269_999)
@@ -89,9 +89,13 @@ test('a one hour cache write arms the idle timer with the long TTL', async ($, o
   on('fs.write', async (_$, e) => { writes.push(e.text); return { value: undefined } })
   await $.turn.complete({ ...TURN, usage: { model: 'test', input_tokens: 0, output_tokens: 0, cache_creation: { ephemeral_1h_input_tokens: 1, ephemeral_5m_input_tokens: 0 } } })
   expect(writes.join('\n')).toContain('idle timer armed at 130000 tokens, TTL 3600000ms')
-  await clock.advance(3_570_000)
+  await clock.advance(3_299_999)
+  expect(calls.compacts).toBe(0)
+  await clock.advance(1)
   expect(calls.compacts).toBe(0)
   await clock.advance(1_000)
+  expect(calls.compacts).toBe(1)
+  await clock.advance(3_600_000)
   expect(calls.compacts).toBe(1)
 })
 
@@ -117,7 +121,9 @@ test('main-turn writes without a TTL breakdown keep the long idle timer across c
   await $.prompt.submit({ text: 'next', asUser: true })
   await $.turn.complete({ ...TURN, turnId: 't-read', usage: { model: 'test', input_tokens: 0, output_tokens: 1, cache_read_input_tokens: 83_170, cache_creation_input_tokens: 0 } })
   expect(writes[writes.length - 1]).toContain('idle timer armed at 130000 tokens, TTL 3600000ms')
-  await clock.advance(3_570_000)
+  await clock.advance(3_299_000)
+  expect(calls.compacts).toBe(0)
+  await clock.advance(1_000)
   expect(calls.compacts).toBe(0)
   await clock.advance(1_000)
   expect(calls.compacts).toBe(1)
@@ -145,9 +151,10 @@ test('infers a one hour cache TTL from cache usage after a long idle gap', async
   await clock.advance(300_001)
   await $.prompt.submit({ text: 'next', asUser: true })
   await $.turn.complete({ ...TURN, turnId: 't2', usage: { model: 'test', input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1, cache_creation_input_tokens: 0 } })
-  await clock.advance(3_570_000)
+  await clock.advance(3_299_000)
   expect(calls.compacts).toBe(0)
-  await clock.advance(29_000)
+  await clock.advance(1_000)
+  expect(calls.compacts).toBe(0)
   await clock.advance(1_000)
   expect(calls.compacts).toBe(1)
 })
