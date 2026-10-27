@@ -456,6 +456,34 @@ func checkoutRevisionOnce(repo string, backoff *[]time.Duration) (string, string
 		return "", "", err
 	}
 	env := replaceValidationEnv(os.Environ(), "GIT_INDEX_FILE", tempPath)
+	// --modified also includes tracked files replaced by directories.
+	deleted, err := runGitWithBackoff(repo, env, backoff, "ls-files", "--deleted", "--modified", "-z")
+	if err != nil {
+		return "", "", err
+	}
+	if len(deleted) > 0 {
+		candidates := make(map[string]bool)
+		for _, path := range strings.Split(string(deleted), "\x00") {
+			candidates[path] = true
+		}
+		staged, err := runGitWithBackoff(repo, env, backoff, "ls-files", "--stage", "-z")
+		if err != nil {
+			return "", "", err
+		}
+		for _, entry := range strings.Split(string(staged), "\x00") {
+			header, path, ok := strings.Cut(entry, "\t")
+			if !ok || !candidates[path] || strings.HasPrefix(header, "160000 ") {
+				continue
+			}
+			info, statErr := os.Lstat(filepath.Join(repo, filepath.FromSlash(path)))
+			if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+				return "", "", statErr
+			}
+			if statErr == nil && info.IsDir() {
+				return "", "", fmt.Errorf("tracked file replaced by directory: %s", path)
+			}
+		}
+	}
 	if _, err = runGitWithBackoff(repo, env, backoff, "add", "-A"); err != nil {
 		return "", "", err
 	}

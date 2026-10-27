@@ -393,6 +393,22 @@ func TestCheckoutRevisionHandlesDeletedTrackedFile(t *testing.T) {
 	}
 }
 
+func TestCheckoutRevisionAllowsGitlinkDirectory(t *testing.T) {
+	_, repo, record := validationFixture(t, []string{"main.go"})
+	git(t, repo, "update-index", "--add", "--cacheinfo", "160000,"+record.Revision+",sub")
+	if err := os.Mkdir(filepath.Join(repo, "sub"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, err := checkoutRevision(repo)
+	if err != nil {
+		t.Fatalf("checkoutRevision with gitlink directory: %v", err)
+	}
+	entry, err := runGit(repo, nil, "ls-tree", snapshot, "--", "sub")
+	if err != nil || !strings.HasPrefix(string(entry), "160000 commit "+record.Revision+"\tsub") {
+		t.Fatalf("gitlink missing from snapshot: entry=%q err=%v", entry, err)
+	}
+}
+
 func TestValidationAllSkippedIsNotPassing(t *testing.T) {
 	if got := mapValidationState("skipped", "no Go packages or plugin paths were changed"); got != "SKIPPED" {
 		t.Fatalf("all-skipped validation state=%q, want SKIPPED", got)
