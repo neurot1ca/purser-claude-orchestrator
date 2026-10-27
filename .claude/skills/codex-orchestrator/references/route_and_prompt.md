@@ -17,7 +17,11 @@ Use a new task ID for new work after a recorded final outcome. For an intentiona
 | Concrete escalation after a material miss, disagreement, or repeated failure | `escalated` | `gpt-6.1-sol` + `xhigh` |
 | Established runbook operation: deploy, runner control, status, fetch, packaging | `operation` | `gpt-6-luna` + `high` |
 
-The receipt reports the effective model and effort; follow it when they differ from defaults. With Claude as coder, the routes use Haiku (mechanical, operation), Sonnet medium (subtle, normal), and Opus high (consequential, plan) or xhigh (escalated), always the newest model of each tier. Research and study jobs use `route=normal` only when the question or method remains open, with `basis=design:<choice>`. `gpt-6-luna` + `xhigh` is invalid; unresolved work uses `gpt-6.1-sol`.
+The receipt reports the effective model and effort; follow it when they differ from defaults. With Claude as coder, the routes use Haiku (mechanical, operation), Sonnet medium (subtle, normal), and Opus high (consequential, plan) or xhigh (escalated), always the newest model of each tier.
+
+For read-only research, select `ORCH|task=<id>|phase=operation|route=research|reason=new_task`. Codex uses GPT-6.1 Terra at medium effort by default; set `config.model_reasoning_effort` to high for conflicting sources or multi-part repository surveys. Requests for xhigh or max require `basis=measured:<evidence>`, and ultra is rejected. If Terra is unavailable, Purser uses Luna at medium; at high effort or above it uses Sol at the requested effort. If availability cannot be verified, no worker starts. When the coder is not Codex, research uses that coder's own operation route. Codex and Claude research jobs run with a read-only sandbox and approval set to never. Inherited MCP and connector tools are not yet suppressed. Reports use the existing operation report; the reviewer is skipped as for operation jobs, and Claude reviews fully.
+
+`gpt-6-luna` + `xhigh` is invalid; unresolved implementation work uses `gpt-6.1-sol`.
 
 Consequential domains include concurrency, timing and clocks, state machines, economics and execution, auth, durability and recovery, causal evidence, fail-closed behavior, live/risk gates, and subtle cross-module invariants. A domain label alone does not decide whether design is resolved. An accepted map must name files, symbols, invariants, failure direction, and behavior, leaving no semantic choice to the worker. Avoid cheap-first cascades: repair costs review. Effort cannot fix contradictory or unresolved prompts.
 

@@ -1,7 +1,7 @@
 # Purser operating contract
 
 Purser is an orchestration engine: hooks that route, baseline, attribute, and
-review delegated AI coding work. This file binds every worker in this repository.
+review delegated AI work. This file binds every worker in this repository.
 
 ## Scope and authority
 

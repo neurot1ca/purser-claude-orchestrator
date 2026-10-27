@@ -72,6 +72,8 @@ Reviewer is an automated review check from a different model family. Purser reco
 
 The first review failure gets one same-thread send-back. If a luna implementation attempt is rejected after that send-back, Purser routes the next attempt to normal and records a short basis note. If a provider reaches quota limits or fails to launch, Purser presents diagnostic details and asks for consent before switching to a configured fallback coder. If you decline and wait, Purser records the reset time and wakes the session with “⚓ Codex quota renewed ✓” once it passes, so held work resumes without a message from you.
 
+For read-only research, select `ORCH|task=<id>|phase=operation|route=research|reason=new_task`. Codex uses GPT-6.1 Terra at medium effort by default; set `config.model_reasoning_effort` to high for conflicting sources or multi-part repository surveys. Requests for xhigh or max require `basis=measured:<evidence>`, and ultra is rejected. If Terra is unavailable, Purser uses Luna at medium; at high effort or above it uses Sol at the requested effort. If model availability cannot be verified, no worker starts. Other coders use their own operation route. Codex and Claude research jobs run with a read-only sandbox and approval set to never. Inherited MCP and connector tools are not yet suppressed. Results use the existing operation report; the reviewer is skipped as for other operation jobs, and Claude reviews the report fully.
+
 ## Job board
 
 The background job board tracks each job and the work it is waiting on.
