@@ -113,6 +113,52 @@ func TestWritePacketDurableFile(t *testing.T) {
 	}
 }
 
+func TestWritePacketBoundsFileReviewLinesLosslessly(t *testing.T) {
+	packet := map[string]string{
+		"objective":           "Review change",
+		"acceptance_criteria": "Preserve the complete diff",
+		"authority_contract":  strings.Repeat("<contract>\t\\\"界😀\r\n", 300),
+		"delegated_diff":      strings.Repeat("diff --git a/file.go b/file.go\r\n-old\r\n+new\r\n", 300) + "+" + strings.Repeat("界😀", 3000),
+		"validation_summary":  `Paths: C:\src\file.go and /tmp/file.go`,
+	}
+	encoded, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := WritePacket(reviewScratchDir(t), "review-packet.json", encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(data), "\n") {
+		if len(line) > 2000 {
+			t.Fatalf("packet line %d has %d bytes", i+1, len(line))
+		}
+	}
+	var stored map[string]json.RawMessage
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range packet {
+		var got string
+		if err := json.Unmarshal(stored[key], &got); err != nil {
+			var chunked struct {
+				Chunks []string `json:"concatenate_without_separator"`
+			}
+			if err := json.Unmarshal(stored[key], &chunked); err != nil {
+				t.Fatal(err)
+			}
+			got = strings.Join(chunked.Chunks, "")
+		}
+		if got != want {
+			t.Fatalf("packet field %q did not round-trip losslessly", key)
+		}
+	}
+}
+
 func TestPacketRedactsSensitiveNELLine(t *testing.T) {
 	const lineEnding = "\u0085"
 	const marker = "[[REDACTED: PRE-EXISTING OR REMOVED SENSITIVE SPAN]]"

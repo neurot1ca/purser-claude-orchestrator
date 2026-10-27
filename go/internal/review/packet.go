@@ -1,6 +1,7 @@
 package review
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -369,8 +370,39 @@ func writePythonJSONString(output *strings.Builder, value string) {
 }
 
 // WritePacket creates a private, exclusive packet file in directory. A non-empty
-// name selects the fixed OpenCode path; an empty name uses Python's temp-file prefix.
+// name selects a fixed path; review-packet.json uses bounded JSON text chunks for
+// OpenCode and Cursor. An empty name uses Python's temp-file prefix.
 func WritePacket(directory, name string, encoded []byte) (string, error) {
+	if name == "review-packet.json" {
+		// File-reading reviewers cap each displayed line at 2000 characters.
+		// Explicit concatenation keeps even long source lines lossless in one file.
+		var packet map[string]any
+		if err := json.Unmarshal(encoded, &packet); err != nil {
+			return "", err
+		}
+		for key, value := range packet {
+			text, ok := value.(string)
+			if !ok || len(text) <= 240 {
+				continue
+			}
+			var chunks []string
+			for _, line := range strings.SplitAfter(text, "\n") {
+				// Even six-byte JSON escapes keep a 240-rune chunk below the cap.
+				runes := []rune(line)
+				for len(runes) > 240 {
+					chunks = append(chunks, string(runes[:240]))
+					runes = runes[240:]
+				}
+				chunks = append(chunks, string(runes))
+			}
+			packet[key] = map[string]any{"concatenate_without_separator": chunks}
+		}
+		var err error
+		encoded, err = json.MarshalIndent(packet, "", "  ")
+		if err != nil {
+			return "", err
+		}
+	}
 	var file *os.File
 	var err error
 	temporary := name == ""
