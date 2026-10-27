@@ -132,7 +132,8 @@ func TestHostPassesOpenCodeReadOnlyPolicyAndCapturesFinalReport(t *testing.T) {
 		"signalToken": "signal", "deadlineAt": deadline, "repoRoot": root,
 	})
 	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
-		"name": "codex", "agent": "opencode", "args": map[string]any{
+		// codexBin keeps the launch independent of an installed OpenCode binary.
+		"name": "codex", "agent": "opencode", "codexBin": "opencode", "args": map[string]any{
 			"cwd": root, "prompt": "plan", "model": "google/gemini-test", "sandbox": "read-only",
 			"config": map[string]any{"model_reasoning_effort": "high"},
 		},
