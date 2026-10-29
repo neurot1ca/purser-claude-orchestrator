@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.212 — 2026-10-30
+
+- **Added:** post-apply validation runs golangci-lint, when installed, on the job's new lines and reports a one-line informational summary.
+
 ## 0.1.211 — 2026-10-29
 
 - **Fixed:** the Stop hook sees an update notice shown earlier in the turn instead of asking for it again.
