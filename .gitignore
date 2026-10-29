@@ -13,3 +13,5 @@ profiles/
 CLAUDE.md
 .orchestrator/profile.toml
 docs/local/
+
+.desloppify/
