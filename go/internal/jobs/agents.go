@@ -203,16 +203,15 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 		if readOnly {
 			command = append(command, "--safe-mode", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--no-chrome")
 		}
+		tools := "Read,Glob,Grep"
 		if !readOnly {
-			command = append(command, "--permission-mode", "bypassPermissions")
+			tools = "Read,Edit,Write,Glob,Grep,Bash"
+			// Restricted mode rejects bypassPermissions; dontAsk runs only the allowed tools.
+			command = append(command, "--permission-mode", "dontAsk", "--allowedTools", tools)
 		}
 		command = append(command, "--print", "--output-format", "json", "--model", in.Model)
 		if effort != "" && effort != "none" {
 			command = append(command, "--effort", effort)
-		}
-		tools := "Read,Glob,Grep"
-		if !readOnly {
-			tools = "Read,Edit,Write,Glob,Grep,Bash"
 		}
 		command = append(command, "--tools", tools)
 		if in.Tool == "codex-reply" {
@@ -221,7 +220,8 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 			}
 			command = append(command, "--resume", in.ThreadID)
 		}
-		return append(command, in.Prompt), nil
+		// "--" ends the variadic --tools list so the prompt stays positional.
+		return append(command, "--", in.Prompt), nil
 	case "opencode":
 		if in.Model == "" || !strings.Contains(in.Model, "/") || in.Model[0] == '/' || in.Model[len(in.Model)-1] == '/' {
 			return nil, errors.New("OpenCode model must be provider/model")

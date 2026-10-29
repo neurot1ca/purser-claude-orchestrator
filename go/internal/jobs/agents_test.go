@@ -139,7 +139,7 @@ func TestClaudeWorkerCarriesEffortAndSuppressesNestedHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"claude", "--setting-sources", "", "--restricted", "--permission-mode", "bypassPermissions", "--print", "--output-format", "json", "--model", "claude-sonnet-4-5", "--effort", "high", "--tools", "Read,Edit,Write,Glob,Grep,Bash", "work"}
+	want := []string{"claude", "--setting-sources", "", "--restricted", "--permission-mode", "dontAsk", "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash", "--print", "--output-format", "json", "--model", "claude-sonnet-4-5", "--effort", "high", "--tools", "Read,Edit,Write,Glob,Grep,Bash", "--", "work"}
 	if !reflect.DeepEqual(command, want) {
 		t.Fatalf("Claude command argv mismatch\n got: %#v\nwant: %#v", command, want)
 	}
@@ -183,7 +183,7 @@ func TestClaudeResearchIsReadOnlyAndAliasNoneOmitsEffort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"claude", "--setting-sources", "", "--restricted", "--safe-mode", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--no-chrome", "--print", "--output-format", "json", "--model", "opus", "--tools", "Read,Glob,Grep", "plan"}
+	want := []string{"claude", "--setting-sources", "", "--restricted", "--safe-mode", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--no-chrome", "--print", "--output-format", "json", "--model", "opus", "--tools", "Read,Glob,Grep", "--", "plan"}
 	if !reflect.DeepEqual(command, want) {
 		t.Fatalf("Claude research argv mismatch\n got: %#v\nwant: %#v", command, want)
 	}
