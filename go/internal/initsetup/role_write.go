@@ -11,12 +11,18 @@ import (
 	"purser-hook/internal/profile"
 )
 
-func updateLocked(path string, edit func([]byte) ([]byte, error)) error {
-	unlock, err := contextio.LockFile(path + ".lock")
+var acquireRoleLock = contextio.LockFile
+
+func updateLocked(path string, edit func([]byte) ([]byte, error)) (err error) {
+	unlock, err := acquireRoleLock(path + ".lock")
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() {
+		if unlockErr := unlock(); err == nil {
+			err = unlockErr
+		}
+	}()
 
 	original, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

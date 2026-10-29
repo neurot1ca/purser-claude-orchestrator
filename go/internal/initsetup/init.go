@@ -1140,6 +1140,8 @@ func contains(items []string, value string) bool {
 }
 
 func setup(out, errOut io.Writer, home, root, configPath string, o options) int {
+	checked := &checkedOutput{Writer: out}
+	out = checked
 	settingsPath := filepath.Join(contextio.ClaudeConfigDirFor(home), "settings.json")
 	permissionChanged := false
 	if o.applyPermission != nil {
@@ -1280,7 +1282,7 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 		if bytes.Equal(original, changed) && scaffold == nil && !addProfileIgnore && exists(handoff) && !permissionChanged {
 			fmt.Fprintln(out, "No changes.")
 		}
-		return 0
+		return reportOutput(errOut, checked, "writing plan output")
 	}
 	rolesChanged := false
 	if e = updateLocked(rolePath, func(current []byte) ([]byte, error) {
@@ -1388,7 +1390,8 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	globalChanged := !bytes.Equal(globalBefore, globalAfter)
 	offerDue := claimConcise(home, root)
 	if o.jsonOutput {
-		return writeIndented(out, map[string]any{"status": "applied", "handoff": handoff, "concise_style_offer_due": offerDue, "skipped": skipped, "scope": "project", "roles_path": rolePath})
+		writeIndented(out, map[string]any{"status": "applied", "handoff": handoff, "concise_style_offer_due": offerDue, "skipped": skipped, "scope": "project", "roles_path": rolePath})
+		return reportOutput(errOut, checked, "writing output after applying changes")
 	}
 	for _, step := range skipped {
 		fmt.Fprintf(out, "Skipped %s.\n", step)
@@ -1402,23 +1405,35 @@ func setup(out, errOut io.Writer, home, root, configPath string, o options) int 
 	if offerDue {
 		fmt.Fprintln(out, "Concise reply style offer due.")
 	}
+	return reportOutput(errOut, checked, "writing output after applying changes")
+}
+
+type checkedOutput struct {
+	io.Writer
+	err error
+}
+
+func (w *checkedOutput) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.Writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	w.err = err
+	return n, err
+}
+
+func reportOutput(errOut io.Writer, out *checkedOutput, context string) int {
+	if out.err != nil {
+		return printError(errOut, fmt.Errorf("%s: %w", context, out.err))
+	}
 	return 0
 }
 
 func routeNames(coder string) []string {
 	return []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard"}
-}
-func routeModel(o options) string {
-	if o.model != "" {
-		return o.model
-	}
-	return "gpt-6.1-sol"
-}
-func routeEffort(o options) string {
-	if o.effort != "" {
-		return o.effort
-	}
-	return "medium"
 }
 
 const handoffTemplate = "# Purser handoff\n## Goal\nUser language: <the language the user writes in>\n## State\n## Decisions\n## Next\n## Open risks\n## Files to load\n<!-- PURSER:STATE:START -->\n<!-- PURSER:STATE:END -->\n"
@@ -1501,13 +1516,6 @@ func unifiedInitialDiff(path, before, after string) string {
 		out.WriteString(line)
 	}
 	return out.String()
-}
-func gitProjectKey(root string) (string, error) {
-	canonical, e := gitProjectRoot(root)
-	if e != nil {
-		return "", e
-	}
-	return contextio.ProjectKey(canonical), nil
 }
 func gitProjectRoot(root string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1624,7 +1632,6 @@ func editConfig(text *string, values map[string]any, root string, o options, nl 
 	for _, k := range []string{"orchestrator", "coder", "reviewer"} {
 		v := map[string]any{"orchestrator": "claude-code", "coder": o.coder}[k]
 		if k == "reviewer" {
-			v = o.reviewer
 			if err := editReviewerConfig(text, before, o.reviewer, o.reviewerModel, o.reviewerEffort, nl); err != nil {
 				return err
 			}
@@ -1901,7 +1908,7 @@ func profileText(root string) string {
 	}
 	return base
 }
-func atomicWrite(path string, content []byte, exclusive bool) error {
+func atomicWrite(path string, content []byte, exclusive bool) (err error) {
 	if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
 		return e
 	}
@@ -1910,7 +1917,11 @@ func atomicWrite(path string, content []byte, exclusive bool) error {
 		return e
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() {
+		if removeErr := os.Remove(tmp); err == nil && removeErr != nil && !os.IsNotExist(removeErr) {
+			err = removeErr
+		}
+	}()
 	if _, e = f.Write(content); e != nil {
 		f.Close()
 		return e
@@ -1930,6 +1941,9 @@ func atomicWrite(path string, content []byte, exclusive bool) error {
 	}
 	return fsretry.Replace(tmp, path)
 }
+
+var closeBackup = func(f *os.File) error { return f.Close() }
+
 func backup(path string, raw []byte) error {
 	stamp := time.Now().UTC().Format("20060102T150405000000Z")
 	for suffix := 0; ; suffix++ {
@@ -1944,11 +1958,16 @@ func backup(path string, raw []byte) error {
 		if e != nil {
 			return e
 		}
-		defer f.Close()
 		if _, e = f.Write(raw); e != nil {
+			_ = f.Close()
 			return e
 		}
-		return f.Sync()
+		syncErr := f.Sync()
+		closeErr := closeBackup(f)
+		if syncErr != nil {
+			return syncErr
+		}
+		return closeErr
 	}
 }
 func fallbackFamily(agent, model string) string {
@@ -1984,6 +2003,8 @@ func reviewerExecutable(agent string) string {
 	return ""
 }
 func enableConcise(out, errOut io.Writer) int {
+	checked := &checkedOutput{Writer: out}
+	out = checked
 	home, e := os.UserHomeDir()
 	if e != nil {
 		return printError(errOut, e)
@@ -2012,7 +2033,7 @@ func enableConcise(out, errOut io.Writer) int {
 	if _, override := effectiveStyle(home, mustCwd()); override {
 		fmt.Fprintln(out, "A project-level outputStyle override still takes precedence for this project.")
 	}
-	return 0
+	return reportOutput(errOut, checked, "writing output after applying changes")
 }
 
 func settingsApplyPermission(path string) bool {
