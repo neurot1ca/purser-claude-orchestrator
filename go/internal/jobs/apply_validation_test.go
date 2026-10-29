@@ -160,6 +160,119 @@ func TestValidationPass(t *testing.T) {
 	}
 }
 
+func TestApplyValidationLintSummary(t *testing.T) {
+	for _, tc := range []struct {
+		name, output, want string
+		err                error
+		available          bool
+	}{
+		{name: "missing"},
+		{name: "issues", available: true, output: `{"Issues":[{"FromLinter":"unused"},{"FromLinter":"errcheck"},{"FromLinter":"errcheck"}]}`, want: "3 new issues: errcheck 2, unused 1"},
+		{name: "error", available: true, err: errors.New("lint failed"), want: "skipped: error"},
+		{name: "timeout", available: true, err: context.DeadlineExceeded, want: "skipped: timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, repo, record := validationFixture(t, []string{"main.go"})
+			key := validationRepositoryKey(repo)
+			path := validationRecordPath(root, key, record.JobID)
+			if err := writeApplyValidation(path, record); err != nil {
+				t.Fatal(err)
+			}
+			lintCalls := 0
+			priorRunner, priorLookPath := runApplyValidationCommand, validationLookPath
+			runApplyValidationCommand = func(_ string, _ []string, args []string, _ time.Duration, output io.Writer, result *applyValidation) error {
+				if len(args) > 0 && strings.Contains(args[0], "golangci-lint") {
+					lintCalls++
+					_, _ = io.WriteString(output, tc.output)
+					return tc.err
+				}
+				if result != nil {
+					result.Counts = map[string]int{"tests_passed": 1}
+				}
+				return nil
+			}
+			validationLookPath = func(name string) (string, error) {
+				if strings.Contains(name, "golangci-lint") && tc.available {
+					return name, nil
+				}
+				return "", exec.ErrNotFound
+			}
+			t.Cleanup(func() { runApplyValidationCommand, validationLookPath = priorRunner, priorLookPath })
+			if err := RunApplyValidation(root, key, record.JobID); err != nil {
+				t.Fatal(err)
+			}
+			got, err := readApplyValidation(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != "passed" {
+				t.Fatalf("status=%q; lint must not gate validation", got.Status)
+			}
+			if tc.want != "" && got.Lint != tc.want {
+				t.Fatalf("lint=%q want %q", got.Lint, tc.want)
+			}
+			if tc.want == "" && got.Lint != "" {
+				t.Fatalf("unexpected lint field %q", got.Lint)
+			}
+			if tc.available != (lintCalls == 1) {
+				t.Fatalf("lint calls=%d available=%v", lintCalls, tc.available)
+			}
+			if tc.want != "" && validationSummary(got)["lint"] != tc.want {
+				t.Fatalf("summary lint=%v want %q", validationSummary(got)["lint"], tc.want)
+			}
+			if tc.want == "" {
+				if _, exists := validationSummary(got)["lint"]; exists {
+					t.Fatal("summary unexpectedly contains lint")
+				}
+			}
+		})
+	}
+}
+
+func TestApplyValidationLintTimeoutWithIssues(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"main.go"})
+	key := validationRepositoryKey(repo)
+	path := validationRecordPath(root, key, record.JobID)
+	if err := writeApplyValidation(path, record); err != nil {
+		t.Fatal(err)
+	}
+	priorRunner, priorLookPath := runApplyValidationCommand, validationLookPath
+	t.Cleanup(func() { runApplyValidationCommand, validationLookPath = priorRunner, priorLookPath })
+	validationLookPath = func(name string) (string, error) { return name, nil }
+	runApplyValidationCommand = func(_ string, _ []string, args []string, _ time.Duration, output io.Writer, result *applyValidation) error {
+		if strings.Contains(args[0], "golangci-lint") {
+			_, _ = io.WriteString(output, `{"Issues":[{"FromLinter":"errcheck"}]}`)
+			return context.DeadlineExceeded
+		}
+		if result != nil {
+			result.Counts = map[string]int{"tests_failed": 1}
+			result.FailedTests = []string{"TestExistingFailure"}
+			return errors.New("exit status 1")
+		}
+		return nil
+	}
+	if err := RunApplyValidation(root, key, record.JobID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readApplyValidation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := validationSummary(got)
+	if summary["lint"] != "skipped: timeout" {
+		t.Fatalf("lint=%v want skipped: timeout", summary["lint"])
+	}
+	if summary["status"] != "failed" {
+		t.Fatalf("lint changed status: %v", summary["status"])
+	}
+	if counts := summary["counts"].(map[string]int); len(counts) != 1 || counts["tests_failed"] != 1 {
+		t.Fatalf("lint changed counts: %v", counts)
+	}
+	if failures := summary["failing_tests"].([]string); !slices.Equal(failures, []string{"TestExistingFailure"}) {
+		t.Fatalf("lint changed failing_tests: %v", failures)
+	}
+}
+
 func TestValidationRetriesLockedIndex(t *testing.T) {
 	root, repo, record := validationFixture(t, []string{"main.go"})
 	key := validationRepositoryKey(repo)

@@ -101,6 +101,7 @@ type applyValidation struct {
 	Counts         map[string]int `json:"counts,omitempty"`
 	FailedTests    []string       `json:"failing_tests,omitempty"`
 	FailedPackages []string       `json:"failing_packages,omitempty"`
+	Lint           string         `json:"lint,omitempty"`
 	RunningPackage string         `json:"running_package,omitempty"`
 	CoveredBy      string         `json:"covered_by,omitempty"`
 	UpdatedAt      string         `json:"updated_at"`
@@ -327,6 +328,9 @@ func ApplyValidationResult(stateRoot, repository, jobID string) map[string]any {
 
 func validationSummary(r applyValidation) map[string]any {
 	value := map[string]any{"status": r.Status, "counts": r.Counts, "failing_tests": boundedValidationIdentifiers(r.FailedTests), "reason": r.Reason, "packages": boundedValidationIdentifiers(r.Packages)}
+	if r.Lint != "" {
+		value["lint"] = r.Lint
+	}
 	if r.PluginStatus != "" {
 		value["plugin_test"] = map[string]any{"status": r.PluginStatus, "reason": r.PluginReason}
 	}
@@ -737,6 +741,10 @@ func RunApplyValidation(stateRoot, key, id string) (resultErr error) {
 			}
 			record.testsRan = record.testsRan || err == nil || validationFailureState(err) == "failed"
 		}
+		if lint, lookErr := validationLookPath(lintExecutableName()); lookErr == nil {
+			// Revision is the pre-apply commit: checkoutRevision reads HEAD before the job's changes are committed.
+			record.Lint = runApplyValidationLint(record.Repository, lint, record.Revision, validationEnvironment(stateRoot))
+		}
 	}
 	if customCommand != "" {
 		shell, shellArgs, tool := validationShell(customCommand)
@@ -811,6 +819,62 @@ func RunApplyValidation(stateRoot, key, id string) (resultErr error) {
 		return finishValidation(stateRoot, path, &record, validationState, validationReason)
 	}
 	return finishValidation(stateRoot, path, &record, "passed", validationReason)
+}
+
+func lintExecutableName() string {
+	if runtime.GOOS == "windows" {
+		return "golangci-lint.exe"
+	}
+	return "golangci-lint"
+}
+
+func runApplyValidationLint(repository, executable, revision string, env []string) string {
+	if len(revision) != 40 && len(revision) != 64 {
+		return "skipped: no base revision"
+	}
+	if _, err := hex.DecodeString(revision); err != nil {
+		return "skipped: no base revision"
+	}
+	args := []string{executable, "run", "--new-from-rev=" + revision, "--output.json.path=stdout"}
+	var output bytes.Buffer
+	err := runApplyValidationCommand(repository, env, args, 2*time.Minute, &output, nil)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "skipped: timeout"
+	}
+	var result struct {
+		Issues []struct {
+			FromLinter string `json:"FromLinter"`
+		} `json:"Issues"`
+	}
+	if json.Unmarshal(output.Bytes(), &result) != nil || (err != nil && len(result.Issues) == 0) {
+		if err != nil {
+			return "skipped: error"
+		}
+		return "skipped: invalid output"
+	}
+	if len(result.Issues) == 0 {
+		return "clean"
+	}
+	counts := make(map[string]int)
+	for _, issue := range result.Issues {
+		if issue.FromLinter != "" {
+			counts[issue.FromLinter]++
+		}
+	}
+	linters := make([]string, 0, len(counts))
+	for linter := range counts {
+		linters = append(linters, linter)
+	}
+	sort.Strings(linters)
+	parts := make([]string, 0, len(linters))
+	for _, linter := range linters {
+		parts = append(parts, fmt.Sprintf("%s %d", linter, counts[linter]))
+	}
+	line := fmt.Sprintf("%d new issues: %s", len(result.Issues), strings.Join(parts, ", "))
+	if len(line) > 120 {
+		line = line[:120]
+	}
+	return line
 }
 
 func carryUnvalidatedApplyPaths(path string, current *applyValidation) error {
