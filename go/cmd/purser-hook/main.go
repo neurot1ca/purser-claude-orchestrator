@@ -156,6 +156,7 @@ func main() {
 		if output := contextio.Stop(event, started); len(output) > 0 {
 			_, _ = os.Stdout.Write(output)
 		}
+		safeSessionMaintenanceStep(func() { stopMaintenance(event) })
 	case "SessionEnd":
 		defer enqueueCleanup(stateRoot())
 	}

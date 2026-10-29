@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/maintenance"
@@ -96,4 +97,51 @@ func wakeMaintenanceReport(repository string) {
 	env := os.Environ()
 	args := []string{executable, "maintenance", "check", "--repo", root}
 	_ = startSessionMaintenance(args, env, "")
+}
+
+func stopMaintenance(event map[string]any) {
+	repository := contextio.ProjectRoot(event)
+	if repository == "" {
+		return
+	}
+	root, err := maintenance.CanonicalRepository(repository)
+	if err != nil {
+		return
+	}
+	directory := maintenance.MaintenanceDirectory(stateRoot(), root)
+	markerPath := filepath.Join(directory, "opt-in.json")
+	markerData, err := os.ReadFile(markerPath)
+	var marker struct {
+		Enabled     bool   `json:"enabled"`
+		ProjectRoot string `json:"project_root"`
+	}
+	if err != nil || json.Unmarshal(markerData, &marker) != nil || !marker.Enabled || marker.ProjectRoot != root {
+		return
+	}
+	lastRunPath := filepath.Join(directory, "last-run.json")
+	if data, err := os.ReadFile(lastRunPath); err == nil {
+		var last struct {
+			CompletedAt float64 `json:"completed_at"`
+		}
+		if json.Unmarshal(data, &last) != nil || last.CompletedAt <= 0 || time.Since(time.Unix(int64(last.CompletedAt), 0)) < contextio.MaintenanceCadence {
+			return
+		}
+	} else if !os.IsNotExist(err) {
+		return
+	}
+	lastWakePath := filepath.Join(directory, "last-wake.json")
+	if data, err := os.ReadFile(lastWakePath); err == nil {
+		var wake struct {
+			At int64 `json:"at"`
+		}
+		if json.Unmarshal(data, &wake) != nil || wake.At <= 0 || time.Since(time.Unix(wake.At, 0)) < 30*time.Minute {
+			return
+		}
+	} else if !os.IsNotExist(err) {
+		return
+	}
+	if contextio.WriteJSONAtomically(lastWakePath, map[string]int64{"at": time.Now().Unix()}) != nil {
+		return
+	}
+	wakeMaintenanceReport(root)
 }

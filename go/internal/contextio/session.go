@@ -1324,6 +1324,9 @@ func writeJSONAtomically(path string, state any) (resultErr error) {
 	return fsretry.Replace(name, path)
 }
 
+// WriteJSONAtomically writes a small state file using the shared atomic replacement path.
+func WriteJSONAtomically(path string, state any) error { return writeJSONAtomically(path, state) }
+
 func number(value any) int {
 	switch n := value.(type) {
 	case float64:

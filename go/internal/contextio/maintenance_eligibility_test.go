@@ -66,7 +66,7 @@ func TestMaintenanceEligibilityPythonOracle(t *testing.T) {
 				writeMaintenanceFixture(t, filepath.Join(maintenance, "consent.json"), map[string]any{"project_root": repo, "decision": "yes"})
 			}
 			activityAge := int64(maintenanceQuietPeriod.Seconds() + 1)
-			runAge := int64(maintenanceCadence.Seconds() + 1)
+			runAge := int64(MaintenanceCadence.Seconds() + 1)
 			switch tc.Command {
 			case "check-quiet-period":
 				activityAge = 0

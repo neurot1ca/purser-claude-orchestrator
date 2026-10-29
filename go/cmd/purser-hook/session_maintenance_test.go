@@ -6,8 +6,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"purser-hook/internal/testutil"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"purser-hook/internal/contextio"
 )
@@ -72,6 +74,58 @@ func TestMaintenanceReportWakeRequiresMatchingOptIn(t *testing.T) {
 	wakeMaintenanceReport(root)
 	if starts != 1 {
 		t.Fatalf("with opt-in: starts=%d", starts)
+	}
+}
+
+func TestStopMaintenanceReportWakePrechecksAndThrottles(t *testing.T) {
+	saveSessionMaintenanceHooks(t)
+	root, state := t.TempDir(), t.TempDir()
+	if output, err := testutil.Hide(exec.Command("git", "-C", root, "init", "-q")).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PURSER_STATE_DIR", state)
+	directory := filepath.Join(state, "projects", contextio.ProjectKey(root), "maintenance")
+	event := map[string]any{"cwd": root}
+	starts := 0
+	startSessionMaintenance = func(args, env []string, _ string) error { starts++; return nil }
+	stop := func() { safeSessionMaintenanceStep(func() { stopMaintenance(event) }) }
+
+	stop()
+	if starts != 0 {
+		t.Fatal("launched without opt-in")
+	}
+	writeMaintenanceOptIn(t, state, root)
+	if err := os.WriteFile(filepath.Join(directory, "last-run.json"), []byte(`{"completed_at":`+strconv.FormatInt(time.Now().Unix(), 10)+`}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	if starts != 0 {
+		t.Fatal("launched within cadence")
+	}
+	if err := os.Remove(filepath.Join(directory, "last-run.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "last-wake.json"), []byte(`{"at":`+strconv.FormatInt(time.Now().Unix(), 10)+`}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	if starts != 0 {
+		t.Fatal("launched within Stop throttle")
+	}
+	if err := os.Remove(filepath.Join(directory, "last-wake.json")); err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	if starts != 1 {
+		t.Fatalf("eligible Stop launches = %d, want 1", starts)
+	}
+	stop()
+	if starts != 1 {
+		t.Fatalf("immediate repeat launches = %d, want 1", starts)
 	}
 }
 

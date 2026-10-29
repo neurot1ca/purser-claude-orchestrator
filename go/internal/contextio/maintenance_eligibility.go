@@ -10,7 +10,7 @@ import (
 
 const (
 	maintenanceQuietPeriod = 5 * time.Minute
-	maintenanceCadence     = 56 * time.Hour
+	MaintenanceCadence     = 56 * time.Hour
 	maintenanceMaxQuota    = 50.0
 	maintenanceQuotaAge    = 30 * time.Minute
 )
@@ -63,7 +63,7 @@ func MaintenanceEligible(repository, state string, now time.Time, quota map[stri
 			if !ok {
 				return result
 			}
-			if now.Sub(time.Unix(0, int64(completed*float64(time.Second)))) < maintenanceCadence {
+			if now.Sub(time.Unix(0, int64(completed*float64(time.Second)))) < MaintenanceCadence {
 				result.Reason = "cadence"
 				return result
 			}
