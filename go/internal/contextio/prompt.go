@@ -126,14 +126,14 @@ func recordPromptTurn(event map[string]any, processStart time.Time) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if info, _ := f.Stat(); info != nil && info.Size() == 0 {
 		_, _ = f.WriteAt([]byte("0"), 0)
 	}
 	deadline := time.Now().Add(50 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if tryLock(f) == nil {
-			defer unlock(f)
+			defer func() { _ = unlock(f) }()
 			turn, reason := loadTurn(journal)
 			if turn != nil {
 				reason = "PRIOR_TURN_MISSING_STOP"
@@ -161,11 +161,11 @@ func contextInjections(statePath, session, language string, planning, promptTurn
 	if err != nil {
 		return "", false
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	if tryLock(lock) != nil {
 		return "", false
 	}
-	defer unlock(lock)
+	defer func() { _ = unlock(lock) }()
 	instruction := languageInstruction(language)
 	state := readAdvisorState(statePath, session)
 	if promptTurn {

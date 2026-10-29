@@ -3,6 +3,7 @@ package contextio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -385,11 +386,11 @@ func deliverPlanPointer(repository, statePath, session string, sessionStart bool
 	if err != nil {
 		return ""
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	if tryLock(lock) != nil {
 		return ""
 	}
-	defer unlock(lock)
+	defer func() { _ = unlock(lock) }()
 	state := readAdvisorState(statePath, session)
 	previous, _ := state["last_plan_pointer"].(string)
 	if pointer == "" {
@@ -464,20 +465,22 @@ func refreshPlanStale(state *PlanState, repository string) bool {
 	return state.Stale
 }
 
-func writeHandoffAtomically(path string, data []byte) error {
+func writeHandoffAtomically(path string, data []byte) (resultErr error) {
 	temporary, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return err
 	}
 	name := temporary.Name()
-	defer os.Remove(name)
+	defer func() {
+		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	if _, err = temporary.Write(data); err != nil {
-		_ = temporary.Close()
-		return err
+		return errors.Join(err, temporary.Close())
 	}
 	if err = temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
+		return errors.Join(err, temporary.Close())
 	}
 	if err = temporary.Close(); err != nil {
 		return err

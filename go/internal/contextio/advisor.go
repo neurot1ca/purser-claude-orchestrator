@@ -521,7 +521,7 @@ func emitCompactionAdviceWritten(session string, outcome map[string]any) {
 	if err != nil {
 		return
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	if info, _ := lock.Stat(); info != nil && info.Size() == 0 {
 		_, _ = lock.WriteAt([]byte("0"), 0)
 	}
@@ -533,7 +533,7 @@ func emitCompactionAdviceWritten(session string, outcome map[string]any) {
 		_ = writeJSONAtomically(filepath.Join(root, "spool", eventID+".json"), event)
 		return
 	}
-	defer unlock(lock)
+	defer func() { _ = unlock(lock) }()
 	path := filepath.Join(root, stamp.Format("2006-01"), "session_"+normalized+".jsonl")
 	if os.MkdirAll(filepath.Dir(path), 0700) != nil {
 		return

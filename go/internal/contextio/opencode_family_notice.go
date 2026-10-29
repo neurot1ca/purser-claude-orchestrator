@@ -109,7 +109,7 @@ func openCodeFamilyContext(repository string) string {
 	if err != nil {
 		return ""
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 	state := map[string]any{}
 	if raw, readErr := os.ReadFile(path); readErr == nil {
 		if json.Unmarshal(raw, &state) != nil || state == nil {
@@ -237,7 +237,7 @@ func claimActiveRaceResult(root, model string) bool {
 	if err != nil {
 		return false
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -286,7 +286,7 @@ func claimInventoryNotice(root, id, section string) bool {
 	if err != nil {
 		return false
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false

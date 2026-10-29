@@ -526,13 +526,13 @@ func emitStopBlocked(session string, kinds []string, count int) {
 	if err != nil {
 		return
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	if info, _ := lock.Stat(); info != nil && info.Size() == 0 {
 		_, _ = lock.WriteAt([]byte("0"), 0)
 	}
 	if tryLock(lock) != nil {
 		return
 	}
-	defer unlock(lock)
+	defer func() { _ = unlock(lock) }()
 	_ = appendEventOnce(path, event)
 }

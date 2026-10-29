@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -532,11 +533,11 @@ func compactAccuracyHint(root, key string) string {
 	if err != nil {
 		return ""
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	if tryLock(lock) != nil {
 		return ""
 	}
-	defer unlock(lock)
+	defer func() { _ = unlock(lock) }()
 	state, ok := readSmallObject(path)
 	if !ok {
 		state = map[string]any{"version": float64(2), "compacts": float64(0), "errors": map[string]any{}, "announced": map[string]any{}}
@@ -819,7 +820,7 @@ func readTranscriptRecords(path string) []map[string]any {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return nil
@@ -1095,7 +1096,7 @@ func compactedContext(path any) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return 0, false
@@ -1186,7 +1187,7 @@ func emitCompactionOutcome(session string, outcome map[string]any) {
 	if err != nil {
 		return
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	if info, _ := lock.Stat(); info != nil && info.Size() == 0 {
 		_, _ = lock.WriteAt([]byte("0"), 0)
 	}
@@ -1198,7 +1199,7 @@ func emitCompactionOutcome(session string, outcome map[string]any) {
 		_ = writeJSONAtomically(filepath.Join(events, "spool", eventID+".json"), event)
 		return
 	}
-	defer unlock(lock)
+	defer func() { _ = unlock(lock) }()
 	month := stamp.Format("2006-01")
 	path := filepath.Join(events, month, "session_"+normalized+".jsonl")
 	if os.MkdirAll(filepath.Dir(path), 0700) != nil {
@@ -1251,7 +1252,7 @@ func TakeModelVersionReport() string {
 	if err != nil {
 		return ""
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -1293,7 +1294,7 @@ func writeModelNoticeState(path string, state map[string]any) error {
 	return writeJSONAtomically(path, state)
 }
 
-func writeJSONAtomically(path string, state any) error {
+func writeJSONAtomically(path string, state any) (resultErr error) {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -1306,14 +1307,16 @@ func writeJSONAtomically(path string, state any) error {
 		return err
 	}
 	name := file.Name()
-	defer os.Remove(name)
+	defer func() {
+		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if err := file.Close(); err != nil {
 		return err

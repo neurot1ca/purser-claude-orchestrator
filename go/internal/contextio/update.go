@@ -37,7 +37,7 @@ func CheckPurserUpdateAt(endpoint string) {
 	if err != nil {
 		return
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 	today := time.Now().UTC().Format("2006-01-02")
 	state := readPurserUpdateState(path)
 	if state.CheckedOn == today {
@@ -57,7 +57,7 @@ func CheckPurserUpdateAt(endpoint string) {
 	if err != nil {
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return
 	}
@@ -86,7 +86,7 @@ func TakePurserUpdateNotice() string {
 	if err != nil {
 		return ""
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 	state := readPurserUpdateState(path)
 	if !validPurserVersion(state.Latest) || state.AnnouncedLatest == state.Latest || comparePurserVersions(state.Latest, installed) <= 0 {
 		return ""

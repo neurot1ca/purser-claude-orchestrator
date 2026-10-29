@@ -21,7 +21,7 @@ func quotaWakePath(project, root string) string {
 }
 
 // RecordQuotaWake replaces the project's single pending wake request.
-func RecordQuotaWake(project, root, sessionID, taskID, resetAt, reason string, now time.Time) error {
+func RecordQuotaWake(project, root, sessionID, taskID, resetAt, reason string, now time.Time) (resultErr error) {
 	reset, err := time.Parse(time.RFC3339, resetAt)
 	if err != nil || sessionID == "" || reason != "fallback_declined" && reason != "quota_failure" {
 		return os.ErrInvalid
@@ -33,18 +33,18 @@ func RecordQuotaWake(project, root, sessionID, taskID, resetAt, reason string, n
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	return writeJSONAtomically(path, wake)
 }
 
 // ReadQuotaWake returns the pending request and removes it once its reset is stale.
-func ReadQuotaWake(project, root string, now time.Time) (*QuotaWake, error) {
+func ReadQuotaWake(project, root string, now time.Time) (wakeResult *QuotaWake, resultErr error) {
 	path := quotaWakePath(project, root)
 	unlock, err := LockFile(path + ".lock")
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -73,13 +73,13 @@ func ReadQuotaWake(project, root string, now time.Time) (*QuotaWake, error) {
 }
 
 // ClearQuotaWake removes the project's pending wake request.
-func ClearQuotaWake(project, root string) error {
+func ClearQuotaWake(project, root string) (resultErr error) {
 	path := quotaWakePath(project, root)
 	unlock, err := LockFile(path + ".lock")
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	if err = os.Remove(path); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -87,13 +87,13 @@ func ClearQuotaWake(project, root string) error {
 }
 
 // ClearQuotaWakeAfterReset removes a request only after its recorded reset.
-func ClearQuotaWakeAfterReset(project, root string, now time.Time) error {
+func ClearQuotaWakeAfterReset(project, root string, now time.Time) (resultErr error) {
 	path := quotaWakePath(project, root)
 	unlock, err := LockFile(path + ".lock")
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
