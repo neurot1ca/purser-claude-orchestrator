@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.206 — 2026-10-29
+
+- **Fixed:** scope lease updates retry when Windows briefly holds the lease file, instead of failing with access denied.
+- **Fixed:** the proactive maintenance check is retried when a turn ends, at most every 30 minutes per project, so busy projects no longer miss it.
+- **Changed:** tests build their fake worker binaries with the running Go toolchain outside the workspace, and cover process supervision, release packaging, the remote bridge and hook entry points.
+
 ## 0.1.205 — 2026-10-29
 
 - **Fixed:** lock releases and temporary-file cleanups in job, state, model, review and retention writers report their errors instead of dropping them.
