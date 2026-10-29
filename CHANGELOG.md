@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.208 — 2026-10-29
+
+- **Fixed:** Purser's hooks load again on older Claude Code versions, which refused the module, so jobs failed to start with a missing MCP identity handoff.
+
 ## 0.1.207 — 2026-10-29
 
 - **Fixed:** Claude coder jobs start again with newer Claude Code versions, which reject the old permission setting in restricted mode, and new jobs no longer lose their prompt.
