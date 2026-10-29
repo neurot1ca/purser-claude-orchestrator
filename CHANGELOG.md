@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.205 — 2026-10-29
+
+- **Fixed:** lock releases and temporary-file cleanups in job, state, model, review and retention writers report their errors instead of dropping them.
+- **Changed:** dead helpers, unused assignments and a deprecated tar constant were removed, and tests now cover model grammar, scope leases, waiter parsing and project keys.
+
 ## 0.1.204 — 2026-10-29
 
 - **Added:** each async result delivery is recorded in telemetry (`ASYNC_RESULT_DELIVERED`) with its delivery count and outcome.
