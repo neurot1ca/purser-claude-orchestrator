@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/fsretry"
 )
 
 // Lock acquires a scope-leases lock file and returns its release function.
@@ -388,7 +389,7 @@ func jsonObjectKeys(raw json.RawMessage) []string {
 	return keys
 }
 
-var replaceLeaseFile = os.Rename
+var replaceLeaseFile = fsretry.Replace
 
 func (s *Store) write(value map[string]any, now float64) error {
 	ownerKeys, _ := value[ownerOrderKey].([]string)
