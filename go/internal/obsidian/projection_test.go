@@ -35,7 +35,10 @@ func TestConfigPathPrefersPluginRootFromUnrelatedProject(t *testing.T) {
 }
 
 func TestConfigPathFallsBackToWorkingTreeAndMissingPath(t *testing.T) {
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	project := filepath.Join(base, "home", "project", "nested")
 	config := filepath.Join(base, "home", "project", ".claude", "hooks", "orchestrator", "config.json")
 	if err := os.MkdirAll(filepath.Dir(config), 0700); err != nil {

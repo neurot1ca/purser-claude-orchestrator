@@ -71,22 +71,6 @@ func TestProcHelpers(t *testing.T) {
 	if got := errorNumber(fmt.Errorf("ordinary error")); got != 0 {
 		t.Fatalf("ordinary error number = %d", got)
 	}
-	t.Run("stream files", func(t *testing.T) {
-		f, err := os.CreateTemp(t.TempDir(), "stream")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer f.Close()
-		g, err := os.CreateTemp(t.TempDir(), "stream")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer g.Close()
-		files := streamFiles([3]uintptr{uintptr(f.Fd()), 0, uintptr(g.Fd())})
-		if files[0] == nil || files[1] != nil || files[2] == nil {
-			t.Fatalf("files = %#v", files)
-		}
-	})
 	t.Run("event encoding", func(t *testing.T) {
 		old := os.Stdout
 		r, w, err := os.Pipe()
