@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"purser-hook/internal/testutil"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -192,12 +192,10 @@ func main() {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "opencode")
-	if os.PathSeparator == '\\' {
+	if runtime.GOOS == "windows" {
 		path += ".exe"
 	}
-	if output, err := testutil.Hide(exec.Command("go", "build", "-o", path, src)).CombinedOutput(); err != nil {
-		t.Fatalf("build fake OpenCode: %v: %s", err, output)
-	}
+	testutil.BuildFakeBinary(t, src, path)
 	return path
 }
 

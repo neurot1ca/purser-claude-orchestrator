@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"purser-hook/internal/testutil"
 	"runtime"
@@ -27,9 +26,7 @@ func TestMechanicalShadowCommandRunsJob(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		fake += ".exe"
 	}
-	if output, err := testutil.Hide(exec.Command("go", "build", "-o", fake, fakeSource)).CombinedOutput(); err != nil {
-		t.Fatalf("build fake OpenCode: %v: %s", err, output)
-	}
+	testutil.BuildFakeBinary(t, fakeSource, fake)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	root, repo := filepath.Join(base, "state"), filepath.Join(base, "repo")

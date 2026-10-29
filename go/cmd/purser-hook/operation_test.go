@@ -139,10 +139,7 @@ func TestCodexStartOpenCodeIgnoresEmptyCodexOverride(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		fakeAgent += ".exe"
 	}
-	build := testutil.Hide(exec.Command("go", "build", "-o", fakeAgent, fakeSource))
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build fake OpenCode: %v\n%s", err, output)
-	}
+	testutil.BuildFakeBinary(t, fakeSource, fakeAgent)
 	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	state := t.TempDir()
 	call := "123e4567-e89b-12d3-a456-426614174004"
@@ -233,18 +230,12 @@ func TestCodexStartUsesConfiguredAgentAndBinaryOverride(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		override += ".exe"
 	}
-	build := testutil.Hide(exec.Command("go", "build", "-o", override, fakeSource))
-	if output, buildErr := build.CombinedOutput(); buildErr != nil {
-		t.Fatalf("build fake worker: %v\n%s", buildErr, output)
-	}
+	testutil.BuildFakeBinary(t, fakeSource, override)
 	agy := filepath.Join(fakeDir, "agy")
 	if runtime.GOOS == "windows" {
 		agy += ".exe"
 	}
-	agyBuild := testutil.Hide(exec.Command("go", "build", "-o", agy, fakeSource))
-	if output, buildErr := agyBuild.CombinedOutput(); buildErr != nil {
-		t.Fatalf("build fake agy: %v\n%s", buildErr, output)
-	}
+	testutil.BuildFakeBinary(t, fakeSource, agy)
 	t.Setenv("PURSER_CODEX_BIN", override)
 	t.Setenv("PATH", fakeDir)
 	args := map[string]any{"call": "123e4567-e89b-12d3-a456-426614174001", "prompt": "test", "cwd": t.TempDir(),
