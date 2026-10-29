@@ -21,7 +21,7 @@ var renameHealth = os.Rename
 
 // Update records one component check in the shared state health file.
 // Failure codes and path classes are bounded machine-readable values.
-func Update(stateRoot, component, reason, pathClass string, failed bool) error {
+func Update(stateRoot, component, reason, pathClass string, failed bool) (err error) {
 	if !validComponent(component) || (failed && !validCode(reason)) || !validPathClass(pathClass) {
 		return errors.New("invalid health update")
 	}
@@ -44,7 +44,15 @@ func Update(stateRoot, component, reason, pathClass string, failed bool) error {
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() {
+		if unlockErr := unlock(); unlockErr != nil {
+			if err == nil {
+				err = unlockErr
+			} else {
+				err = errors.Join(err, unlockErr)
+			}
+		}
+	}()
 
 	health := map[string]any{"schema_version": 1, "status": "OK", "failure_count": int64(0)}
 	if data, readErr := os.ReadFile(path); readErr == nil {

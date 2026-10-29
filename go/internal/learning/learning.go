@@ -92,13 +92,21 @@ func ReadSummary(stateRoot string) Summary {
 
 // ReadCheckpoint returns only a complete, schema-valid checkpoint. It takes the
 // same lock as writers so cleanup can use its source list as a durable ack.
-func ReadCheckpoint(stateRoot string) (Summary, error) {
+func ReadCheckpoint(stateRoot string) (summary Summary, err error) {
 	path := summaryPath(stateRoot)
 	unlock, err := contextio.LockFile(filepath.Join(filepath.Dir(path), LockName))
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() {
+		if unlockErr := unlock(); unlockErr != nil {
+			if err == nil {
+				err = unlockErr
+			} else {
+				err = errors.Join(err, unlockErr)
+			}
+		}
+	}()
 	return readCheckpoint(path)
 }
 
@@ -135,13 +143,21 @@ func readCheckpoint(path string) (Summary, error) {
 	return value, nil
 }
 
-func DistillJobs(stateRoot string, sources []Source, now float64, maxSources int, existingSources map[string]bool) (map[string]bool, error) {
+func DistillJobs(stateRoot string, sources []Source, now float64, maxSources int, existingSources map[string]bool) (result map[string]bool, err error) {
 	path := summaryPath(stateRoot)
 	unlock, err := contextio.LockFile(filepath.Join(filepath.Dir(path), LockName))
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() {
+		if unlockErr := unlock(); unlockErr != nil {
+			if err == nil {
+				err = unlockErr
+			} else {
+				err = errors.Join(err, unlockErr)
+			}
+		}
+	}()
 	d, err := readCheckpoint(path)
 	if err != nil {
 		return nil, err

@@ -313,12 +313,20 @@ func (s *Store) expire(value map[string]any, now float64) bool {
 	return changed
 }
 
-func (s *Store) mutate(now float64, apply func(map[string]any) bool) error {
+func (s *Store) mutate(now float64, apply func(map[string]any) bool) (err error) {
 	release, err := Lock(s.lockPath)
 	if err != nil {
 		return err
 	}
-	defer release()
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			if err == nil {
+				err = releaseErr
+			} else {
+				err = errors.Join(err, releaseErr)
+			}
+		}
+	}()
 	value, err := s.read()
 	if err != nil {
 		return err
