@@ -34,6 +34,41 @@ func TestConfigPathPrefersPluginRootFromUnrelatedProject(t *testing.T) {
 	}
 }
 
+func TestConfigPathFallsBackToWorkingTreeAndMissingPath(t *testing.T) {
+	base := t.TempDir()
+	project := filepath.Join(base, "home", "project", "nested")
+	config := filepath.Join(base, "home", "project", ".claude", "hooks", "orchestrator", "config.json")
+	if err := os.MkdirAll(filepath.Dir(config), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", filepath.Join(base, "invalid-plugin-root"))
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+	if got := ConfigPath(); got != config {
+		t.Fatalf("home ancestry config = %q, want %q", got, config)
+	}
+	if err := os.Remove(config); err != nil {
+		t.Fatal(err)
+	}
+	volumeRoot := filepath.VolumeName(base) + string(filepath.Separator)
+	want := filepath.Join(volumeRoot, ".claude", "hooks", "orchestrator", "config.json")
+	if got := ConfigPath(); got != want {
+		t.Fatalf("missing config path = %q, want %q", got, want)
+	}
+}
+
 func TestProjectionSettingsPrecedenceAndAbsoluteVault(t *testing.T) {
 	configured := filepath.Join(t.TempDir(), "configured-vault")
 	fromEnv := filepath.Join(t.TempDir(), "env-vault")
