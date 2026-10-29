@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.210 — 2026-10-29
+
+- **Fixed:** OpenCode, Cursor and Antigravity coders accept the workspace-write sandbox instead of refusing the job.
+
 ## 0.1.209 — 2026-10-29
 
 - **Fixed:** Claude coder jobs can edit their worktree again, and accept the workspace-write sandbox that other coders use.
