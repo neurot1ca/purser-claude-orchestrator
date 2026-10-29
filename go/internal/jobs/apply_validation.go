@@ -31,6 +31,17 @@ const (
 	validationTimeout     = 10 * time.Minute
 )
 
+func validationBudget(packageCount int) time.Duration {
+	if packageCount <= 4 {
+		return validationTimeout
+	}
+	budget := validationTimeout + time.Duration(packageCount-4)*90*time.Second
+	if budget > 30*time.Minute {
+		return 30 * time.Minute
+	}
+	return budget
+}
+
 var launchApplyValidation = LaunchDetached
 var runApplyValidationCommand = runValidationCommand
 var validationLookPath = exec.LookPath
@@ -694,7 +705,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 			if len(pkgs) > 0 {
 				args := append([]string{"vet", "-p", "2"}, pkgs...)
 				record.Commands = appendValidationCommand(record.Commands, "go "+strings.Join(args, " "))
-				if err = runApplyValidationCommand(module, env, args, validationTimeout, logFile, nil); err != nil {
+				if err = runApplyValidationCommand(module, env, args, validationBudget(len(pkgs)), logFile, nil); err != nil {
 					if errors.Is(err, errTreeUnconfirmed) {
 						return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
 					}
@@ -706,9 +717,10 @@ func RunApplyValidation(stateRoot, key, id string) error {
 	if len(packages) > 0 {
 		for _, module := range modules {
 			env := moduleValidationEnvironment(stateRoot, module)
-			args := append([]string{"test", "-p", "2", "-json"}, packagesForModule(packages, goRoot, module)...)
+			pkgs := packagesForModule(packages, goRoot, module)
+			args := append([]string{"test", "-p", "2", "-json"}, pkgs...)
 			record.Commands = appendValidationCommand(record.Commands, "go "+strings.Join(args, " "))
-			if err = runApplyValidationCommand(module, env, args, validationTimeout, logFile, &record); err != nil {
+			if err = runApplyValidationCommand(module, env, args, validationBudget(len(pkgs)), logFile, &record); err != nil {
 				if errors.Is(err, errTreeUnconfirmed) {
 					return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
 				}
@@ -726,7 +738,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 		} else {
 			args := append([]string{binary}, shellArgs...)
 			record.Commands = appendValidationCommand(record.Commands, tool+" -c "+customCommand)
-			if err = runApplyValidationCommand(record.Repository, validationEnvironment(stateRoot), args, validationTimeout, logFile, nil); err != nil {
+			if err = runApplyValidationCommand(record.Repository, validationEnvironment(stateRoot), args, validationBudget(0), logFile, nil); err != nil {
 				if errors.Is(err, errTreeUnconfirmed) {
 					return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
 				}
@@ -748,7 +760,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 			args := []string{binary}
 			args = append(args, check.args...)
 			record.Commands = appendValidationCommand(record.Commands, check.tool+" "+strings.Join(check.args, " "))
-			if err = runApplyValidationCommand(check.dir, validationEnvironment(stateRoot), args, validationTimeout, logFile, nil); err != nil {
+			if err = runApplyValidationCommand(check.dir, validationEnvironment(stateRoot), args, validationBudget(0), logFile, nil); err != nil {
 				if errors.Is(err, errTreeUnconfirmed) {
 					return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
 				}
@@ -776,7 +788,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 				for _, file := range files {
 					args := []string{claude, "plugin", "test", "--file", file, "."}
 					record.Commands = appendValidationCommand(record.Commands, "claude plugin test --file "+file)
-					if err = runApplyValidationCommand(record.Repository, env, args, validationTimeout, logFile, nil); err != nil {
+					if err = runApplyValidationCommand(record.Repository, env, args, validationBudget(0), logFile, nil); err != nil {
 						if errors.Is(err, errTreeUnconfirmed) {
 							return finishValidation(stateRoot, path, &record, "unconfirmed", err.Error())
 						}
