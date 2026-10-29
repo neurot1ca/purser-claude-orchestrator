@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -38,13 +39,13 @@ func worktreeOwnershipPath(root, worktree string) string {
 }
 
 // AttachWorktree records a job/thread attachment unless retirement already owns the path.
-func AttachWorktree(root, worktree, jobID, threadID string) (bool, error) {
+func AttachWorktree(root, worktree, jobID, threadID string) (attached bool, resultErr error) {
 	path := worktreeOwnershipPath(root, worktree)
 	unlock, err := lease.Lock(strings.TrimSuffix(path, ".json") + ".owner-lock")
 	if err != nil {
 		return false, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	owned := WorktreeOwnership{WorktreePath: worktree}
 	if data, readErr := os.ReadFile(path); readErr == nil {
 		if err = json.Unmarshal(data, &owned); err != nil {
@@ -63,13 +64,13 @@ func AttachWorktree(root, worktree, jobID, threadID string) (bool, error) {
 }
 
 // MarkWorktreeRetiring atomically prevents any later attachment to the generation.
-func MarkWorktreeRetiring(root, worktree string) (WorktreeOwnership, error) {
+func MarkWorktreeRetiring(root, worktree string) (result WorktreeOwnership, resultErr error) {
 	path := worktreeOwnershipPath(root, worktree)
 	unlock, err := lease.Lock(strings.TrimSuffix(path, ".json") + ".owner-lock")
 	if err != nil {
 		return WorktreeOwnership{}, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	owned := WorktreeOwnership{WorktreePath: worktree, Retiring: true}
 	if data, readErr := os.ReadFile(path); readErr == nil {
 		if err = json.Unmarshal(data, &owned); err != nil {
@@ -84,13 +85,13 @@ func MarkWorktreeRetiring(root, worktree string) (WorktreeOwnership, error) {
 }
 
 // IsWorktreeRetiring reads only the ownership record for the requested path.
-func IsWorktreeRetiring(root, worktree string) (bool, error) {
+func IsWorktreeRetiring(root, worktree string) (retiring bool, resultErr error) {
 	path := worktreeOwnershipPath(root, worktree)
 	unlock, err := lease.Lock(strings.TrimSuffix(path, ".json") + ".owner-lock")
 	if err != nil {
 		return false, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -106,13 +107,13 @@ func IsWorktreeRetiring(root, worktree string) (bool, error) {
 }
 
 // UpdateWorktreeOwnership changes durable retirement progress under the owner lock.
-func UpdateWorktreeOwnership(root, worktree string, update func(*WorktreeOwnership)) (WorktreeOwnership, error) {
+func UpdateWorktreeOwnership(root, worktree string, update func(*WorktreeOwnership)) (result WorktreeOwnership, resultErr error) {
 	path := worktreeOwnershipPath(root, worktree)
 	unlock, err := lease.Lock(strings.TrimSuffix(path, ".json") + ".owner-lock")
 	if err != nil {
 		return WorktreeOwnership{}, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return WorktreeOwnership{}, err
@@ -144,14 +145,17 @@ func WorktreeRetirementLock(root, worktree string) (func() error, error) {
 }
 
 // DeleteWorktreeOwnership removes the record after both owned targets are gone.
-func DeleteWorktreeOwnership(root, worktree string) error {
+func DeleteWorktreeOwnership(root, worktree string) (resultErr error) {
 	path := worktreeOwnershipPath(root, worktree)
 	unlock, err := lease.Lock(strings.TrimSuffix(path, ".json") + ".owner-lock")
 	if err != nil {
 		return err
 	}
-	defer unlock()
-	return os.Remove(path)
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
+	if err = os.Remove(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func addOwner(values []string, value string) []string {
@@ -168,7 +172,7 @@ func addOwner(values []string, value string) []string {
 	return values
 }
 
-func writeWorktreeOwnership(path string, owned WorktreeOwnership) error {
+func writeWorktreeOwnership(path string, owned WorktreeOwnership) (resultErr error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -181,7 +185,11 @@ func writeWorktreeOwnership(path string, owned WorktreeOwnership) error {
 		return err
 	}
 	name := tmp.Name()
-	defer os.Remove(name)
+	defer func() {
+		if removeErr := os.Remove(name); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, removeErr)
+		}
+	}()
 	if err = tmp.Chmod(0600); err == nil {
 		_, err = tmp.Write(data)
 	}

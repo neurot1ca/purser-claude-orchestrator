@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -33,7 +34,7 @@ func ReviewerCircuitOpen(dir, agent, model string, now time.Time) bool {
 	if err != nil {
 		return false
 	}
-	defer release()
+	defer func() { _ = release() }()
 	state, err := readReviewerCircuit(path)
 	return err == nil && state.Timeouts >= 3 && now.Before(state.OpenUntil)
 }
@@ -46,7 +47,7 @@ func RecordReviewerCircuitOutcome(dir, agent, model, outcome string, now time.Ti
 	if err != nil {
 		return
 	}
-	defer release()
+	defer func() { _ = release() }()
 	state, _ := readReviewerCircuit(path)
 	if outcome == "REVIEWER_TIMEOUT" {
 		state.Timeouts++
@@ -69,7 +70,7 @@ func readReviewerCircuit(path string) (reviewerCircuit, error) {
 	return state, err
 }
 
-func writeReviewerCircuit(path string, state reviewerCircuit) error {
+func writeReviewerCircuit(path string, state reviewerCircuit) (resultErr error) {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -82,7 +83,11 @@ func writeReviewerCircuit(path string, state reviewerCircuit) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() {
+		if removeErr := os.Remove(tmp.Name()); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, removeErr)
+		}
+	}()
 	if _, err = tmp.Write(data); err == nil {
 		err = tmp.Sync()
 	}

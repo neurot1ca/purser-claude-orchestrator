@@ -848,7 +848,7 @@ func checkRootCeiling(root string, now float64, warn ...func(string, string)) bo
 	if err != nil {
 		return false
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if info, e := file.Stat(); e != nil {
 		return false
 	} else if info.Size() == 0 {
@@ -859,7 +859,7 @@ func checkRootCeiling(root string, now float64, warn ...func(string, string)) bo
 	if err = contextio.TryLock(file); err != nil {
 		return false
 	}
-	defer contextio.Unlock(file)
+	defer func() { _ = contextio.Unlock(file) }()
 	stamp := filepath.Join(root, CeilingStamp)
 	if isReparsePath(stamp) {
 		return false

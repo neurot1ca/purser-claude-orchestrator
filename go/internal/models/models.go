@@ -228,7 +228,7 @@ func discoverModelVersion(repository string, listingTimeout time.Duration) (curr
 	if err != nil {
 		return "", "", false
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 	state := readNoticeState(statePath)
 	loaded, err := loadConfig(repository)
 	if err != nil {
@@ -351,7 +351,7 @@ func discoverModelVersion(repository string, listingTimeout time.Duration) (curr
 			latest.Agents["cursor"] = result.ids
 		}
 		_ = atomicJSONRetry(cachePath, latest)
-		unlock()
+		_ = unlock()
 	}
 	for _, check := range checks {
 		if check.model == "" {
@@ -419,7 +419,7 @@ func refreshOpenCodeListing(providers map[string]map[string]json.RawMessage, tod
 	if err != nil {
 		return
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 	cache := readResolutionCache()
 	if cache.Agents == nil {
 		cache.Agents = map[string][]string{}
@@ -503,7 +503,7 @@ func DiscoverCachedCodexVersion() (current, newer string, ok bool) {
 	if err != nil {
 		return "", "", false
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 
 	state := readNoticeState(statePath)
 	if state.Report != nil && !state.Report.Delivered {
@@ -565,7 +565,7 @@ func DiscoverCodexCLIVersion() (installed, available string, ok bool) {
 	if err != nil {
 		return "", "", false
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 
 	var state struct {
 		CheckedOn        string   `json:"checked_on"`
@@ -1012,7 +1012,7 @@ func readCachedProviders(path string) (map[string]map[string]json.RawMessage, er
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, maxCatalogBytes+1))
 	if err != nil || len(data) > maxCatalogBytes {
 		return nil, errors.New("invalid model catalog cache")
@@ -1197,7 +1197,7 @@ func recordCheck(path string) error {
 	return writeNoticeState(path, state)
 }
 
-func atomicJSON(path string, value any) error {
+func atomicJSON(path string, value any) (resultErr error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -1206,7 +1206,11 @@ func atomicJSON(path string, value any) error {
 		return err
 	}
 	temporary := file.Name()
-	defer os.Remove(temporary)
+	defer func() {
+		if removeErr := os.Remove(temporary); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, removeErr)
+		}
+	}()
 	var data []byte
 	data, err = json.Marshal(value)
 	if err == nil {
