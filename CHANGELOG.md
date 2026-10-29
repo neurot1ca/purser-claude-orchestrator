@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.207 — 2026-10-29
+
+- **Fixed:** Claude coder jobs start again with newer Claude Code versions, which reject the old permission setting in restricted mode, and new jobs no longer lose their prompt.
+
 ## 0.1.206 — 2026-10-29
 
 - **Fixed:** scope lease updates retry when Windows briefly holds the lease file, instead of failing with access denied.
