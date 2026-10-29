@@ -9,10 +9,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"purser-hook/internal/jobs"
@@ -22,12 +20,7 @@ import (
 var errSynchronousCancelled = errors.New("synchronous tool cancelled")
 
 var supervisorPrefix = []string{"supervisor"}
-
-func runSynchronous(args map[string]any, name string) (map[string]any, error) {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	return runSynchronousContext(ctx, args, name)
-}
+var synchronousCopy = io.Copy
 
 func runSynchronousContext(ctx context.Context, args map[string]any, name string) (map[string]any, error) {
 	if name != "codex" && name != "codex-reply" {
@@ -173,7 +166,11 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 	if err != nil {
 		return legacyError(nil, err.Error()), nil
 	}
-	defer os.RemoveAll(temp)
+	defer func() {
+		if err := os.RemoveAll(temp); err != nil {
+			fmt.Fprintf(os.Stderr, "Purser: synchronous output cleanup failed: %v\n", err)
+		}
+	}()
 	outputPath := filepath.Join(temp, "last-message.txt")
 	var commandArgs []string
 	if agent == "codex" {
@@ -270,11 +267,11 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 	stdoutDone := make(chan error, 1)
 	stderrDone := make(chan error, 1)
 	go func() {
-		_, readErr := io.Copy(eventStreamWriter{stream, &stdoutHadOutput}, stdout)
+		_, readErr := synchronousCopy(eventStreamWriter{stream, &stdoutHadOutput}, stdout)
 		stdoutDone <- readErr
 	}()
 	go func() {
-		_, readErr := io.Copy(&tail, stderr)
+		_, readErr := synchronousCopy(&tail, stderr)
 		stderrDone <- readErr
 	}()
 	supervised := supervision.Result()
@@ -286,11 +283,12 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 	drainTimer := time.NewTimer(2 * time.Second)
 	defer drainTimer.Stop()
 	outDone, errDone := (<-chan error)(stdoutDone), (<-chan error)(stderrDone)
+	var stdoutCopyErr, stderrCopyErr error
 	for outDone != nil || errDone != nil {
 		select {
-		case <-outDone:
+		case stdoutCopyErr = <-outDone:
 			outDone = nil
-		case <-errDone:
+		case stderrCopyErr = <-errDone:
 			errDone = nil
 		case <-drainTimer.C:
 			_ = stdout.Close()
@@ -300,6 +298,9 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 	}
 	_ = stdout.Close()
 	_ = stderr.Close()
+	if stderrCopyErr != nil {
+		fmt.Fprintf(os.Stderr, "Purser: synchronous worker stderr copy failed: %v\n", stderrCopyErr)
+	}
 	if ctx.Err() != nil {
 		return nil, errSynchronousCancelled
 	}
@@ -308,6 +309,9 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 	}
 	exitCode := supervised.RootExit
 	eventResult := stream.Result(false, exitCode, tail.String())
+	if stdoutCopyErr != nil {
+		eventResult.Failure = strings.TrimSpace(eventResult.Failure + "\nworker stdout copy failed: " + stdoutCopyErr.Error())
+	}
 	if (agent == "agy" || agent == "cursor") && name == "codex-reply" && eventResult.ThreadID != threadID {
 		message := "Antigravity did not resume the requested conversation; start a fresh call"
 		if agent == "cursor" {

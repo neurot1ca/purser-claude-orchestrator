@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,62 @@ func TestSynchronousSupervisorHelper(t *testing.T) {
 		if arg == "supervisor" {
 			os.Exit(proc.SupervisorMain(os.Args[i+1:]))
 		}
+	}
+}
+
+func TestSynchronousCopyFailures(t *testing.T) {
+	for _, stream := range []string{"stdout", "stderr"} {
+		t.Run(stream, func(t *testing.T) {
+			isolateSynchronousEnvironment(t)
+			args := synchronousDirectArgs(t)
+			t.Setenv("PURSER_SYNC_ORACLE_MODE", "success")
+			originalCopy := synchronousCopy
+			synchronousCopy = func(dst io.Writer, src io.Reader) (int64, error) {
+				n, err := io.Copy(dst, src)
+				if err != nil {
+					return n, err
+				}
+				_, stdout := dst.(eventStreamWriter)
+				_, stderr := dst.(*limitedTail)
+				if (stream == "stdout" && stdout) || (stream == "stderr" && stderr) {
+					return n, errors.New("injected " + stream + " copy failure")
+				}
+				return n, nil
+			}
+			defer func() { synchronousCopy = originalCopy }()
+
+			var diagnostic string
+			if stream == "stderr" {
+				oldStderr := os.Stderr
+				readEnd, writeEnd, err := os.Pipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				os.Stderr = writeEnd
+				defer func() { os.Stderr = oldStderr }()
+				defer readEnd.Close()
+				defer writeEnd.Close()
+				result, callErr := runSynchronousContext(context.Background(), args, "codex")
+				os.Stderr = oldStderr
+				_ = writeEnd.Close()
+				data, readErr := io.ReadAll(readEnd)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				diagnostic = string(data)
+				if callErr != nil || result == nil || result["isError"] == true {
+					t.Fatalf("stderr copy failure changed worker outcome: result=%#v err=%v", result, callErr)
+				}
+			} else {
+				result, callErr := runSynchronousContext(context.Background(), args, "codex")
+				if callErr != nil || result == nil || result["isError"] != true || !strings.Contains(result["content"].([]any)[0].(map[string]any)["text"].(string), "worker stdout copy failed") {
+					t.Fatalf("stdout copy failure was not reported: result=%#v err=%v", result, callErr)
+				}
+			}
+			if stream == "stderr" && !strings.Contains(diagnostic, "synchronous worker stderr copy failed: injected stderr copy failure") {
+				t.Fatalf("stderr copy diagnostic=%q", diagnostic)
+			}
+		})
 	}
 }
 
