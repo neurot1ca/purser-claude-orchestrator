@@ -222,8 +222,12 @@ func TestOwnerLifetimeOpenInputAndDurableSurvival(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("bridge registration did not admit protocol")
 	}
-	owner.Process.Kill()
-	owner.Wait()
+	if err := owner.Process.Kill(); err != nil {
+		t.Fatalf("kill owner: %v", err)
+	}
+	if err := owner.Wait(); err == nil {
+		t.Fatal("killed owner exited successfully")
+	}
 	exited := make(chan error, 1)
 	go func() { exited <- bridge.Wait() }()
 	select {
@@ -254,8 +258,12 @@ func TestOwnerLifetimeOpenInputAndDurableSurvival(t *testing.T) {
 	if _, err := waiter.PinOwner(durable.Process.Pid); err != nil {
 		t.Fatalf("durable stopped: %v", err)
 	}
-	durable.Process.Kill()
-	durable.Wait()
+	if err := durable.Process.Kill(); err != nil {
+		t.Fatalf("kill durable owner: %v", err)
+	}
+	if err := durable.Wait(); err == nil {
+		t.Fatal("killed durable owner exited successfully")
+	}
 
 }
 
@@ -273,8 +281,12 @@ func TestOwnerLifetimeRegistrationRace(t *testing.T) {
 	original := registerSessionOwner
 	defer func() { registerSessionOwner = original }()
 	registerSessionOwner = func(context.Context, waiter.Owner, chan struct{}, io.Writer) error {
-		cmd.Process.Kill()
-		cmd.Wait()
+		if err := cmd.Process.Kill(); err != nil {
+			return err
+		}
+		if err := cmd.Wait(); err == nil {
+			return fmt.Errorf("killed owner exited successfully")
+		}
 		return nil
 	}
 	done, err := monitorSessionOwner(context.Background(), owner, io.Discard)

@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -194,10 +193,12 @@ func TestValidateStartAcceptsMechanicalOpenCodeArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	executable := filepath.Join(fakeDir, "opencode")
-	goExecutable := filepath.Join(runtime.GOROOT(), "bin", "go")
-	if runtime.GOOS == "windows" {
+	goExecutable, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("find Go executable on PATH: %v", err)
+	}
+	if strings.EqualFold(filepath.Ext(goExecutable), ".exe") {
 		executable += ".exe"
-		goExecutable += ".exe"
 	}
 	if output, err := testutil.Hide(exec.Command(goExecutable, "build", "-o", executable, source)).CombinedOutput(); err != nil {
 		t.Fatalf("build fake OpenCode: %v: %s", err, output)

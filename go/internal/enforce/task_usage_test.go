@@ -415,10 +415,18 @@ func TestTaskUsageP59ReadBounds(t *testing.T) {
 	if _, reason := readTaskUsageRecords(file, 0, false); reason != "BOUNDS_EXCEEDED" {
 		t.Fatalf("size bound: %q", reason)
 	}
-	file.Truncate(0)
-	file.Seek(0, 0)
-	file.Write(bytes.Repeat([]byte("x"), maxTaskUsageLine+1))
-	file.Write([]byte("\n"))
+	if err := file.Truncate(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(bytes.Repeat([]byte("x"), maxTaskUsageLine+1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("\n")); err != nil {
+		t.Fatal(err)
+	}
 	if _, reason := readTaskUsageRecords(file, 0, false); reason != "BOUNDS_EXCEEDED" {
 		t.Fatalf("line bound: %q", reason)
 	}

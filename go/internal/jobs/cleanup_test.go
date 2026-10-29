@@ -67,7 +67,9 @@ func TestTrimPurserGoCacheSkippedWhileCodexJobRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeHostTestJSON(t, filepath.Join(jobsRoot, "running.json"), map[string]any{"jobId": "running", "state": "RUNNING"})
-	trimPurserGoCache(root)
+	if err := trimPurserGoCache(root); err != nil {
+		t.Fatalf("trimPurserGoCache() error = %v", err)
+	}
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("cache marker removed while a Codex job runs: %v", err)
 	}
@@ -310,7 +312,9 @@ func TestCleanupKeepsUnappliedAndSharedWorktree(t *testing.T) {
 	now := cleanupNow()
 	cleanupJob(t, root, strings.Repeat("a", 64), "SUCCEEDED", map[string]any{"worktreePath": wt, "repoRoot": repo, "applyState": "applied"})
 	cleanupJob(t, root, strings.Repeat("b", 64), "RUNNING", map[string]any{"worktreePath": wt, "repoRoot": repo})
-	cleanupJobs(root, t.TempDir(), now, false)
+	if err := cleanupJobs(root, t.TempDir(), now, false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, e := os.Stat(wt); e != nil {
 		t.Fatalf("protected shared worktree removed: %v", e)
 	}
@@ -330,7 +334,9 @@ func TestCleanupRemovesAppliedAndFailedWithoutPatchWorktrees(t *testing.T) {
 				extra[k] = v
 			}
 			cleanupJob(t, root, strings.Repeat("c", 64), tc.state, extra)
-			cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+			if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+				t.Fatalf("cleanupJobs() error = %v", err)
+			}
 			if _, e := os.Stat(wt); !os.IsNotExist(e) {
 				t.Fatalf("worktree remains or stat failed: %v", e)
 			}
@@ -342,7 +348,9 @@ func TestCleanupDistillsBeforeDeletingExpiredJob(t *testing.T) {
 	root := t.TempDir()
 	id := strings.Repeat("d", 64)
 	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{"finishedAt": float64(cleanupNow().Unix()) - 8*86400})
-	cleanupJobs(root, t.TempDir(), cleanupNow(), true)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, e := os.Stat(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")); !os.IsNotExist(e) {
 		t.Fatalf("expired job remains: %v", e)
 	}
@@ -512,7 +520,9 @@ func TestCleanupRemovesLaunchFileAndSharesActionBound(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	left := 0
 	for i := 0; i < maxJobRecords+1; i++ {
 		id := fmt.Sprintf("%064x", i+1)
@@ -533,7 +543,9 @@ func TestCleanupRemovesOrphanAndEnforcesWorktreeCount(t *testing.T) {
 	if e := os.Chtimes(orphan, old, old); e != nil {
 		t.Fatal(e)
 	}
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, e := os.Stat(orphan); !os.IsNotExist(e) {
 		t.Fatalf("orphan worktree remains: %v", e)
 	}
@@ -542,7 +554,9 @@ func TestCleanupRemovesOrphanAndEnforcesWorktreeCount(t *testing.T) {
 	for i := 0; i < maxWorktrees+1; i++ {
 		cleanupWT(t, root, repo, fmt.Sprintf("wt-%03d", i))
 	}
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	items, e := os.ReadDir(filepath.Join(root, "wt"))
 	if e != nil {
 		t.Fatal(e)
@@ -564,7 +578,9 @@ func TestCleanupNeverFollowsLinks(t *testing.T) {
 	if e := os.Symlink(outside, launch); e != nil {
 		t.Skipf("symlink unavailable: %v", e)
 	}
-	cleanupJobs(root, t.TempDir(), cleanupNow(), true)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	b, e := os.ReadFile(outside)
 	if e != nil || string(b) != "keep" {
 		t.Fatalf("outside link target changed: %v %q", e, b)
@@ -627,11 +643,15 @@ func TestCleanupEmitsUnfetchedOnceAndPersistsMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if got := cleanupTelemetryCount(t, root, "CODEX_RESULT_UNFETCHED"); got != 1 {
 		t.Fatalf("unfetched telemetry count = %d, want 1", got)
 	}
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if got := cleanupTelemetryCount(t, root, "CODEX_RESULT_UNFETCHED"); got != 1 {
 		t.Fatalf("unfetched telemetry count after retry = %d, want 1", got)
 	}
@@ -662,7 +682,9 @@ func TestCleanupClaimFailuresDoNotConsumeActionBound(t *testing.T) {
 	}
 
 	lastID := fmt.Sprintf("%064x", maxJobRecords+1)
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(root, "codex_exec_mcp", "jobs", lastID+".json")); !os.IsNotExist(err) {
 		t.Fatalf("successful cleanup after claim failures left last job: %v", err)
 	}
@@ -689,7 +711,9 @@ func TestCleanupMalformedSummaryDoesNotAbort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, err := os.Stat(launchPath); !os.IsNotExist(err) {
 		t.Fatalf("malformed summary stopped later cleanup: %v", err)
 	}
@@ -707,7 +731,9 @@ func TestCleanupRemovesOldTerminalUnappliedWorktree(t *testing.T) {
 		"worktreePath": wt, "repoRoot": repo,
 		"finishedAt": float64(cleanupNow().Unix()) - 8*86400,
 	})
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, err := os.Stat(wt); !os.IsNotExist(err) {
 		t.Fatalf("old terminal worktree remains: %v", err)
 	}
@@ -728,7 +754,9 @@ func TestCleanupKeepsRecentUnappliedAndActiveWorktrees(t *testing.T) {
 			cleanupJob(t, root, strings.Repeat("2", 64), tc.state, map[string]any{
 				"worktreePath": wt, "repoRoot": repo, "finishedAt": tc.finished,
 			})
-			cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+			if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+				t.Fatalf("cleanupJobs() error = %v", err)
+			}
 			if _, err := os.Stat(wt); err != nil {
 				t.Fatalf("worktree removed while still needed: %v", err)
 			}
@@ -760,7 +788,9 @@ func TestCleanupKeepsLatestReplyThreadWorktree(t *testing.T) {
 	if err := os.WriteFile(prep, []byte(`{"state":"PREPARED"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, err := os.Stat(oldWT); !os.IsNotExist(err) {
 		t.Fatalf("superseded thread worktree remains: %v", err)
 	}
@@ -786,7 +816,9 @@ func TestCleanupRemovesWorktreeWithReadOnlyFiles(t *testing.T) {
 	cleanupJob(t, root, strings.Repeat("5", 64), "SUCCEEDED", map[string]any{
 		"worktreePath": wt, "repoRoot": repo, "applyState": "applied",
 	})
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, err := os.Stat(wt); !os.IsNotExist(err) {
 		t.Fatalf("read-only worktree remains: %v", err)
 	}
@@ -810,7 +842,9 @@ func TestCleanupArtifactByteBoundEvictsOldestTerminalFirst(t *testing.T) {
 	newSize := cleanupTreeBytes(newWT) + cleanupTreeBytes(filepath.Join(root, "preparations"))
 	maxArtifactBytes = newSize
 	t.Cleanup(func() { maxArtifactBytes = previous })
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, err := os.Stat(oldWT); !os.IsNotExist(err) {
 		t.Fatalf("oldest terminal worktree remains above byte bound: %v", err)
 	}
@@ -943,7 +977,9 @@ func TestCleanupRemovesOldTimedOutUnappliedWorktree(t *testing.T) {
 		"worktreePath": wt, "repoRoot": repo,
 		"finishedAt": float64(cleanupNow().Unix()) - 8*86400,
 	})
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, err := os.Stat(wt); !os.IsNotExist(err) {
 		t.Fatalf("old timed-out worktree remains: %v", err)
 	}
@@ -963,7 +999,9 @@ func TestCleanupKeepsUnknownWorktreeOverArtifactByteCap(t *testing.T) {
 	previous := maxArtifactBytes
 	maxArtifactBytes = 0
 	t.Cleanup(func() { maxArtifactBytes = previous })
-	cleanupJobs(root, t.TempDir(), cleanupNow(), false)
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), false); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
 	if _, err := os.Stat(wt); err != nil {
 		t.Fatalf("unknown worktree was removed over artifact byte cap: %v", err)
 	}
