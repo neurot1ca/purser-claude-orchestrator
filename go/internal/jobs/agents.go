@@ -195,19 +195,20 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 			return nil, errors.New("Claude effort is required and sandbox is unsupported")
 		}
 		readOnly := in.Sandbox != nil && *in.Sandbox == "read-only"
-		if in.Sandbox != nil && !readOnly {
+		// workspace-write is the Claude worker's normal mode, not a separate sandbox.
+		if in.Sandbox != nil && !readOnly && *in.Sandbox != "workspace-write" {
 			return nil, errors.New("Claude effort is required and sandbox is unsupported")
 		}
 		command := append([]string{}, in.Prefix...)
-		command = append(command, "--setting-sources", "", "--restricted")
-		if readOnly {
-			command = append(command, "--safe-mode", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--no-chrome")
-		}
+		command = append(command, "--setting-sources", "")
 		tools := "Read,Glob,Grep"
-		if !readOnly {
+		if readOnly {
+			command = append(command, "--restricted", "--safe-mode", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--no-chrome")
+		} else {
 			tools = "Read,Edit,Write,Glob,Grep,Bash"
-			// Restricted mode rejects bypassPermissions; dontAsk runs only the allowed tools.
-			command = append(command, "--permission-mode", "dontAsk", "--allowedTools", tools)
+			// Worktrees live under ~/.claude, which only bypassPermissions may edit,
+			// and restricted mode rejects bypassPermissions.
+			command = append(command, "--strict-mcp-config", "--permission-mode", "bypassPermissions")
 		}
 		command = append(command, "--print", "--output-format", "json", "--model", in.Model)
 		if effort != "" && effort != "none" {

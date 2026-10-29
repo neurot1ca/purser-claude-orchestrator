@@ -139,7 +139,7 @@ func TestClaudeWorkerCarriesEffortAndSuppressesNestedHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"claude", "--setting-sources", "", "--restricted", "--permission-mode", "dontAsk", "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash", "--print", "--output-format", "json", "--model", "claude-sonnet-4-5", "--effort", "high", "--tools", "Read,Edit,Write,Glob,Grep,Bash", "--", "work"}
+	want := []string{"claude", "--setting-sources", "", "--strict-mcp-config", "--permission-mode", "bypassPermissions", "--print", "--output-format", "json", "--model", "claude-sonnet-4-5", "--effort", "high", "--tools", "Read,Edit,Write,Glob,Grep,Bash", "--", "work"}
 	if !reflect.DeepEqual(command, want) {
 		t.Fatalf("Claude command argv mismatch\n got: %#v\nwant: %#v", command, want)
 	}
