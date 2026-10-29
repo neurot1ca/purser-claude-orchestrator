@@ -75,7 +75,7 @@ func TestPostBoardPythonFixture(t *testing.T) {
 			t.Errorf("dispatch=%q want %q", got, tc.Expected)
 		}
 	}
-	if got := PostApplyGuidance("", "0123"); got != "Record acceptance with codex_apply using jobId 0123, acceptOnly:true, and the reviewed changed_paths_sha256 revision; then tell the dispatcher to apply it. A conflict lists the paths and keeps the worktree." {
+	if got := PostApplyGuidance("", "0123"); got != "Call codex_apply with jobId 0123 and revision equal to the reviewed changed_paths_sha256 to accept and apply in one call; a conflict lists the paths and keeps the worktree." {
 		t.Errorf("guidance=%q", got)
 	}
 }

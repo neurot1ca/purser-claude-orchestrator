@@ -106,7 +106,9 @@ func TestMCPPreparedApplyAcceptanceGate(t *testing.T) {
 	if denied := response(t, "without-acceptance", "subagent", input(false)); !isDenied(denied) {
 		t.Fatalf("subagent apply without acceptance passed: %#v", denied)
 	}
-	if allowed := response(t, "main-apply", "", input(false)); isDenied(allowed) {
+	mainApply := input(false)
+	mainApply["revision"] = revision
+	if allowed := response(t, "main-apply", "", mainApply); isDenied(allowed) {
 		t.Fatalf("main-thread apply was denied: %#v", allowed)
 	}
 	accepted := response(t, "main-acceptance", "", input(true))

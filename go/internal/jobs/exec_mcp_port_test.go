@@ -158,7 +158,7 @@ func TestExecMcpPortRunHostGenerationMapsRequestedWorktreeCWD(t *testing.T) {
 
 func TestExecMcpPortApplyDropsInvalidReviewerCounts(t *testing.T) {
 	jobID := strings.Repeat("c", 64)
-	state, _, _, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), jobID)
+	state, _, worktree, snapshot := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), jobID)
 	jobPath := filepath.Join(state, "codex_exec_mcp", "jobs", jobID+".json")
 	jobBytes, err := os.ReadFile(jobPath)
 	if err != nil {
@@ -170,7 +170,11 @@ func TestExecMcpPortApplyDropsInvalidReviewerCounts(t *testing.T) {
 	}
 	job["taskId"] = "invalid-counts"
 	writeHostTestJSON(t, jobPath, job)
-	args := map[string]any{"jobId": jobID, "reviewer1Valid": json.Number("-1"), "reviewer1False": true}
+	revision, err := changedPathsDigest(worktree, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"jobId": jobID, "revision": revision, "reviewer1Valid": json.Number("-1"), "reviewer1False": true}
 	if got := Apply(state, args)["structuredContent"].(map[string]any)["applied"]; got != true {
 		t.Fatalf("apply failed: %#v", got)
 	}
@@ -189,8 +193,12 @@ func TestExecMcpPortApplyDropsInvalidReviewerCounts(t *testing.T) {
 
 func TestExecMcpPortApplyTelemetryFailureDoesNotBreakApply(t *testing.T) {
 	jobID := strings.Repeat("d", 64)
-	state, _, _, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), jobID)
-	result := Apply(state, map[string]any{"jobId": jobID}, ApplyOptions{
+	state, _, worktree, snapshot := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), jobID)
+	revision, err := changedPathsDigest(worktree, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := Apply(state, map[string]any{"jobId": jobID, "revision": revision}, ApplyOptions{
 		RecordScopeConflictOutcome: func(map[string]any, string) { panic("telemetry unavailable") },
 	})["structuredContent"].(map[string]any)
 	if result["applied"] != true {

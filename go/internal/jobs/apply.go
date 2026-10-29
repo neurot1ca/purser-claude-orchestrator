@@ -109,15 +109,6 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		}
 		return result(map[string]any{"accepted": true, "revision": current})
 	}
-	var acceptance map[string]any
-	if job.Get("acceptance", &acceptance) && acceptance != nil {
-		current, digestErr := changedPathsDigest(worktree, snapshot)
-		if digestErr != nil || acceptance["revision"] != current {
-			job.Delete("acceptance")
-			_ = Write(filepath.Join(dir, jobID+".json"), job)
-			return result(map[string]any{"applied": false, "reason": "main Claude has not accepted this revision"})
-		}
-	}
 	var saved map[string]any
 	if applyState == "applied" && job.Get("applyResult", &saved) && saved != nil {
 		if err := recordPlanApply(stateRoot, recordMap(job), jobID); err != nil {
@@ -129,6 +120,30 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		releaseAppliedJobLeases(opt, stateRoot, dir, worktree)
 		dispatchWorktreeRetirement(stateRoot, jobID)
 		return result(saved)
+	}
+	if !resolved {
+		var acceptance map[string]any
+		job.Get("acceptance", &acceptance)
+		current, digestErr := changedPathsDigest(worktree, snapshot)
+		if digestErr != nil {
+			return result(map[string]any{"applied": false, "reason": "main Claude has not accepted this revision"})
+		}
+		if acceptance == nil || acceptance["revision"] != current {
+			if acceptance != nil {
+				job.Delete("acceptance")
+				_ = Write(filepath.Join(dir, jobID+".json"), job)
+			}
+			revision, _ := args["revision"].(string)
+			var reviewed string
+			if revision == "" || revision != current || !job.Get("reviewedSnapshot", &reviewed) || reviewed == "" {
+				return result(map[string]any{"applied": false, "reason": "main Claude has not accepted this revision"})
+			}
+			sessionID, _ := args["sessionId"].(string)
+			acceptance = map[string]any{"revision": current, "sessionId": sessionID, "acceptedAt": time.Now().UTC().Format(time.RFC3339Nano)}
+			if err := job.Set("acceptance", acceptance); err != nil || Write(filepath.Join(dir, jobID+".json"), job) != nil {
+				return result(map[string]any{"applied": false, "reason": "main Claude has not accepted this revision"})
+			}
+		}
 	}
 	if resolved {
 		if applyState != "conflict" && conflictReason != "worker_replay" {

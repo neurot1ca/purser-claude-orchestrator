@@ -91,6 +91,19 @@ func TestPreApplyAcceptanceGate(t *testing.T) {
 	if !ok || revision != reviewedRevision || updated["sessionId"] != "session-main" {
 		t.Fatalf("main acceptance was not bound to hook revision and session: %#v", main)
 	}
+	plain := decision(event(map[string]any{"jobId": id, "revision": reviewedRevision}, nil))
+	plainInput := mapValue(plain["updatedInput"])
+	if plainInput["sessionId"] != "session-main" || plainInput["revision"] != reviewedRevision {
+		t.Fatalf("matching plain revision was not bound to main session: %#v", plain)
+	}
+	if denied := decision(event(map[string]any{"jobId": id, "revision": reviewedRevision}, "agent-1")); denied["permissionDecision"] != "deny" {
+		t.Fatalf("subagent plain revision was not denied: %#v", denied)
+	}
+	noSession := event(map[string]any{"jobId": id, "revision": reviewedRevision}, nil)
+	noSession["session_id"] = ""
+	if denied := decision(noSession); denied["permissionDecision"] != "deny" {
+		t.Fatalf("plain apply with empty session was not denied: %#v", denied)
+	}
 	delete(job, "reviewedSnapshot")
 	writeJSON()
 	noBundle := decision(event(map[string]any{"jobId": id, "acceptOnly": true, "revision": reviewedRevision}, nil))
@@ -106,14 +119,17 @@ func TestPreApplyAcceptanceGate(t *testing.T) {
 	if allowed := decision(event(input, nil)); allowed["permissionDecision"] != "allow" || allowed["permissionDecisionReason"] != "Purser: main Claude accepted this revision" {
 		t.Fatalf("matching acceptance did not explicitly allow main-Claude apply: %#v", allowed)
 	}
+	if _, valid, _ := applyRevision(state, id, "", true); valid {
+		t.Fatal("empty session accepted a stored revision")
+	}
 	if err := os.WriteFile(filepath.Join(worktree, "new.txt"), []byte("drift\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if denied := decision(event(input, "agent-1")); denied["permissionDecisionReason"] != "main Claude has not accepted this revision" {
 		t.Fatalf("old revision acceptance survived drift: %#v", denied)
 	}
-	if undecided := decision(event(input, nil)); len(undecided) != 0 {
-		t.Fatalf("foreground apply without acceptance received a decision: %#v", undecided)
+	if denied := decision(event(input, nil)); denied["permissionDecision"] != "deny" {
+		t.Fatalf("foreground apply without acceptance was not denied: %#v", denied)
 	}
 }
 

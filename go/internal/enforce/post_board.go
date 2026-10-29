@@ -499,7 +499,7 @@ func PostDispatchReceipt(pending map[string]any, eta *int) string {
 
 // PostApplyGuidance is the exact codex_apply instruction appended after worktree review.
 func PostApplyGuidance(prior, jobID string) string {
-	sentence := fmt.Sprintf("Record acceptance with codex_apply using jobId %s, acceptOnly:true, and the reviewed changed_paths_sha256 revision; then tell the dispatcher to apply it. A conflict lists the paths and keeps the worktree.", jobID)
+	sentence := fmt.Sprintf("Call codex_apply with jobId %s and revision equal to the reviewed changed_paths_sha256 to accept and apply in one call; a conflict lists the paths and keeps the worktree.", jobID)
 	if prior != "" {
 		return prior + "\n" + sentence
 	}

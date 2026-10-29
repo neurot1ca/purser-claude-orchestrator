@@ -40,7 +40,7 @@ func TestApplyReturnsReadyMilestonesAndRefreshesCachedReadiness(t *testing.T) {
 	if _, _, err := contextio.BindPlanJob(root, repo, "plan-m1of2", id); err != nil {
 		t.Fatal(err)
 	}
-	response := Apply(root, map[string]any{"jobId": id})
+	response := applyAtCurrentRevision(t, root, id)
 	result, ok := response["structuredContent"].(map[string]any)
 	if !ok || response["isError"] != false || result["applied"] != true {
 		t.Fatalf("apply failed: %#v", response)
@@ -103,7 +103,7 @@ func TestApplyPlanRecordingFailureIsVisibleWithoutFailingApply(t *testing.T) {
 	if err := Write(path, job); err != nil {
 		t.Fatal(err)
 	}
-	response := Apply(root, map[string]any{"jobId": id})
+	response := applyAtCurrentRevision(t, root, id)
 	result, ok := response["structuredContent"].(map[string]any)
 	if !ok || response["isError"] != false || result["applied"] != true {
 		t.Fatalf("apply failed: %#v", response)
@@ -117,13 +117,17 @@ func TestLaterApplyPreservesNewerConflictingCommit(t *testing.T) {
 	root, repo, worktree, snapshot := handAppliedAdmissionFixture(t, false)
 	handAppliedGit(t, repo, "add", "src/file.txt")
 	handAppliedGit(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "newer job")
+	reviewedSnapshot, err := ledger.CheckoutSnapshot(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := strings.Repeat("8", 64)
 	path := filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
-	writeHandAppliedJSON(t, path, map[string]any{"jobId": id, "state": "SUCCEEDED", "repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot})
-	result := Apply(root, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+	writeHandAppliedJSON(t, path, map[string]any{"jobId": id, "state": "SUCCEEDED", "repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot, "reviewedSnapshot": reviewedSnapshot})
+	result := applyAtCurrentRevision(t, root, id)["structuredContent"].(map[string]any)
 	if result["applied"] != false || len(result["conflicts"].([]string)) == 0 {
 		t.Fatalf("stale patch was not rejected: %#v", result)
 	}
@@ -178,9 +182,14 @@ func TestApplyPythonOracle(t *testing.T) {
 			}
 			write(t, filepath.Join(worktree, "tracked.txt"), c.Setup["worktree"].(string))
 			write(t, filepath.Join(repo, "tracked.txt"), c.Setup["repo"].(string))
+			reviewedSnapshot, err := ledger.CheckoutSnapshot(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
 			jobID := sha256.Sum256([]byte(c.Name))
 			id := hex.EncodeToString(jobID[:])
 			job := map[string]any{"jobId": id, "state": c.Setup["state"], "repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot}
+			job["reviewedSnapshot"] = reviewedSnapshot
 			if c.Reviewed != nil {
 				job["reviewedSnapshot"] = c.Reviewed
 				job["snapshotRevision"] = float64(2)
@@ -198,7 +207,11 @@ func TestApplyPythonOracle(t *testing.T) {
 				}
 				write(t, index, `{"stage":"APPLY"}`)
 			}
-			result := Apply(state, map[string]any{"jobId": id})
+			revision, err := changedPathsDigest(worktree, snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := Apply(state, map[string]any{"jobId": id, "revision": revision})
 			if c.Setup["repeat"] == true {
 				result = Apply(state, map[string]any{"jobId": id})
 			}
@@ -224,6 +237,10 @@ func TestApplyPythonOracle(t *testing.T) {
 			var record map[string]any
 			if err := json.Unmarshal(stored, &record); err != nil {
 				t.Fatal(err)
+			}
+			delete(record, "acceptance")
+			if c.Reviewed == nil {
+				delete(record, "reviewedSnapshot")
 			}
 			delete(record, "appliedAt")
 			delete(record, "applyValidation")
@@ -282,6 +299,20 @@ func acceptanceJob(t *testing.T, state, id string) (string, string, string, stri
 	return state, repo, worktree, snapshot
 }
 
+func applyAtCurrentRevision(t *testing.T, state, id string) map[string]any {
+	t.Helper()
+	job := readJob(filepath.Join(state, "codex_exec_mcp", "jobs"), id)
+	var worktree, snapshot string
+	if job == nil || !job.Get("worktreePath", &worktree) || !job.Get("snapshot", &snapshot) {
+		t.Fatalf("job %s has no worktree snapshot", id)
+	}
+	revision, err := changedPathsDigest(worktree, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Apply(state, map[string]any{"jobId": id, "revision": revision})
+}
+
 func TestApplyAcceptanceAndForegroundPaths(t *testing.T) {
 	t.Run("main acceptance then apply", func(t *testing.T) {
 		id := strings.Repeat("a", 64)
@@ -312,13 +343,42 @@ func TestApplyAcceptanceAndForegroundPaths(t *testing.T) {
 		if got["reason"] != "main Claude has not accepted this revision" {
 			t.Fatalf("stale acceptance was not rejected: %#v", got)
 		}
+		retry := Apply(state, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+		if retry["reason"] != "main Claude has not accepted this revision" {
+			t.Fatalf("retry after stale acceptance was not rejected: %#v", retry)
+		}
 	})
-	t.Run("foreground apply without acceptance", func(t *testing.T) {
+	t.Run("plain apply without acceptance or revision is denied", func(t *testing.T) {
 		id := strings.Repeat("c", 64)
 		state, _, _, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
 		got := Apply(state, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
-		if got["applied"] != true {
-			t.Fatalf("foreground apply unexpectedly gated: %#v", got)
+		if got["applied"] != false || got["reason"] != "main Claude has not accepted this revision" {
+			t.Fatalf("unaccepted plain apply was not denied: %#v", got)
+		}
+	})
+	t.Run("matching plain revision accepts and applies", func(t *testing.T) {
+		id := strings.Repeat("9", 64)
+		state, _, worktree, snapshot := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
+		revision, err := changedPathsDigest(worktree, snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := Apply(state, map[string]any{"jobId": id, "revision": revision, "sessionId": "session-main"})
+		got := response["structuredContent"].(map[string]any)
+		if got["applied"] != true || response["isError"] == true {
+			t.Fatalf("matching revision did not accept and apply: %#v", response)
+		}
+	})
+	t.Run("stale plain revision is denied", func(t *testing.T) {
+		id := strings.Repeat("7", 64)
+		state, _, worktree, snapshot := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), id)
+		revision, err := changedPathsDigest(worktree, snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := Apply(state, map[string]any{"jobId": id, "revision": revision + "stale", "sessionId": "session-main"})["structuredContent"].(map[string]any)
+		if got["applied"] != false || got["reason"] != "main Claude has not accepted this revision" {
+			t.Fatalf("stale revision was not denied: %#v", got)
 		}
 	})
 	t.Run("string acceptOnly is rejected before apply", func(t *testing.T) {
@@ -411,7 +471,7 @@ func TestApplyRecordsOnlyOwningPlan(t *testing.T) {
 		return nil
 	}
 	beforeBBytes := planBytes()
-	result := Apply(state, map[string]any{"jobId": id})["structuredContent"].(map[string]any)
+	result := applyAtCurrentRevision(t, state, id)["structuredContent"].(map[string]any)
 	if result["applied"] != true {
 		t.Fatalf("apply failed: %#v", result)
 	}
@@ -471,15 +531,12 @@ func TestApplyCachedRepeatRecordsDecisionAndReleasesLease(t *testing.T) {
 }
 
 func TestApplyCachedRepeatReleasesLeaseAfterWorktreeRemoval(t *testing.T) {
-	base := t.TempDir()
-	state, repo, worktree := filepath.Join(base, "state"), filepath.Join(base, "repo"), filepath.Join(base, "worktree")
-	if err := os.Mkdir(repo, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(worktree, 0700); err != nil {
-		t.Fatal(err)
-	}
 	jobID := strings.Repeat("c", 64)
+	state, repo, worktree, snapshot := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), jobID)
+	revision, err := changedPathsDigest(worktree, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	project, owner := "0123456789abcdef", strings.Repeat("e", 64)
 	store := lease.New(filepath.Join(state, "projects", project))
 	if got := store.Acquire(owner, "apply-task", []string{"src"}, lease.AcquireOptions{JobID: &jobID}, 100); got.Status != "OK" {
@@ -504,7 +561,7 @@ func TestApplyCachedRepeatReleasesLeaseAfterWorktreeRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := Apply(state, map[string]any{"jobId": jobID})
+	result := Apply(state, map[string]any{"jobId": jobID, "revision": revision})
 	if result["structuredContent"] == nil {
 		t.Fatalf("missing cached result: %#v", result)
 	}
@@ -551,7 +608,7 @@ func TestApplyFreshSuccessReleasesActiveScopeLease(t *testing.T) {
 	write(t, filepath.Join(state, "async_jobs", jobID+".json"), string(index))
 	job := map[string]any{
 		"jobId": jobID, "state": "SUCCEEDED", "repoRoot": repo,
-		"worktreePath": worktree, "snapshot": snapshot,
+		"worktreePath": worktree, "snapshot": snapshot, "reviewedSnapshot": snapshot,
 	}
 	encoded, err := json.Marshal(job)
 	if err != nil {
@@ -571,7 +628,7 @@ func TestApplyFreshSuccessReleasesActiveScopeLease(t *testing.T) {
 		t.Fatalf("seed scope lease state = %v, want ACTIVE", got)
 	}
 
-	result := Apply(state, map[string]any{"jobId": jobID})
+	result := applyAtCurrentRevision(t, state, jobID)
 	if structured, _ := result["structuredContent"].(map[string]any); structured["applied"] != true {
 		t.Fatalf("fresh apply failed: %#v", result)
 	}
@@ -608,14 +665,18 @@ func TestApplyFreshSuccessPersistsReviewerDecisionCountsOnce(t *testing.T) {
 	head := strings.TrimSpace(string(gitOutput(t, repo, "rev-parse", "HEAD")))
 	job := map[string]any{
 		"jobId": jobID, "state": "SUCCEEDED", "taskId": "decision-task", "jobPhase": "implementation",
-		"repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot, "head": head,
+		"repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot, "reviewedSnapshot": snapshot, "head": head,
 	}
 	encoded, err := json.Marshal(job)
 	if err != nil {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(state, "codex_exec_mcp", "jobs", jobID+".json"), string(encoded))
-	args := map[string]any{"jobId": jobID, "reviewer1Valid": json.Number("3"), "reviewer1False": json.Number("1")}
+	revision, err := changedPathsDigest(worktree, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"jobId": jobID, "revision": revision, "reviewer1Valid": json.Number("3"), "reviewer1False": json.Number("1")}
 	result := Apply(state, args)
 	structured, _ := result["structuredContent"].(map[string]any)
 	if structured["applied"] != true {

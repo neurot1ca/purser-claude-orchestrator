@@ -26,7 +26,7 @@ func TestApplyDispatchesRetirementAndPreservesCachedOutcome(t *testing.T) {
 	}
 	t.Cleanup(func() { launchRetirementDetached = prior })
 
-	first := Apply(state, map[string]any{"jobId": id})
+	first := applyAtCurrentRevision(t, state, id)
 	if first["structuredContent"].(map[string]any)["applied"] != true {
 		t.Fatalf("apply failed: %#v", first)
 	}
@@ -51,7 +51,7 @@ func TestApplyRetirementFailureKeepsSavedSuccess(t *testing.T) {
 	}
 	t.Cleanup(func() { launchRetirementDetached = prior })
 
-	result := Apply(state, map[string]any{"jobId": id})
+	result := applyAtCurrentRevision(t, state, id)
 	if result["structuredContent"].(map[string]any)["applied"] != true {
 		t.Fatalf("dispatch failure changed apply result: %#v", result)
 	}
@@ -100,7 +100,7 @@ func TestRetirementTransitionMatrix(t *testing.T) {
 					ReleaseScopeLease:          func(string, string) bool { return false },
 				})
 				if tc.discard {
-					applied := Apply(state, map[string]any{"jobId": id})
+					applied := applyAtCurrentRevision(t, state, id)
 					outcome := applied["structuredContent"].(map[string]any)
 					if outcome["applied"] != true || outcome["validation"].(map[string]any)["status"] != "pending" {
 						t.Fatalf("discarded apply outcome changed: %#v", applied)
@@ -198,7 +198,7 @@ func retirementApplyJob(t *testing.T, id string) (string, string) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(worktree, "tracked.txt"), "changed\n")
-	job := map[string]any{"jobId": id, "state": "SUCCEEDED", "repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot}
+	job := map[string]any{"jobId": id, "state": "SUCCEEDED", "repoRoot": repo, "worktreePath": worktree, "snapshot": snapshot, "reviewedSnapshot": snapshot}
 	encoded, err := json.Marshal(job)
 	if err != nil {
 		t.Fatal(err)

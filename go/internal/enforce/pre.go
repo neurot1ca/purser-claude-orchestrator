@@ -103,7 +103,7 @@ func preApply(event map[string]any, runtimeRoot string) map[string]any {
 		}
 		sessionID := stringValue(event["session_id"])
 		revision := stringValue(input["revision"])
-		current, valid, cause := applyRevision(stateRoot, jobID, "")
+		current, valid, cause := applyRevision(stateRoot, jobID, "", false)
 		if sessionID == "" {
 			return denyPre("ACCEPTANCE_REVISION_UNAVAILABLE", "acceptance session is unavailable")
 		}
@@ -121,17 +121,35 @@ func preApply(event map[string]any, runtimeRoot string) map[string]any {
 		updated["sessionId"] = sessionID
 		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated}}
 	}
-	if _, valid, _ := applyRevision(stateRoot, jobID, stringValue(event["session_id"])); valid {
+	sessionID := stringValue(event["session_id"])
+	revision := stringValue(input["revision"])
+	if subagent && revision != "" {
+		return denyPre("SUBAGENT_ACCEPTANCE_DENIED", "only main Claude can accept a revision")
+	}
+	current, valid, _ := applyRevision(stateRoot, jobID, sessionID, true)
+	if valid {
 		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse",
 			"permissionDecision": "allow", "permissionDecisionReason": "Purser: main Claude accepted this revision"}}
-	} else if subagent {
+	}
+	if subagent {
 		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse",
 			"permissionDecision": "deny", "permissionDecisionReason": "main Claude has not accepted this revision"}}
 	}
-	return map[string]any{}
+	if input["resolved"] == true {
+		return map[string]any{}
+	}
+	if sessionID == "" || revision == "" || revision != current {
+		return denyPre("REVISION_NOT_ACCEPTED", "main Claude has not accepted this revision")
+	}
+	updated := make(map[string]any, len(input)+1)
+	for key, value := range input {
+		updated[key] = value
+	}
+	updated["sessionId"] = sessionID
+	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "updatedInput": updated}}
 }
 
-func applyRevision(stateRoot, jobID, sessionID string) (string, bool, string) {
+func applyRevision(stateRoot, jobID, sessionID string, requireAcceptance bool) (string, bool, string) {
 	jobPath := filepath.Join(stateRoot, "codex_exec_mcp", "jobs", jobID+".json")
 	read := func() map[string]any {
 		data, err := os.ReadFile(jobPath)
@@ -179,11 +197,15 @@ func applyRevision(stateRoot, jobID, sessionID string) (string, bool, string) {
 	if err != nil {
 		return "", false, "reviewed revision is unavailable"
 	}
-	if sessionID != "" {
-		acceptance, _ := job["acceptance"].(map[string]any)
-		if acceptance == nil || acceptance["sessionId"] != sessionID || acceptance["revision"] != digest {
-			return digest, false, "main Claude has not accepted this revision"
-		}
+	if !requireAcceptance {
+		return digest, true, ""
+	}
+	if sessionID == "" {
+		return digest, false, "acceptance session is unavailable"
+	}
+	acceptance, _ := job["acceptance"].(map[string]any)
+	if acceptance == nil || acceptance["sessionId"] != sessionID || acceptance["revision"] != digest {
+		return digest, false, "main Claude has not accepted this revision"
 	}
 	return digest, true, ""
 }
