@@ -690,7 +690,7 @@ func lockCandidateInventory(root string) (string, func(), error) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	return path, func() { contextio.Unlock(lock); _ = lock.Close() }, nil
+	return path, func() { _ = contextio.Unlock(lock); _ = lock.Close() }, nil
 }
 
 func boolSamples(values []any) bool {

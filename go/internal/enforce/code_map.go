@@ -249,7 +249,7 @@ func codeMapCheckDeadline(deadline time.Time) error {
 
 // readCodeMapCache returns a valid reusable manifest only when its identity,
 // parser, map file, lock, and deadline all pass. Invalid caches are misses.
-func readCodeMapCache(directory, parser string, deadline time.Time) (*codeMapManifest, bool, error) {
+func readCodeMapCache(directory, parser string, deadline time.Time) (result *codeMapManifest, valid bool, retErr error) {
 	if err := codeMapCheckDeadline(deadline); err != nil {
 		return nil, false, err
 	}
@@ -257,7 +257,7 @@ func readCodeMapCache(directory, parser string, deadline time.Time) (*codeMapMan
 	if err != nil {
 		return nil, false, err
 	}
-	defer lock.Close()
+	defer func() { retErr = errors.Join(retErr, lock.Close()) }()
 	if info, statErr := lock.Stat(); statErr != nil {
 		return nil, false, statErr
 	} else if info.Size() == 0 {
@@ -274,7 +274,7 @@ func readCodeMapCache(directory, parser string, deadline time.Time) (*codeMapMan
 		}
 		time.Sleep(min(10*time.Millisecond, time.Until(deadline)))
 	}
-	defer contextio.Unlock(lock)
+	defer func() { retErr = errors.Join(retErr, contextio.Unlock(lock)) }()
 	if err = codeMapCheckDeadline(deadline); err != nil {
 		return nil, false, err
 	}

@@ -29,7 +29,7 @@ func RunProbe(prefix []string, model string, timeout time.Duration) map[string]a
 	if err != nil {
 		return ProbeResult(nil, err.Error(), false, false, -1, false)
 	}
-	defer os.RemoveAll(cwd)
+	defer func() { _ = os.RemoveAll(cwd) }()
 	outputPath := filepath.Join(cwd, "last-message.txt")
 	command := ProbeCommand(prefix, cwd, model, outputPath)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

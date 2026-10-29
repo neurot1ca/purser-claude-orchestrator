@@ -1569,7 +1569,7 @@ var (
 // persistObservation mirrors telemetry.emit's best-effort append contract.
 // On lock contention the complete event is atomically spooled and is not
 // written to the task index until a later recovery pass merges it.
-func persistObservation(root string, event map[string]any) (string, error) {
+func persistObservation(root string, event map[string]any) (status string, retErr error) {
 	eventID, ok := event["event_id"].(string)
 	if !ok || !observationID.MatchString(eventID) {
 		return "TELEMETRY_EMIT_FAILED", fmt.Errorf("invalid telemetry event id")
@@ -1587,7 +1587,12 @@ func persistObservation(root string, event map[string]any) (string, error) {
 	if err != nil {
 		return "TELEMETRY_EMIT_FAILED", err
 	}
-	defer lock.Close()
+	defer func() {
+		retErr = errors.Join(retErr, lock.Close())
+		if retErr != nil && status == "" {
+			status = "TELEMETRY_EMIT_FAILED"
+		}
+	}()
 	if err = contextio.TryLock(lock); err != nil {
 		spool := filepath.Join(events, "spool", eventID+".json")
 		if err = atomicObservationJSON(spool, encoded); err != nil {
@@ -1595,7 +1600,12 @@ func persistObservation(root string, event map[string]any) (string, error) {
 		}
 		return "", nil
 	}
-	defer contextio.Unlock(lock)
+	defer func() {
+		retErr = errors.Join(retErr, contextio.Unlock(lock))
+		if retErr != nil && status == "" {
+			status = "TELEMETRY_EMIT_FAILED"
+		}
+	}()
 	if err = mergeObservationSpool(root); err != nil {
 		return "TELEMETRY_SPOOL_MERGE_FAILED", err
 	}
@@ -1825,7 +1835,7 @@ func appendObservationRecord(path string, encoded []byte) error {
 	return closeErr
 }
 
-func atomicObservationJSON(path string, encoded []byte) error {
+func atomicObservationJSON(path string, encoded []byte) (retErr error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -1834,7 +1844,11 @@ func atomicObservationJSON(path string, encoded []byte) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() {
+		if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retErr = errors.Join(retErr, err)
+		}
+	}()
 	if _, err = f.Write(encoded); err == nil {
 		err = f.Sync()
 	}
@@ -1851,7 +1865,7 @@ func atomicObservationJSON(path string, encoded []byte) error {
 var observationProjectionNow = time.Now
 var renameObservationNote = os.Rename
 
-func atomicObservationNote(path, content string) error {
+func atomicObservationNote(path, content string) (retErr error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -1865,7 +1879,11 @@ func atomicObservationNote(path, content string) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() {
+		if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retErr = errors.Join(retErr, err)
+		}
+	}()
 	if _, err = io.WriteString(f, content); err == nil {
 		err = f.Sync()
 	}
@@ -2245,7 +2263,7 @@ func readClaudeUsagePayload(stateRoot string, now time.Time, eventType string) m
 	if err != nil {
 		return unknown
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, claudeUsageSnapshotLimit+1))
 	if err != nil || len(data) > claudeUsageSnapshotLimit {
 		return unknown

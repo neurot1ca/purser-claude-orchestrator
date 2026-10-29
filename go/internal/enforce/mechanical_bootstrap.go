@@ -583,7 +583,7 @@ func runMechanicalBootstrapTask(ctx context.Context, root, model, task string, t
 	if err != nil {
 		return false
 	}
-	defer os.RemoveAll(scratch)
+	defer func() { _ = os.RemoveAll(scratch) }()
 	if copyEmbeddedTree(input, scratch) != nil {
 		return false
 	}

@@ -273,7 +273,7 @@ func runMechanicalShadow(ctx context.Context, job mechanicalShadowJob, executabl
 	if err = os.Mkdir(scratch, 0700); err != nil {
 		return outcome, err
 	}
-	defer os.RemoveAll(scratch)
+	defer func() { _ = os.RemoveAll(scratch) }()
 	if err = copyMechanicalShadow(source, scratch); err != nil {
 		return outcome, err
 	}

@@ -83,7 +83,7 @@ func LoadTaskAttempt(root, projectKey, taskID string) (TaskAttempt, string, erro
 
 // SaveTaskAttempt serializes updates and keeps failure evidence sticky across
 // later attempt records. The record is self-contained after job cleanup.
-func SaveTaskAttempt(root string, update TaskAttempt) error {
+func SaveTaskAttempt(root string, update TaskAttempt) (retErr error) {
 	if root == "" || update.ProjectKey == "" || update.TaskID == "" {
 		return errors.New("task attempt identity is incomplete")
 	}
@@ -92,7 +92,7 @@ func SaveTaskAttempt(root string, update TaskAttempt) error {
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { retErr = errors.Join(retErr, unlock()) }()
 	current, status, err := LoadTaskAttempt(root, update.ProjectKey, update.TaskID)
 	if err != nil {
 		return err

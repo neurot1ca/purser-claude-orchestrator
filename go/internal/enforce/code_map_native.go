@@ -91,7 +91,7 @@ func refreshCodeMapNativeWithLimit(repo, stateRoot string, budget, maxBudget tim
 	if err != nil {
 		return fail()
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	info, statErr := lock.Stat()
 	if statErr != nil {
 		return fail()
@@ -107,7 +107,7 @@ func refreshCodeMapNativeWithLimit(repo, stateRoot string, budget, maxBudget tim
 		}
 		time.Sleep(min(10*time.Millisecond, time.Until(deadline)))
 	}
-	defer contextio.Unlock(lock)
+	defer func() { _ = contextio.Unlock(lock) }()
 	if codeMapCheckDeadline(deadline) != nil {
 		return fail()
 	}
