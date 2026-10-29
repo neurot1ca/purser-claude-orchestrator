@@ -37,14 +37,22 @@ func stopTurn(event map[string]any, processStart time.Time) {
 	if err != nil {
 		return
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "contextio: stop-turn lock close failed: %v\n", err)
+		}
+	}()
 	if info, _ := lock.Stat(); info != nil && info.Size() == 0 {
 		_, _ = lock.WriteAt([]byte("0"), 0)
 	}
 	deadline := time.Now().Add(50 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if tryLock(lock) == nil {
-			defer unlock(lock)
+			defer func() {
+				if err := unlock(lock); err != nil {
+					_, _ = fmt.Fprintf(os.Stderr, "contextio: stop-turn lock unlock failed: %v\n", err)
+				}
+			}()
 			if _, err := os.Stat(completed); err == nil {
 				if _, err := os.Stat(journal); os.IsNotExist(err) {
 					return
@@ -180,7 +188,7 @@ func contextTurnEvent(turn map[string]any, session string, internal, wall time.D
 	return map[string]any{"schema_version": 1, "event_id": id, "ts_utc": started.UTC().Format(time.RFC3339Nano), "event_type": "CONTEXT_IO_TURN_RECORDED", "task_id": taskID, "project_key": projectKey, "session_id": sessionID, "repo": nil, "branch": nil, "agent_id": nil, "agent_type": nil, "payload": payload}
 }
 
-func persistContextTurn(event map[string]any) bool {
+func persistContextTurn(event map[string]any) (ok bool) {
 	if event["event_type"] != "CONTEXT_IO_TURN_RECORDED" || number(event["schema_version"]) != 1 {
 		return false
 	}
@@ -198,14 +206,24 @@ func persistContextTurn(event map[string]any) bool {
 	if err != nil {
 		return false
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "contextio: telemetry lock close failed: %v\n", err)
+			ok = false
+		}
+	}()
 	if info, _ := lock.Stat(); info != nil && info.Size() == 0 {
 		_, _ = lock.WriteAt([]byte("0"), 0)
 	}
 	if tryLock(lock) != nil {
 		return false
 	}
-	defer unlock(lock)
+	defer func() {
+		if err := unlock(lock); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "contextio: telemetry lock unlock failed: %v\n", err)
+			ok = false
+		}
+	}()
 	stamp := str(event["ts_utc"])
 	if len(stamp) < 7 || !safeContextMonth.MatchString(stamp[:7]) {
 		return false
@@ -282,7 +300,9 @@ func appendEventOnce(path string, event map[string]any) bool {
 	return err == nil && closeErr == nil
 }
 
-func repairOwnPartialRecord(path string, data []byte) bool {
+var stopTurnFileClose = func(file *os.File) error { return file.Close() }
+
+func repairOwnPartialRecord(path string, data []byte) (repaired bool) {
 	file, err := os.OpenFile(path, os.O_RDWR, 0600)
 	if os.IsNotExist(err) {
 		return true
@@ -290,7 +310,12 @@ func repairOwnPartialRecord(path string, data []byte) bool {
 	if err != nil {
 		return false
 	}
-	defer file.Close()
+	defer func() {
+		if err := stopTurnFileClose(file); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "contextio: partial-record repair close failed: %v\n", err)
+			repaired = false
+		}
+	}()
 	info, err := file.Stat()
 	if err != nil || info.Size() == 0 {
 		return err == nil

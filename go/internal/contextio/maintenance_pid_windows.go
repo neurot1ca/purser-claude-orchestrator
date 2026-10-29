@@ -3,6 +3,8 @@
 package contextio
 
 import (
+	"fmt"
+	"os"
 	"syscall"
 )
 
@@ -16,7 +18,9 @@ func maintenancePIDAlive(pid int) bool {
 	if handle == 0 {
 		return openErr == syscall.Errno(5) || openErr != syscall.Errno(87)
 	}
-	defer maintenanceCloseHandle.Call(handle)
 	wait, _, _ := maintenanceWaitProcess.Call(handle, 0)
+	if result, _, closeErr := maintenanceCloseHandle.Call(handle); result == 0 {
+		_, _ = fmt.Fprintf(os.Stderr, "contextio: CloseHandle failed: %v\n", closeErr)
+	}
 	return wait != 0
 }

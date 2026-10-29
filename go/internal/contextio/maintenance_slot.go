@@ -24,6 +24,8 @@ var maintenanceTerminalJobs = map[string]bool{
 	"TIMED_OUT": true, "UNKNOWN_OR_IN_PROGRESS": true,
 }
 
+var maintenanceSlotClose = func(file *os.File) error { return file.Close() }
+
 // AcquireMaintenanceSlot owns the global maintenance slot until release is called.
 func AcquireMaintenanceSlot(state string) (func(), error) {
 	path := filepath.Join(state, "maintenance", "active.json")
@@ -55,18 +57,20 @@ func createMaintenanceSlot(path string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 	data := []byte(fmt.Sprintf(`{"pid": %d, "started_at": %s}`, os.Getpid(), strconv.FormatFloat(float64(time.Now().UnixNano())/1e9, 'g', -1, 64)))
-	if err == nil {
-		_, err = file.Write(data)
-	}
+	_, err = file.Write(data)
 	if err == nil {
 		err = file.Sync()
 	}
+	closeErr := maintenanceSlotClose(file)
 	if err != nil {
 		_ = os.Remove(path)
+		return err
 	}
-	return err
+	if closeErr != nil {
+		_ = os.Remove(path)
+	}
+	return closeErr
 }
 
 func maintenanceGlobalSlotStale(path string, now time.Time) bool {

@@ -2,6 +2,8 @@ package contextio
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 var stopRetryJobID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var stopRetryDenial = regexp.MustCompile(`(?is)(?:classifier.{0,60}(?:no verdict|unavailable)|(?:no verdict|unavailable).{0,60}classifier)`)
 var stopRetryJobSanitize = regexp.MustCompile(`(?i)[0-9a-f]{64}`)
+var stopRetryAcquireLock = LockFile
 
 type stopRetryCall struct {
 	id, name string
@@ -115,11 +118,15 @@ func persistCodexRetry(path, session, reason string) string {
 	if path == "" || session == "" || reason == "" {
 		return ""
 	}
-	unlock, err := LockFile(path + ".lock")
+	unlock, err := stopRetryAcquireLock(path + ".lock")
 	if err != nil {
 		return ""
 	}
-	defer unlock()
+	defer func() {
+		if err := unlock(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "contextio: codex-retry lock release failed: %v\n", err)
+		}
+	}()
 	state := readAdvisorState(path, session)
 	count, ok := stopRetryCount(state["codex_retry_count"])
 	if !ok {
