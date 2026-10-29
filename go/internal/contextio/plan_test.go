@@ -215,21 +215,23 @@ func TestParsePlanMilestoneDependencyCommentary(t *testing.T) {
 		{"colon glued ID", "M1:M2", 2, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			artifact := "## Milestones\n### M1\n**Dependency:** none\n**Write paths:** src/a.go\n### M2\n**Dependency:** none\n**Write paths:** src/b.go\n"
-			if tc.milestone == 1 {
+			var artifact string
+			switch tc.milestone {
+			case 1:
 				artifact = "## Milestones\n### M1\n**Dependency:** " + tc.dependency + "\n**Write paths:** src/a.go\n"
-			} else if tc.milestone == 2 {
+			case 2:
 				artifact = "## Milestones\n### M1\n**Dependency:** none\n**Write paths:** src/a.go\n### M2\n**Dependency:** " + tc.dependency + "\n**Write paths:** src/b.go\n"
-			} else {
+			default:
 				artifact = "## Milestones\n### M1\n**Dependency:** none\n**Write paths:** src/a.go\n### M2\n**Dependency:** none\n**Write paths:** src/b.go\n### M3\n**Dependency:** " + tc.dependency + "\n**Write paths:** src/c.go\n"
 			}
 			if tc.name == "none with explanation" {
 				artifact = strings.ReplaceAll(artifact, "\n", "\r\n")
 			}
 			ids := []int{1}
-			if tc.milestone == 2 {
+			switch tc.milestone {
+			case 2:
 				ids = []int{1, 2}
-			} else if tc.milestone == 3 {
+			case 3:
 				ids = []int{1, 2, 3}
 			}
 			milestones, err := parsePlanMilestones([]byte(artifact), ids)
@@ -493,7 +495,7 @@ func TestCompletedPassedMilestoneRemainsReadyAfterLaterValidation(t *testing.T) 
 	if err := os.WriteFile(artifact, []byte(readyPlanArtifact), 0600); err != nil {
 		t.Fatal(err)
 	}
-	state, err := AcceptPlan(root, repo, "graph", artifact, []int{1, 2, 3})
+	_, err := AcceptPlan(root, repo, "graph", artifact, []int{1, 2, 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +525,7 @@ func TestCompletedPassedMilestoneRemainsReadyAfterLaterValidation(t *testing.T) 
 	if err := RecordPlanValidation(root, repo, "graph-m1of3", "job-1", "PASS"); err != nil {
 		t.Fatal(err)
 	}
-	state, err = ReadPlanForTask(root, repo, "graph")
+	state, err := ReadPlanForTask(root, repo, "graph")
 	if err != nil || !containsMilestone(state.CompletedMilestones, 1) || !planDependenciesDone(state, 3) {
 		t.Fatalf("passed completion did not satisfy M3: %+v %v", state, err)
 	}
@@ -854,12 +856,11 @@ func TestPlanProjectPathMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "projects", state.ProjectKey, "active_plan.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
+	if _, err := os.ReadFile(path); err != nil {
 		t.Fatal(err)
 	}
 	state.ProjectRoot = filepath.Join(filepath.Dir(repo), "other")
-	data, err = json.Marshal(state)
+	data, err := json.Marshal(state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1004,7 +1005,7 @@ func TestPlanCollectionCoexistence(t *testing.T) {
 		t.Fatalf("legacy read migrated state: %v", err)
 	}
 	beforeA := *a
-	b, err := AcceptPlan(root, repo, "plan-b", artifact, []int{1, 2})
+	_, err = AcceptPlan(root, repo, "plan-b", artifact, []int{1, 2})
 	if err != nil {
 		t.Fatalf("accept B alongside A: %v", err)
 	}
@@ -1060,18 +1061,18 @@ func TestPlanCollectionCoexistence(t *testing.T) {
 
 func TestPlanPassDoesNotCompleteMilestoneAutomatically(t *testing.T) {
 	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
+	_, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _, err = BindPlanJob(root, repo, "plan-1-m1of2-p1", "job-p1")
+	_, _, err = BindPlanJob(root, repo, "plan-1-m1of2-p1", "job-p1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = RecordPlanApply(root, repo, "plan-1-m1of2-p1", "job-p1"); err != nil {
 		t.Fatal(err)
 	}
-	state, err = ReadPlan(root, repo)
+	state, err := ReadPlan(root, repo)
 	if err != nil || state.CurrentMilestone != 1 || state.PendingNextAction != "dispatch" || len(state.CompletedMilestones) != 0 {
 		t.Fatalf("pass apply completed milestone: %+v, %v", state, err)
 	}
@@ -1147,17 +1148,17 @@ func containsReady(ready []ReadyMilestone, id string) bool {
 
 func TestPlanPlainMilestoneApplyCompletes(t *testing.T) {
 	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
+	_, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state, _, err = BindPlanJob(root, repo, "plan-1-m1of2", "job-milestone"); err != nil {
+	if _, _, err = BindPlanJob(root, repo, "plan-1-m1of2", "job-milestone"); err != nil {
 		t.Fatal(err)
 	}
 	if err = RecordPlanApply(root, repo, "plan-1-m1of2", "job-milestone"); err != nil {
 		t.Fatal(err)
 	}
-	state, err = ReadPlan(root, repo)
+	state, err := ReadPlan(root, repo)
 	if err != nil || state.CurrentMilestone != 2 || len(state.CompletedMilestones) != 1 || state.CompletedMilestones[0] != 1 {
 		t.Fatalf("plain milestone apply did not complete: %+v, %v", state, err)
 	}
@@ -1165,7 +1166,7 @@ func TestPlanPlainMilestoneApplyCompletes(t *testing.T) {
 
 func TestPlanParallelDispatchesBothRecord(t *testing.T) {
 	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
+	_, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1173,7 +1174,7 @@ func TestPlanParallelDispatchesBothRecord(t *testing.T) {
 	if err != nil || !matched {
 		t.Fatalf("first dispatch matched=%v err=%v", matched, err)
 	}
-	state, matched, err = BindPlanJob(root, repo, "plan-1-m1of1-p2c", "job-b")
+	state, matched, err := BindPlanJob(root, repo, "plan-1-m1of1-p2c", "job-b")
 	if err != nil || !matched || len(state.LinkedJobs) != 2 || state.PendingNextAction != "apply" {
 		t.Fatalf("parallel dispatch was not linked: state=%+v matched=%v err=%v", state, matched, err)
 	}
@@ -1191,15 +1192,15 @@ func TestPlanParallelDispatchesBothRecord(t *testing.T) {
 
 func TestPlanBindsNonCurrentFixPasses(t *testing.T) {
 	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
+	_, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, matched, err := BindPlanJob(root, repo, "plan-1-m2of2-p2", "job-p2")
+	_, matched, err := BindPlanJob(root, repo, "plan-1-m2of2-p2", "job-p2")
 	if err != nil || !matched {
 		t.Fatalf("non-current pass matched=%v err=%v", matched, err)
 	}
-	state, matched, err = BindPlanJob(root, repo, "plan-1-m2of2-p2-fix", "job-p2-fix")
+	state, matched, err := BindPlanJob(root, repo, "plan-1-m2of2-p2-fix", "job-p2-fix")
 	if err != nil || !matched || state.CurrentMilestone != 1 || len(state.LinkedJobs) != 2 {
 		t.Fatalf("fix pass binding = %+v matched=%v err=%v", state, matched, err)
 	}
@@ -1207,11 +1208,11 @@ func TestPlanBindsNonCurrentFixPasses(t *testing.T) {
 
 func TestPlanRecoveryRecordsAppliedJobAfterInterruptedWrite(t *testing.T) {
 	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
+	_, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1", "job-applied")
+	_, _, err = BindPlanJob(root, repo, "plan-1-m1of1", "job-applied")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1223,7 +1224,7 @@ func TestPlanRecoveryRecordsAppliedJobAfterInterruptedWrite(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(jobDir, "job-applied.json"), job, 0600); err != nil {
 		t.Fatal(err)
 	}
-	state, err = ReconcilePlanJob(root, repo)
+	state, err := ReconcilePlanJob(root, repo)
 	if err != nil || len(state.LinkedJobs) != 0 || state.CurrentMilestone != 0 || state.PendingNextAction != "" || len(state.AppliedPasses) != 1 || len(state.CompletedMilestones) != 1 {
 		t.Fatalf("applied job recovery = %+v, %v", state, err)
 	}
@@ -1231,11 +1232,11 @@ func TestPlanRecoveryRecordsAppliedJobAfterInterruptedWrite(t *testing.T) {
 
 func TestPlanTerminalJobRecoveryKeepsProgress(t *testing.T) {
 	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
+	_, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-failed")
+	_, _, err = BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-failed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1247,7 +1248,7 @@ func TestPlanTerminalJobRecoveryKeepsProgress(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(jobDir, "job-failed.json"), job, 0600); err != nil {
 		t.Fatal(err)
 	}
-	state, err = ReconcilePlanJob(root, repo)
+	state, err := ReconcilePlanJob(root, repo)
 	if err != nil || len(state.LinkedJobs) != 0 || state.CurrentMilestone != 1 || state.PendingNextAction != "dispatch" || len(state.AppliedPasses) != 0 {
 		t.Fatalf("failed job recovery = %+v, %v", state, err)
 	}
@@ -1272,11 +1273,11 @@ func TestPlanTaskIdentityAndWindowsPathSpelling(t *testing.T) {
 
 func TestPlanCompleteMilestoneRefusesOpenLinkedJob(t *testing.T) {
 	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
+	_, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _, err = BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-open")
+	state, _, err := BindPlanJob(root, repo, "plan-1-m1of1-p1c", "job-open")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1297,15 +1298,15 @@ func TestPlanCompleteMilestoneRefusesOpenLinkedJob(t *testing.T) {
 
 func TestPlanCompleteMilestoneClearsSupersededAndMissingJobs(t *testing.T) {
 	root, repo, artifact := planFixture(t)
-	state, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
+	_, err := AcceptPlan(root, repo, "plan-1", artifact, []int{1, 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _, err = BindPlanJob(root, repo, "plan-1-m1of2-p1c", "job-superseded")
+	_, _, err = BindPlanJob(root, repo, "plan-1-m1of2-p1c", "job-superseded")
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _, err = BindPlanJob(root, repo, "plan-1-m1of2-p2c", "job-missing")
+	state, _, err := BindPlanJob(root, repo, "plan-1-m1of2-p2c", "job-missing")
 	if err != nil {
 		t.Fatal(err)
 	}

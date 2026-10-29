@@ -78,7 +78,7 @@ func TestPlanStopContinuationLifecycle(t *testing.T) {
 	if stopped := planStop(t, repo, transcript, false); stopped != "" {
 		t.Fatalf("explicitly stopped plan blocked: %q", stopped)
 	}
-	state, err = UpdatePlan(root, repo, "plan-1", state.Revision, "resume", "")
+	_, err = UpdatePlan(root, repo, "plan-1", state.Revision, "resume", "")
 	if err != nil {
 		t.Fatal(err)
 	}

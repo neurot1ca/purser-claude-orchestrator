@@ -39,13 +39,3 @@ func TestPlanCodexDispatchedDetectsDispatcher(t *testing.T) {
 		t.Fatal("dispatcher suppression did not follow the identified plan")
 	}
 }
-
-func latestGenuineUser(records []map[string]any) int {
-	latest := -1
-	for i, record := range records {
-		if genuineTranscriptUser(record) {
-			latest = i
-		}
-	}
-	return latest
-}
