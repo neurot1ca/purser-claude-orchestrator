@@ -575,7 +575,7 @@ func writePlans(path string, states []*PlanState) error {
 	return writePlanJSONAtomically(path, collection)
 }
 
-func ReadPlan(root, repository string) (*PlanState, error) {
+func ReadPlan(root, repository string) (_ *PlanState, resultErr error) {
 	path, canonical, err := planPath(root, repository)
 	if err != nil {
 		return nil, err
@@ -584,7 +584,7 @@ func ReadPlan(root, repository string) (*PlanState, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	states, err := readPlans(path)
 	if err != nil {
 		return nil, err
@@ -631,7 +631,7 @@ func ReadPlan(root, repository string) (*PlanState, error) {
 }
 
 // ReadPlanForTask returns one exact plan record, including stopped or completed plans.
-func ReadPlanForTask(root, repository, taskID string) (*PlanState, error) {
+func ReadPlanForTask(root, repository, taskID string) (_ *PlanState, resultErr error) {
 	path, canonical, err := planPath(root, repository)
 	if err != nil {
 		return nil, err
@@ -640,7 +640,7 @@ func ReadPlanForTask(root, repository, taskID string) (*PlanState, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	states, err := readPlans(path)
 	if err != nil {
 		return nil, err
@@ -666,7 +666,7 @@ func ReadPlanForTask(root, repository, taskID string) (*PlanState, error) {
 	return state, nil
 }
 
-func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (*PlanState, error) {
+func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (_ *PlanState, resultErr error) {
 	if taskID == "" || len(milestones) == 0 {
 		return nil, errors.New("task id and accepted milestones are required")
 	}
@@ -694,7 +694,7 @@ func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (*P
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	states, err := readPlans(path)
 	if err == nil {
 		if err := checkPlanProjects(states, canonical); err != nil {
@@ -738,7 +738,7 @@ func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (*P
 	return state, nil
 }
 
-func UpdatePlan(root, repository, taskID string, expectedRevision int, operation, value string) (*PlanState, error) {
+func UpdatePlan(root, repository, taskID string, expectedRevision int, operation, value string) (_ *PlanState, resultErr error) {
 	path, canonical, err := planPath(root, repository)
 	if err != nil {
 		return nil, err
@@ -747,7 +747,7 @@ func UpdatePlan(root, repository, taskID string, expectedRevision int, operation
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	states, err := readPlans(path)
 	if err != nil {
 		return nil, err
@@ -835,7 +835,7 @@ var plainPlanTaskSuffix = regexp.MustCompile(`^([0-9]+)of([0-9]+)$`)
 // BindPlanJob links a pass to its accepted, unfinished milestone. The plan
 // lock serializes updates, but bindings do not require a caller revision:
 // independent passes may be linked concurrently.
-func BindPlanJob(root, repository, taskID, jobID string) (*PlanState, bool, error) {
+func BindPlanJob(root, repository, taskID, jobID string) (_ *PlanState, _ bool, resultErr error) {
 	path, canonical, err := planPath(root, repository)
 	if err != nil {
 		return nil, false, err
@@ -844,7 +844,7 @@ func BindPlanJob(root, repository, taskID, jobID string) (*PlanState, bool, erro
 	if err != nil {
 		return nil, false, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	states, err := readPlans(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
@@ -900,7 +900,7 @@ func missingPlanDependencies(state *PlanState, milestone int) []string {
 
 // RecordPlanApply records an explicitly applied pass and advances a plain
 // milestone job when no linked work remains.
-func RecordPlanApply(root, repository, taskID, jobID string) error {
+func RecordPlanApply(root, repository, taskID, jobID string) (resultErr error) {
 	path, canonical, err := planPath(root, repository)
 	if err != nil {
 		return err
@@ -909,7 +909,7 @@ func RecordPlanApply(root, repository, taskID, jobID string) error {
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	states, err := readPlans(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -954,7 +954,7 @@ func RecordPlanApply(root, repository, taskID, jobID string) error {
 }
 
 // RecordPlanValidation updates readiness and settles earlier applied passes in the project.
-func RecordPlanValidation(root, repository, taskID, jobID, status string) error {
+func RecordPlanValidation(root, repository, taskID, jobID, status string) (resultErr error) {
 	if _, ok := knownPlanValidationStates[status]; !ok {
 		return fmt.Errorf("invalid plan validation status %q", status)
 	}
@@ -966,7 +966,7 @@ func RecordPlanValidation(root, repository, taskID, jobID, status string) error 
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	states, err := readPlans(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -1012,7 +1012,7 @@ func milestoneForPass(state *PlanState, jobID string) int {
 
 // ReconcilePlanJob clears a terminal link and recovers an applied pass
 // if the job write landed before the plan progress write.
-func ReconcilePlanJob(root, repository string) (*PlanState, error) {
+func ReconcilePlanJob(root, repository string) (_ *PlanState, resultErr error) {
 	path, canonical, err := planPath(root, repository)
 	if err != nil {
 		return nil, err
@@ -1021,7 +1021,7 @@ func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	states, err := readPlans(path)
 	if err != nil {
 		return nil, err
@@ -1112,7 +1112,7 @@ func ReconcilePlanJob(root, repository string) (*PlanState, error) {
 
 // ReconcilePlans reconciles every unfinished plan independently and returns
 // the unfinished records in collection order.
-func ReconcilePlans(root, repository string) ([]*PlanState, error) {
+func ReconcilePlans(root, repository string) (_ []*PlanState, resultErr error) {
 	path, canonical, err := planPath(root, repository)
 	if err != nil {
 		return nil, err
@@ -1121,7 +1121,7 @@ func ReconcilePlans(root, repository string) ([]*PlanState, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	states, err := readPlans(path)
 	if err != nil {
 		return nil, err
@@ -1206,7 +1206,7 @@ func ReconcilePlans(root, repository string) ([]*PlanState, error) {
 
 // PlanReadiness returns the ready passes under the existing plan lock for
 // the plan that owns taskID.
-func PlanReadiness(root, repository, taskID string) ([]ReadyMilestone, error) {
+func PlanReadiness(root, repository, taskID string) (_ []ReadyMilestone, resultErr error) {
 	path, canonical, err := planPath(root, repository)
 	if err != nil {
 		return nil, err
@@ -1215,7 +1215,7 @@ func PlanReadiness(root, repository, taskID string) ([]ReadyMilestone, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	states, err := readPlans(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -1460,7 +1460,7 @@ nextMilestone:
 				return nil
 			}
 			data, err := io.ReadAll(io.LimitReader(file, (64<<10)+1))
-			file.Close()
+			_ = file.Close()
 			if err != nil {
 				return nil
 			}

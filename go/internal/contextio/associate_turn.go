@@ -9,7 +9,7 @@ import (
 )
 
 // AssociateTurn binds the current context journal to a task and project.
-func AssociateTurn(stateRoot, sessionID string, taskID any, projectKey any) bool {
+func AssociateTurn(stateRoot, sessionID string, taskID any, projectKey any) (associated bool) {
 	if sessionID == "" || utf8.RuneCountInString(sessionID) > 512 {
 		return false
 	}
@@ -31,7 +31,11 @@ func AssociateTurn(stateRoot, sessionID string, taskID any, projectKey any) bool
 		markContention(contention)
 		return false
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			associated = false
+		}
+	}()
 	if info, _ := f.Stat(); info != nil && info.Size() == 0 {
 		_, _ = f.WriteAt([]byte("0"), 0)
 	}
@@ -48,7 +52,11 @@ func AssociateTurn(stateRoot, sessionID string, taskID any, projectKey any) bool
 		markContention(contention)
 		return false
 	}
-	defer unlock(f)
+	defer func() {
+		if err := unlock(f); err != nil {
+			associated = false
+		}
+	}()
 
 	turn, loadErr := loadTurn(journal)
 	if turn == nil {

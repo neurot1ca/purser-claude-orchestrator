@@ -26,7 +26,7 @@ func ProjectKey(repository string) string {
 	return projectkey.For(repository)
 }
 
-func Gear(root, projectKey string) (bool, error) {
+func Gear(root, projectKey string) (gear bool, resultErr error) {
 	if !validGearProjectKey.MatchString(projectKey) {
 		return false, errors.New("invalid project key")
 	}
@@ -35,7 +35,7 @@ func Gear(root, projectKey string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	return readGear(path)
 }
 
@@ -60,7 +60,7 @@ func readGear(path string) (bool, error) {
 	return true, nil
 }
 
-func SetGear(root, projectKey, gear string) error {
+func SetGear(root, projectKey, gear string) (resultErr error) {
 	if !validGearProjectKey.MatchString(projectKey) || (gear != "up" && gear != "down") {
 		return errors.New("invalid gear state")
 	}
@@ -69,7 +69,7 @@ func SetGear(root, projectKey, gear string) error {
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	if gear == "down" {
 		err := os.Remove(path)
 		if errors.Is(err, os.ErrNotExist) {
@@ -84,7 +84,7 @@ func SetGear(root, projectKey, gear string) error {
 }
 
 // CoderEffort returns the project's optional Codex reasoning effort override.
-func CoderEffort(root, projectKey string) (string, error) {
+func CoderEffort(root, projectKey string) (effort string, resultErr error) {
 	if !validGearProjectKey.MatchString(projectKey) {
 		return "", errors.New("invalid project key")
 	}
@@ -93,7 +93,7 @@ func CoderEffort(root, projectKey string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
@@ -109,7 +109,7 @@ func CoderEffort(root, projectKey string) (string, error) {
 }
 
 // SetCoderEffort stores a project override; auto removes it.
-func SetCoderEffort(root, projectKey, effort string) error {
+func SetCoderEffort(root, projectKey, effort string) (resultErr error) {
 	if !validGearProjectKey.MatchString(projectKey) || effort != "auto" && !validCoderEffort(effort) {
 		return errors.New("invalid coder effort")
 	}
@@ -118,7 +118,7 @@ func SetCoderEffort(root, projectKey, effort string) error {
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	if effort == "auto" {
 		err := os.Remove(path)
 		if errors.Is(err, os.ErrNotExist) {

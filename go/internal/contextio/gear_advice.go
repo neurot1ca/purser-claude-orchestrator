@@ -3,6 +3,7 @@ package contextio
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -140,7 +141,7 @@ func parseGearQuotaWindow(snapshot map[string]any, label string, now time.Time) 
 
 // ClaimGearAdvice atomically reserves one shared suggestion for a quota source
 // and governing window. A different reset timestamp naturally permits a claim.
-func ClaimGearAdvice(root, sourceIdentity, windowID string, advice GearAdvice) (bool, error) {
+func ClaimGearAdvice(root, sourceIdentity, windowID string, advice GearAdvice) (claimed bool, resultErr error) {
 	if root == "" || sourceIdentity == "" || windowID == "" || advice != GearAdviceUp && advice != GearAdviceDown {
 		return false, os.ErrInvalid
 	}
@@ -150,7 +151,7 @@ func ClaimGearAdvice(root, sourceIdentity, windowID string, advice GearAdvice) (
 	if err != nil {
 		return false, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	if _, err := os.Stat(path); err == nil {
 		return false, nil
 	} else if !os.IsNotExist(err) {

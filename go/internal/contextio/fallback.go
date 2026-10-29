@@ -86,12 +86,12 @@ func writeActiveCoderState(path string, value map[string]any) error {
 	return writeJSONAtomically(path, value)
 }
 
-func updateActiveCoderState(path string, change func(map[string]any)) (map[string]any, error) {
+func updateActiveCoderState(path string, change func(map[string]any)) (_ map[string]any, resultErr error) {
 	unlock, err := LockFile(path + ".lock")
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	value, err := readActiveCoderState(path)
 	if err != nil {
 		return nil, err
@@ -103,13 +103,13 @@ func updateActiveCoderState(path string, change func(map[string]any)) (map[strin
 	return value, nil
 }
 
-func readProjectActiveCoder(project, root string) (map[string]any, error) {
+func readProjectActiveCoder(project, root string) (_ map[string]any, resultErr error) {
 	path := activeCoderPath(project, root)
 	unlock, err := LockFile(path + ".lock")
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	return readActiveCoderState(path)
 }
 
@@ -138,13 +138,13 @@ func RecordFallbackQuestion(project, root string, evidence map[string]any, sessi
 	return recorded, err
 }
 
-func writeProjectActiveCoder(project, root string, value map[string]any) error {
+func writeProjectActiveCoder(project, root string, value map[string]any) (resultErr error) {
 	path := activeCoderPath(project, root)
 	unlock, err := LockFile(path + ".lock")
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	return writeActiveCoderState(path, value)
 }
 

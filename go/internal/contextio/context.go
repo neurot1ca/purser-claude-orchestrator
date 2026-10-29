@@ -181,7 +181,7 @@ func gitTopLevel(directory string) (string, error) {
 // ProjectRoot resolves the repository associated with a hook event.
 func ProjectRoot(event map[string]any) string { return projectRoot(event) }
 
-func Read(event map[string]any, processStart time.Time) error {
+func Read(event map[string]any, processStart time.Time) (resultErr error) {
 	started := time.Now()
 	key := sessionKey(event["session_id"])
 	if key == "" {
@@ -198,7 +198,7 @@ func Read(event map[string]any, processStart time.Time) error {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { resultErr = errors.Join(resultErr, f.Close()) }()
 	if st, _ := f.Stat(); st != nil && st.Size() == 0 {
 		_, _ = f.WriteAt([]byte("0"), 0)
 	}
@@ -215,7 +215,7 @@ func Read(event map[string]any, processStart time.Time) error {
 		markContention(contention)
 		return nil
 	}
-	defer unlock(f)
+	defer func() { resultErr = errors.Join(resultErr, unlock(f)) }()
 	turn, reason := loadTurn(journal)
 	if turn == nil {
 		turn = newTurn(reason)
@@ -327,7 +327,7 @@ func num(v any) float64 {
 	}
 	return 0
 }
-func writeTurn(path string, t map[string]any) error {
+func writeTurn(path string, t map[string]any) (resultErr error) {
 	b, err := json.Marshal(t)
 	if err != nil {
 		return err
@@ -343,7 +343,11 @@ func writeTurn(path string, t map[string]any) error {
 		return err
 	}
 	name := f.Name()
-	defer os.Remove(name)
+	defer func() {
+		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	if _, err = f.Write(b); err == nil {
 		err = f.Sync()
 	}
@@ -368,7 +372,7 @@ func markContention(path string) {
 	if os.MkdirAll(filepath.Dir(path), 0700) == nil {
 		f, e := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if e == nil {
-			f.Close()
+			_ = f.Close()
 		}
 	}
 }
@@ -562,7 +566,7 @@ func scanFull(path string, byteBudget, lineBudget int) (scanResult, error) {
 	if err != nil {
 		return scanResult{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var r scanResult
 	r.kind = "LOWER_BOUND"
 	eof := false
@@ -622,7 +626,7 @@ func scanTargeted(path string, offset, limit, byteBudget, lineBudget int) (scanR
 	if err != nil {
 		return scanResult{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var r scanResult
 	r.kind = "UNKNOWN"
 	current, selectedLines := 1, 0
