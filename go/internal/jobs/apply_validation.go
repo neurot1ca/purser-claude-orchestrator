@@ -28,7 +28,7 @@ import (
 
 const (
 	validationOutputLimit = 1 << 20
-	validationTimeout     = 5 * time.Minute
+	validationTimeout     = 10 * time.Minute
 )
 
 var launchApplyValidation = LaunchDetached
