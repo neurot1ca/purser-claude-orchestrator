@@ -39,7 +39,7 @@ func TestCursorAutoModelIsPassedToAgent(t *testing.T) {
 
 func TestCursorRejectsUnsupportedOptions(t *testing.T) {
 	for _, in := range []AgentCommandInput{
-		{Agent: "cursor", Prefix: []string{"cursor-agent"}, Tool: "codex", Model: "claude-4.5-sonnet", Sandbox: stringPointer("workspace-write")},
+		{Agent: "cursor", Prefix: []string{"cursor-agent"}, Tool: "codex", Model: "claude-4.5-sonnet", Sandbox: stringPointer("danger-full-access")},
 		{Agent: "cursor", Prefix: []string{"cursor-agent"}, Tool: "codex", Model: "claude-4.5-sonnet", ConfigArgs: []string{`model_reasoning_effort="high"`}},
 	} {
 		if _, err := BuildAgentCommand(in); err == nil {
