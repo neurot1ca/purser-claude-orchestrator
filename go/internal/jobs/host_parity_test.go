@@ -367,9 +367,9 @@ func readHostParityRecord(t *testing.T, dir, id string) *Record {
 		time.Sleep(time.Millisecond)
 	}
 	data, _ := os.ReadFile(path)
-	record, err := Read(path)
+	_, err := Read(path)
 	t.Fatalf("read host parity job: %v; raw=%q", err, data)
-	return record
+	return nil
 }
 
 func normalizeHostParity(t *testing.T, record *Record, root string) map[string]any {

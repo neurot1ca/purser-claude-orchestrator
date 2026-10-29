@@ -45,7 +45,7 @@ func TestApplyReturnsReadyMilestonesAndRefreshesCachedReadiness(t *testing.T) {
 	if !ok || response["isError"] != false || result["applied"] != true {
 		t.Fatalf("apply failed: %#v", response)
 	}
-	ready, ok := result["ready_milestones"].([]contextio.ReadyMilestone)
+	_, ok = result["ready_milestones"].([]contextio.ReadyMilestone)
 	validation, valid := result["validation"].(map[string]any)
 	if ok || !valid || validation["status"] != "pending" {
 		t.Fatalf("apply released dependent before host validation: %#v", result)
@@ -63,7 +63,7 @@ func TestApplyReturnsReadyMilestonesAndRefreshesCachedReadiness(t *testing.T) {
 	if err := contextio.RecordPlanValidation(root, repo, "plan-m1of2", id, "PASS"); err != nil {
 		t.Fatal(err)
 	}
-	ready, err = contextio.PlanReadiness(root, repo, "plan-m1of2")
+	ready, err := contextio.PlanReadiness(root, repo, "plan-m1of2")
 	if err != nil || len(ready) != 1 || ready[0].ID != "M2" {
 		t.Fatalf("passing host validation did not release dependent: %v %v", ready, err)
 	}

@@ -187,7 +187,7 @@ func resultJob(dir, id string, now float64, opt ResultOptions) map[string]any {
 		if root == "" {
 			root = filepath.Dir(filepath.Dir(dir))
 		}
-		hostState := "UNCONFIRMED"
+		var hostState string
 		if opt.RecoverJob != nil {
 			hostState = opt.RecoverJob(id)
 		} else {

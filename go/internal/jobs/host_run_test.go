@@ -724,7 +724,7 @@ func TestReplyAfterCompletedRetirementStaysIsolated(t *testing.T) {
 					}})
 					return hostErr
 				}}
-			result, reply, err := Start(state, map[string]any{
+			_, reply, err := Start(state, map[string]any{
 				"call": "00000000-0000-4000-8000-000000000014", "prompt": "continue", "mode": "reply", "threadId": "reply-thread", "cwd": repo, "worktree": false,
 			}, opt)
 			if err != nil || reply == nil {
@@ -736,7 +736,7 @@ func TestReplyAfterCompletedRetirementStaysIsolated(t *testing.T) {
 				if workerLaunched || job["state"] != "FAILED" || job["errorCode"] != "WORKTREE_SNAPSHOT_FAILED" || !strings.HasPrefix(message, "Worktree snapshot could not be created: creating Git worktree snapshot:") {
 					t.Fatalf("creation failure did not refuse worker launch: launched=%v job=%#v", workerLaunched, job)
 				}
-				result = Result(state, nonemptyString(job["jobId"]), float64(time.Now().UnixNano())/1e9, ResultOptions{})
+				result := Result(state, nonemptyString(job["jobId"]), float64(time.Now().UnixNano())/1e9, ResultOptions{})
 				structured := result["structuredContent"].(map[string]any)
 				if got := nonemptyString(hostResult["message"]); got != message || structured["message"] != message {
 					t.Fatalf("snapshot cause differs between job record and codex_result: record=%q result=%#v host=%#v", message, result, hostResult)

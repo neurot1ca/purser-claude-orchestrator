@@ -74,7 +74,7 @@ func RecoverJob(stateRoot, jobID string, now float64, opt RecoverOptions) string
 	if !pidOK || !createdOK || runtime.GOOS == "windows" && !truthy(values["hostContained"]) {
 		return "UNCONFIRMED"
 	}
-	processState := "UNCONFIRMED"
+	var processState string
 	if opt.ProcessAlive != nil {
 		processState = opt.ProcessAlive(pid, created)
 	} else if created >= 0 {

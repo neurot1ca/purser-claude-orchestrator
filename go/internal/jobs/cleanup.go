@@ -482,9 +482,7 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 			for _, r := range candidates {
 				src = append(src, learning.Source{Path: r.path, Job: r.job})
 			}
-			if d, e := learning.DistillJobs(root, src, current, learning.MaxDistillPerRun, existing); e == nil {
-				distilled = d
-			}
+			_, _ = learning.DistillJobs(root, src, current, learning.MaxDistillPerRun, existing)
 		}
 		// Only the strict, locked checkpoint is an acknowledgement. A failed read
 		// leaves every source job available for a later cleanup pass.
