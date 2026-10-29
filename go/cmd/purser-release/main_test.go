@@ -190,3 +190,132 @@ func TestFailedPluginUpdateResumesWithoutNewCommits(t *testing.T) {
 		t.Fatalf("retry duplicated changelog entry: count=%d", got)
 	}
 }
+
+func TestExpandPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"glob", []string{"--paths", filepath.Join("src", "*.go"), "other.txt", "--dry-run"}, []string{"--path-item=" + filepath.Join("src", "*.go"), "--path-item=other.txt", "--dry-run"}},
+		{"separators", []string{"--paths", `src\nested\file.go`, "src/nested/file.go"}, []string{`--path-item=src\nested\file.go`, "--path-item=src/nested/file.go"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := expandPaths(tc.in)
+			if err != nil || strings.Join(got, "|") != strings.Join(tc.want, "|") {
+				t.Fatalf("expandPaths(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+			}
+		})
+	}
+	if _, err := expandPaths([]string{"--paths", "--dry-run"}); err == nil || !strings.Contains(err.Error(), "requires at least one path") {
+		t.Fatalf("missing paths error = %v", err)
+	}
+}
+
+func TestStringListFlag(t *testing.T) {
+	var values stringList
+	if got := values.String(); got != "" {
+		t.Fatalf("empty String() = %q", got)
+	}
+	for _, value := range []string{"one", "two"} {
+		if err := values.Set(value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := values.String(); got != "one,two" {
+		t.Fatalf("String() = %q; want one,two", got)
+	}
+}
+
+func runFixture(t *testing.T) string {
+	t.Helper()
+	root := releaseFixture(t)
+	if err := os.MkdirAll(filepath.Join(root, "go"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go", "go.mod"), []byte("module fixture\n\ngo 1.23\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := testutil.Hide(exec.Command("git", "-C", root, "add", "go/go.mod"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add fixture module: %v: %s", err, out)
+	}
+	cmd = testutil.Hide(exec.Command("git", "-C", root, "-c", "user.name=Release Test", "-c", "user.email=release@example.test", "commit", "-qm", "fixture module"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit fixture module: %v: %s", err, out)
+	}
+	return root
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(old); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+}
+
+func TestRunFlagsAndArgumentErrors(t *testing.T) {
+	root := runFixture(t)
+	chdir(t, root)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"package", "--unknown"}, "flag provided but not defined"},
+		{[]string{"smoke", "--unknown"}, "flag provided but not defined"},
+		{[]string{"catalog"}, "catalog requires --url"},
+		{[]string{"--unknown"}, "flag provided but not defined"},
+		{[]string{"--entry=", "--title=", "--marketplace-dir", t.TempDir()}, "--entry and --title must not be empty"},
+		{[]string{"--entry=Added", "--title=Release", "--message=change", "--marketplace-dir", t.TempDir()}, "--message requires --paths"},
+		{[]string{"--export-only", "--version=1.2.3", "--marketplace-dir", t.TempDir()}, "cannot be combined"},
+	} {
+		if err := run(tc.args); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("run(%q) error = %v; want containing %q", tc.args, err, tc.want)
+		}
+	}
+	if err := run([]string{"--dry-run", "--entry=Added", "--title=Release", "--marketplace-dir", t.TempDir(), "--claude-bin", "must-not-run"}); err != nil {
+		t.Fatalf("dry-run with parsed flags: %v", err)
+	}
+}
+
+func TestRepositoryRootInsideAndOutside(t *testing.T) {
+	root := runFixture(t)
+	nested := filepath.Join(root, "go")
+	chdir(t, nested)
+	got, err := repositoryRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(root)
+	got, _ = filepath.EvalSymlinks(got)
+	if got != want {
+		t.Fatalf("repositoryRoot() = %q; want %q", got, want)
+	}
+	outside := t.TempDir()
+	chdir(t, outside)
+	if _, err := repositoryRoot(); err == nil || !strings.Contains(err.Error(), "cannot locate repository root") {
+		t.Fatalf("outside repositoryRoot() error = %v", err)
+	}
+}
+
+func TestDefaultMarketplaceUsesPlatformHome(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "user-home")
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
+	want := filepath.Join(home, ".claude", "purser", "marketplace")
+	if got := defaultMarketplace(); got != want {
+		t.Fatalf("defaultMarketplace() = %q; want %q", got, want)
+	}
+}
