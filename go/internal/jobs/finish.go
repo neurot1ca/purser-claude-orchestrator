@@ -3,6 +3,7 @@ package jobs
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,12 +33,12 @@ func Result(stateRoot, jobID string, now float64, opt ResultOptions) map[string]
 }
 
 // finishJob durably stores output before publishing a terminal record.
-func finishJob(dir, id, state, code string, result map[string]any, message string, now float64, opt FinishOptions) error {
+func finishJob(dir, id, state, code string, result map[string]any, message string, now float64, opt FinishOptions) (err error) {
 	lock, err := AcquireOwnership(dir, id)
 	if err != nil {
 		return err
 	}
-	defer lock.Release()
+	defer func() { err = errors.Join(err, lock.Release()) }()
 	path := filepath.Join(dir, id+".json")
 	r, err := Read(path)
 	if err != nil {

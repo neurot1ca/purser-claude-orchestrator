@@ -145,7 +145,7 @@ func releaseRetirementClaim(root, worktree string) {
 }
 
 // RetireWorktree performs the private one-shot operation. Its targets come only from durable records.
-func RetireWorktree(stateRoot, jobID string, generation ...int64) error {
+func RetireWorktree(stateRoot, jobID string, generation ...int64) (resultErr error) {
 	root, err := validateRetirementRoot(stateRoot)
 	if err != nil {
 		return err
@@ -185,7 +185,7 @@ func RetireWorktree(stateRoot, jobID string, generation ...int64) error {
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { resultErr = errors.Join(resultErr, unlock()) }()
 	owned, err := retention.ReadWorktreeOwnership(root, worktree)
 	if err != nil {
 		return err
@@ -271,7 +271,7 @@ func RetireWorktree(stateRoot, jobID string, generation ...int64) error {
 			if lockErr != nil {
 				return lockErr
 			}
-			defer lock.Release()
+			defer func() { resultErr = errors.Join(resultErr, lock.Release()) }()
 			record = readCleanupJSON(path)
 			if record == nil {
 				continue

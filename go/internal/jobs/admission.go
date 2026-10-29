@@ -44,7 +44,7 @@ func handAppliedOwners(projectRoot string, scope []string) []handAppliedOwner {
 	if err != nil {
 		return nil
 	}
-	defer unlock()
+	defer func() { _ = unlock() }()
 	raw, err := os.ReadFile(filepath.Join(projectRoot, "scope_leases.json"))
 	if err != nil || lease.Validate(raw) != nil {
 		return nil
@@ -103,12 +103,12 @@ func markHandAppliedJob(stateRoot, jobID string) {
 	if err != nil {
 		return
 	}
-	defer applyUnlock()
+	defer func() { _ = applyUnlock() }()
 	jobLock, err := AcquireOwnership(dir, jobID)
 	if err != nil {
 		return
 	}
-	defer jobLock.Release()
+	defer func() { _ = jobLock.Release() }()
 	job, err := Read(path)
 	if err != nil {
 		return

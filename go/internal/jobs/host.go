@@ -171,7 +171,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	if err != nil {
 		return nil, err
 	}
-	defer signal.Close()
+	defer func() { _ = signal.Close() }()
 	createdValue, createdOK := hostProcessIdentity()
 	if !createdOK {
 		return finishHostError(path, jobID, generation, token, "PROCESS_UNCONFIRMED", "Host process identity unavailable")
@@ -916,12 +916,12 @@ func saveHostThread(dir, id string, generation int64, token, threadID string, co
 	return SaveRecord(filepath.Join(filepath.Dir(filepath.Dir(dir)), "codex_exec_mcp", "threads"), record)
 }
 
-func failHostUnavailable(path, id string, generation int64, token, message string) (map[string]any, error) {
+func failHostUnavailable(path, id string, generation int64, token, message string) (result map[string]any, resultErr error) {
 	lock, err := AcquireOwnership(filepath.Dir(path), id)
 	if err != nil {
 		return nil, err
 	}
-	defer lock.Release()
+	defer func() { resultErr = errors.Join(resultErr, lock.Release()) }()
 	job, err := Read(path)
 	if err != nil {
 		return nil, err

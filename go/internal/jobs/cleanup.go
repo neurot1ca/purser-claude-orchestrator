@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -678,12 +679,12 @@ func sweepTemporaryDirectories(root string, now time.Time) {
 	}
 }
 
-func trimPurserGoCache(root string) error {
+func trimPurserGoCache(root string) (err error) {
 	unlock, err := cacheGate(root)
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { err = errors.Join(err, unlock()) }()
 	users := filepath.Join(root, "cache", "go-users")
 	entries, err := os.ReadDir(users)
 	if err != nil && !os.IsNotExist(err) {
@@ -794,12 +795,12 @@ func cacheGate(root string) (func() error, error) {
 	return contextio.LockFileBlocking(path)
 }
 
-func acquireCacheUser(root string) (func(), error) {
+func acquireCacheUser(root string) (release func(), resultErr error) {
 	gate, err := cacheGate(root)
 	if err != nil {
 		return nil, err
 	}
-	defer gate()
+	defer func() { resultErr = errors.Join(resultErr, gate()) }()
 	dir := filepath.Join(root, "cache", "go-users")
 	if !cleanupPath(root, dir) {
 		return nil, fmt.Errorf("invalid cache users: %s", dir)

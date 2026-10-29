@@ -166,7 +166,7 @@ func Write(path string, r *Record) error {
 
 var replaceFile = os.Rename
 
-func atomicWrite(path string, data []byte) error {
+func atomicWrite(path string, data []byte) (err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -176,7 +176,11 @@ func atomicWrite(path string, data []byte) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() {
+		if removeErr := os.Remove(tmp); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = errors.Join(err, removeErr)
+		}
+	}()
 	if err = f.Chmod(0600); err == nil {
 		_, err = f.Write(data)
 	}
@@ -207,13 +211,13 @@ func (e *ClaimConflictError) Unwrap() error { return ErrClaimConflict }
 
 // ClaimGeneration reserves a queued generation by atomically moving it to RUNNING.
 // The ownership token and generation are checked under the interoperable owner lock.
-func ClaimGeneration(path string, generation int64, token string) (*Record, error) {
+func ClaimGeneration(path string, generation int64, token string) (record *Record, resultErr error) {
 	jobID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	lock, err := AcquireOwnership(filepath.Dir(path), jobID)
 	if err != nil {
 		return nil, err
 	}
-	defer lock.Release()
+	defer func() { resultErr = errors.Join(resultErr, lock.Release()) }()
 	r, err := Read(path)
 	if err != nil {
 		return nil, err
@@ -236,13 +240,13 @@ func ClaimGeneration(path string, generation int64, token string) (*Record, erro
 }
 
 // WriteFenced refuses to persist a stale host's update after a newer generation owns the job.
-func WriteFenced(path string, r *Record, generation int64, token string) error {
+func WriteFenced(path string, r *Record, generation int64, token string) (err error) {
 	jobID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	lock, err := AcquireOwnership(filepath.Dir(path), jobID)
 	if err != nil {
 		return err
 	}
-	defer lock.Release()
+	defer func() { err = errors.Join(err, lock.Release()) }()
 	current, err := Read(path)
 	if err != nil {
 		return err

@@ -185,7 +185,7 @@ func surfaceWaitStall(dir, id string, values map[string]any) (map[string]any, bo
 	if err != nil {
 		return nil, false
 	}
-	defer lock.Release()
+	defer func() { _ = lock.Release() }()
 	current := readJobWithRetry(dir, id)
 	if current == nil {
 		return nil, false
@@ -252,7 +252,7 @@ func observeWaitTerminal(dir, id, state string) {
 	if err != nil {
 		return
 	}
-	defer lock.Release()
+	defer func() { _ = lock.Release() }()
 	current := readJobWithRetry(dir, id)
 	if current == nil {
 		return

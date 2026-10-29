@@ -161,7 +161,7 @@ func enqueueAppliedValidation(stateRoot string, job map[string]any, value map[st
 		result["reason"] = err.Error()
 		return
 	}
-	defer lock()
+	defer func() { _ = lock() }()
 	if prior, e := readApplyValidation(path); e == nil {
 		if prior.Status == "pending" || prior.Status == "running" || prior.Status == "unconfirmed" {
 			result = validationSummary(prior)
@@ -385,12 +385,12 @@ func readApplyValidation(path string) (applyValidation, error) {
 	return value, err
 }
 
-func writeApplyValidation(path string, value applyValidation) error {
+func writeApplyValidation(path string, value applyValidation) (err error) {
 	unlock, err := lease.Lock(path + ".lock")
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { err = errors.Join(err, unlock()) }()
 	return writeApplyValidationUnlocked(path, value)
 }
 
@@ -403,12 +403,12 @@ func writeApplyValidationUnlocked(path string, value applyValidation) error {
 	return atomicWrite(path, b)
 }
 
-func recordApplyValidationProcess(path string, pid int, identity int64) error {
+func recordApplyValidationProcess(path string, pid int, identity int64) (err error) {
 	unlock, err := lease.Lock(path + ".lock")
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() { err = errors.Join(err, unlock()) }()
 	record, err := readApplyValidation(path)
 	if err != nil {
 		return err
@@ -462,10 +462,13 @@ func checkoutRevisionOnce(repo string, backoff *[]time.Duration) (string, string
 	}
 	tempPath := tempIndex.Name()
 	if err = tempIndex.Close(); err != nil {
-		_ = os.Remove(tempPath)
-		return "", "", err
+		removeErr := os.Remove(tempPath)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+		return "", "", errors.Join(err, removeErr)
 	}
-	defer os.Remove(tempPath)
+	defer func() { _ = os.Remove(tempPath) }()
 	if err = os.WriteFile(tempPath, indexData, 0600); err != nil {
 		return "", "", err
 	}
@@ -622,7 +625,7 @@ func validationPackageSnapshot(repo string, packages []string) (string, error) {
 }
 
 // RunApplyValidation is the private detached worker entry point.
-func RunApplyValidation(stateRoot, key, id string) error {
+func RunApplyValidation(stateRoot, key, id string) (resultErr error) {
 	if !validJobID(id) || len(id) != 64 || len(key) != 64 {
 		return errors.New("invalid apply validation identity")
 	}
@@ -641,7 +644,7 @@ func RunApplyValidation(stateRoot, key, id string) error {
 	if err != nil {
 		return err
 	}
-	defer lock()
+	defer func() { resultErr = errors.Join(resultErr, lock()) }()
 	record, err = readApplyValidation(path)
 	if err != nil {
 		return err
@@ -697,7 +700,11 @@ func RunApplyValidation(stateRoot, key, id string) error {
 	if err != nil {
 		return finishValidation(stateRoot, path, &record, "launch_error", err.Error())
 	}
-	defer logFile.Close()
+	defer func() {
+		if closeErr := logFile.Close(); closeErr != nil && resultErr != nil {
+			resultErr = errors.Join(resultErr, closeErr)
+		}
+	}()
 	for _, module := range modules {
 		env := moduleValidationEnvironment(stateRoot, module)
 		if len(packages) > 0 {
@@ -1042,7 +1049,7 @@ func (w *limitedCapture) Finish() error {
 	return err
 }
 
-func runValidationCommand(dir string, env, args []string, timeout time.Duration, log io.Writer, record *applyValidation) error {
+func runValidationCommand(dir string, env, args []string, timeout time.Duration, log io.Writer, record *applyValidation) (resultErr error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	bin := "go"
@@ -1072,7 +1079,11 @@ func runValidationCommand(dir string, env, args []string, timeout time.Duration,
 		cmd.Stdout = capture
 	}
 	cmd.Stderr = capture
-	defer capture.Finish()
+	defer func() {
+		if finishErr := capture.Finish(); finishErr != nil && resultErr != nil {
+			resultErr = errors.Join(resultErr, finishErr)
+		}
+	}()
 	receiptPath := ""
 	if file, ok := log.(*os.File); ok {
 		validationPath := strings.TrimSuffix(file.Name(), ".log") + ".json"

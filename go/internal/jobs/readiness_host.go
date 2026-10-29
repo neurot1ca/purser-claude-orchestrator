@@ -103,7 +103,7 @@ func storeReadinessVerdict(dir, jobID string, verdict review.ReadinessVerdict) {
 	if err != nil {
 		return
 	}
-	defer lock.Release()
+	defer func() { _ = lock.Release() }()
 	record, err := Read(filepath.Join(dir, jobID+".json"))
 	if err != nil {
 		return

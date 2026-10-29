@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"path/filepath"
 	"regexp"
@@ -117,7 +118,7 @@ func LaunchFailureEvidence(agent string, events []map[string]any, stderr string,
 
 // reserveCapacityRetry consumes the durable budget before waiting or starting
 // another worker. The current host keeps the launch intent and generation.
-func reserveCapacityRetry(path, id string, generation int64, token string, evidence map[string]any) (time.Duration, bool, error) {
+func reserveCapacityRetry(path, id string, generation int64, token string, evidence map[string]any) (delay time.Duration, ok bool, resultErr error) {
 	if evidence["type"] != "RATE_LIMITED" || evidence["noWorkProof"] != true {
 		return 0, false, nil
 	}
@@ -125,7 +126,7 @@ func reserveCapacityRetry(path, id string, generation int64, token string, evide
 	if err != nil {
 		return 0, false, err
 	}
-	defer lock.Release()
+	defer func() { resultErr = errors.Join(resultErr, lock.Release()) }()
 	job, err := Read(path)
 	if err != nil {
 		return 0, false, err
@@ -143,7 +144,7 @@ func reserveCapacityRetry(path, id string, generation int64, token string, evide
 	if !valid || actual != generation || owner != token || state != "RUNNING" || attempts < 0 || attempts >= 2 {
 		return 0, false, nil
 	}
-	delay := time.Duration(1<<attempts) * time.Second
+	delay = time.Duration(1<<attempts) * time.Second
 	if after, ok := evidence["retryAfterSeconds"].(*float64); ok && after != nil {
 		if math.IsNaN(*after) || math.IsInf(*after, 0) || *after < 0 {
 			return 0, false, nil
