@@ -15,7 +15,54 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestRenameMarketplacePathRetriesLockThenSucceeds(t *testing.T) {
+	oldRename, oldSleep := marketplaceRename, marketplaceRenameSleep
+	t.Cleanup(func() { marketplaceRename, marketplaceRenameSleep = oldRename, oldSleep })
+	marketplaceRenameSleep = func(_ time.Duration) {}
+	source := filepath.Join(t.TempDir(), "source")
+	target := filepath.Join(filepath.Dir(source), "target")
+	if err := os.WriteFile(source, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	marketplaceRename = func(old, new string) error {
+		attempts++
+		if attempts < 3 {
+			return os.ErrPermission
+		}
+		return os.Rename(old, new)
+	}
+	if err := renameMarketplacePath(source, target); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 {
+		t.Fatalf("rename attempts = %d, want 3", attempts)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "data" {
+		t.Fatalf("renamed file = %q, %v", data, err)
+	}
+}
+
+func TestRenameMarketplacePathReportsPersistentLock(t *testing.T) {
+	oldRename, oldSleep := marketplaceRename, marketplaceRenameSleep
+	t.Cleanup(func() { marketplaceRename, marketplaceRenameSleep = oldRename, oldSleep })
+	marketplaceRenameSleep = func(_ time.Duration) {}
+	attempts := 0
+	marketplaceRename = func(_, _ string) error {
+		attempts++
+		return os.ErrPermission
+	}
+	err := renameMarketplacePath("live", "backup")
+	if err == nil || !strings.Contains(err.Error(), "marketplace folder is in use by a running Purser process") || !strings.Contains(err.Error(), "stop it and retry") {
+		t.Fatalf("persistent lock error = %v", err)
+	}
+	if attempts != 5 {
+		t.Fatalf("rename attempts = %d, want 5", attempts)
+	}
+}
 
 func TestVerifyTreeRequiresRuntimeAndRejectsPythonArtifacts(t *testing.T) {
 	root := t.TempDir()

@@ -18,12 +18,33 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 )
 
 var Targets = [][2]string{{"windows", "amd64"}, {"windows", "arm64"}, {"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}}
+var marketplaceRename = os.Rename
+var marketplaceRenameSleep = time.Sleep
 var modSources = []string{"hooks/register.ts", "hooks/mod/read.ts", "hooks/mod/lifecycle.ts", "hooks/mod/board.ts", "hooks/mod/usage.ts", "hooks/mod/enforcement.ts", "hooks/mod/autocompact.ts"}
 var runtimeFiles = []string{"bin/purser-launcher.js", "plugin/mcp.json", "hooks/hooks.json", ".claude/hooks/orchestrator/config.json", ".claude/hooks/orchestrator/model_catalog_bootstrap.json"}
 var commandFiles = []string{"commands/auto-compact.md", "commands/check.md", "commands/coder-effort.md", "commands/gear-down.md", "commands/gear-up.md", "commands/init.md", "commands/optimize.md", "commands/plan.md", "commands/reviewer.md"}
+
+func renameMarketplacePath(old, new string) error {
+	delays := [...]time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second}
+	for attempt := 0; ; attempt++ {
+		err := marketplaceRename(old, new)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, os.ErrPermission) && !errors.Is(err, syscall.Errno(32)) {
+			return err
+		}
+		if attempt == len(delays) {
+			return fmt.Errorf("marketplace folder is in use by a running Purser process (for example from WSL or another session); stop it and retry: %w", err)
+		}
+		marketplaceRenameSleep(delays[attempt])
+	}
+}
 
 type Manifest struct {
 	PluginVersion string            `json:"plugin_version"`
@@ -351,32 +372,32 @@ func ExportMarketplace(root, commit, marketplace string) error {
 			_ = os.RemoveAll(liveManifest)
 		}
 		if hadManifest && exists(backupManifest) {
-			_ = os.Rename(backupManifest, liveManifest)
+			_ = renameMarketplacePath(backupManifest, liveManifest)
 		}
 		if treeMoved {
 			_ = os.RemoveAll(live)
 		}
 		if hadTree && exists(backup) {
-			_ = os.Rename(backup, live)
+			_ = renameMarketplacePath(backup, live)
 		}
 	}
 	if hadTree {
-		if err = os.Rename(live, backup); err != nil {
+		if err = renameMarketplacePath(live, backup); err != nil {
 			return fmt.Errorf("marketplace export (backup previous tree): %w", err)
 		}
 	}
-	if err = os.Rename(stage, live); err != nil {
+	if err = renameMarketplacePath(stage, live); err != nil {
 		rollback()
 		return fmt.Errorf("marketplace export (publish tree): %w", err)
 	}
 	treeMoved = true
 	if hadManifest {
-		if err = os.Rename(liveManifest, backupManifest); err != nil {
+		if err = renameMarketplacePath(liveManifest, backupManifest); err != nil {
 			rollback()
 			return fmt.Errorf("marketplace export (backup previous manifest): %w", err)
 		}
 	}
-	if err = os.Rename(manifestStage, liveManifest); err != nil {
+	if err = renameMarketplacePath(manifestStage, liveManifest); err != nil {
 		rollback()
 		return fmt.Errorf("marketplace export (publish manifest): %w", err)
 	}
