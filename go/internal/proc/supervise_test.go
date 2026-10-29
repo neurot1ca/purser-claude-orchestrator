@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -52,6 +53,108 @@ func TestSupervisionHelper(t *testing.T) {
 			return
 		}
 	}
+}
+
+func TestDetachedChild(t *testing.T) {
+	if path := os.Getenv("PURSER_DETACHED_MARKER"); path != "" {
+		_ = os.WriteFile(path, []byte("done"), 0600)
+	}
+}
+
+func TestProcHelpers(t *testing.T) {
+	if got := errorNumber(syscall.Errno(5)); got != 5 {
+		t.Fatalf("error number = %d", got)
+	}
+	if got := errorNumber(fmt.Errorf("wrapped: %w", syscall.Errno(6))); got != 6 {
+		t.Fatalf("wrapped error number = %d", got)
+	}
+	if got := errorNumber(fmt.Errorf("ordinary error")); got != 0 {
+		t.Fatalf("ordinary error number = %d", got)
+	}
+	t.Run("stream files", func(t *testing.T) {
+		f, err := os.CreateTemp(t.TempDir(), "stream")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		g, err := os.CreateTemp(t.TempDir(), "stream")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer g.Close()
+		files := streamFiles([3]uintptr{uintptr(f.Fd()), 0, uintptr(g.Fd())})
+		if files[0] == nil || files[1] != nil || files[2] == nil {
+			t.Fatalf("files = %#v", files)
+		}
+	})
+	t.Run("event encoding", func(t *testing.T) {
+		old := os.Stdout
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.Stdout = w
+		sendEvent(supervisionEvent{Kind: "root", Exit: 7}, nil)
+		os.Stdout = old
+		_ = w.Close()
+		var got supervisionEvent
+		if err := json.NewDecoder(r).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		_ = r.Close()
+		if got.Kind != "root" || got.Exit != 7 {
+			t.Fatalf("event = %+v", got)
+		}
+	})
+	t.Run("prefix", func(t *testing.T) {
+		old := os.Args
+		defer func() { os.Args = old }()
+		os.Args = []string{"hook", "-test.run=TestProcHelpers", "supervisor", "guard", "{}"}
+		got := supervisorPrefix()
+		if strings.Join(got, " ") != "-test.run=TestProcHelpers supervisor" {
+			t.Fatalf("prefix = %q", got)
+		}
+		os.Args = []string{"hook", "worker"}
+		if got := supervisorPrefix(); len(got) != 1 || got[0] != "supervisor" {
+			t.Fatalf("fallback = %q", got)
+		}
+	})
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	runWorker(Launch{})
+	os.Stdout = old
+	_ = w.Close()
+	var event supervisionEvent
+	if err := json.NewDecoder(r).Decode(&event); err != nil {
+		t.Fatal(err)
+	}
+	_ = r.Close()
+	if event.Kind != "root" || event.Exit != -1 || event.Error == "" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestStartDetached(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a short-lived child process")
+	}
+	marker := filepath.Join(t.TempDir(), "done")
+	env := append(os.Environ(), "PURSER_DETACHED_MARKER="+marker)
+	if err := StartDetached([]string{os.Args[0], "-test.run=^TestDetachedChild$"}, env, ""); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(5 * time.Second)
+	for time.Now().Before(until) {
+		if data, err := os.ReadFile(marker); err == nil && string(data) == "done" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("detached child did not finish")
 }
 
 func TestSupervisionLifecycle(t *testing.T) {

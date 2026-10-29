@@ -62,3 +62,23 @@ func TestSupervisionHiddenConsole(t *testing.T) {
 		t.Fatalf("final attributes: %+v", command.SysProcAttr)
 	}
 }
+
+func TestConfirmDescendantsStopped(t *testing.T) {
+	job, err := NewProcessJob()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer job.Close()
+	if job.ConfirmDescendantsStopped(false) {
+		t.Fatal("confirmed before root exit")
+	}
+	if !job.ConfirmDescendantsStopped(true) {
+		t.Fatal("empty job was not confirmed")
+	}
+}
+
+func TestSupervisorMainRejectsInvalidInput(t *testing.T) {
+	if SupervisorMain(nil) != 2 || SupervisorMain([]string{"guard", "{"}) != 2 || SupervisorMain([]string{"other", "{}"}) != 2 {
+		t.Fatal("invalid supervisor invocation accepted")
+	}
+}
