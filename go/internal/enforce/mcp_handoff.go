@@ -124,6 +124,8 @@ func handoffLock(path string) (func() error, error) {
 	return contextio.LockFile(path + ".lock")
 }
 
+var mcpHandoffLocker = handoffLock
+
 func writeMCPHandoff(path string, h *MCPHandoff) error {
 	if err := handoffFile(path); err != nil {
 		return err
@@ -263,7 +265,7 @@ func sweepMCPHandoffs(dir string, now time.Time) {
 
 // PublishMCPHandoff does no routing or baseline acquisition. Duplicate publication
 // is rejected even after a crash; tombstones are retained for the owner's life.
-func PublishMCPHandoff(root string, owner waiter.Owner, event map[string]any) error {
+func PublishMCPHandoff(root string, owner waiter.Owner, event map[string]any) (retErr error) {
 	h := &MCPHandoff{Owner: owner, SessionID: stringValue(event["session_id"]), ToolUseID: stringValue(event["tool_use_id"]),
 		Tool: stringValue(event["tool_name"]), Cwd: stringValue(event["cwd"]), Created: time.Now().UTC()}
 	var ok bool
@@ -281,11 +283,20 @@ func PublishMCPHandoff(root string, owner waiter.Owner, event map[string]any) er
 		return err
 	}
 	// Bound total records and serialize publication, including capacity checks.
-	unlock, err := handoffLock(filepath.Join(filepath.Dir(path), "publish"))
+	unlock, err := mcpHandoffLocker(filepath.Join(filepath.Dir(path), "publish"))
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() {
+		if err := unlock(); err != nil {
+			releaseErr := fmt.Errorf("MCP handoff lock release failed: %w", err)
+			if retErr == nil {
+				retErr = fmt.Errorf("MCP handoff publication completed but %w", releaseErr)
+			} else {
+				retErr = errors.Join(retErr, releaseErr)
+			}
+		}
+	}()
 	sweepMCPHandoffs(filepath.Dir(path), time.Now())
 	entries, err := os.ReadDir(filepath.Dir(path))
 	if err != nil {
@@ -364,7 +375,7 @@ func readMCPHandoff(path string) (*MCPHandoff, error) {
 // sorted object keys with UseNumber on wire decoding (no policy hash changes).
 // The separate exclusive, synced tombstone survives failed replacement, crashes,
 // cancellation and cleanup failures. Never remove it to retry a call.
-func ClaimMCPHandoff(root string, owner waiter.Owner, id, tool string, input map[string]any) (*MCPHandoff, error) {
+func ClaimMCPHandoff(root string, owner waiter.Owner, id, tool string, input map[string]any) (result *MCPHandoff, retErr error) {
 	path, err := handoffPath(root, owner, id)
 	if err != nil {
 		return nil, err
@@ -373,11 +384,20 @@ func ClaimMCPHandoff(root string, owner waiter.Owner, id, tool string, input map
 	if _, err := os.Lstat(path); err != nil {
 		return nil, err
 	}
-	unlock, err := handoffLock(path)
+	unlock, err := mcpHandoffLocker(path)
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() {
+		if err := unlock(); err != nil {
+			releaseErr := fmt.Errorf("MCP handoff lock release failed: %w", err)
+			if retErr == nil {
+				retErr = fmt.Errorf("MCP handoff claim completed but %w", releaseErr)
+			} else {
+				retErr = errors.Join(retErr, releaseErr)
+			}
+		}
+	}()
 	h, err := readMCPHandoff(path)
 	if err != nil {
 		return nil, err

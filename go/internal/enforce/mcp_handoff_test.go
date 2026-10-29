@@ -213,6 +213,65 @@ func TestMCPHandoffWriteLockRecovery(t *testing.T) {
 	}
 }
 
+func TestMCPHandoffLockReleaseFailures(t *testing.T) {
+	releaseFailure := errors.New("injected lock release failure")
+	originalLocker := mcpHandoffLocker
+	injectFailure := true
+	mcpHandoffLocker = func(path string) (func() error, error) {
+		unlock, err := originalLocker(path)
+		if err != nil {
+			return nil, err
+		}
+		return func() error {
+			if err := unlock(); err != nil {
+				return err
+			}
+			if injectFailure {
+				return releaseFailure
+			}
+			return nil
+		}, nil
+	}
+	defer func() { mcpHandoffLocker = originalLocker }()
+
+	t.Run("publication", func(t *testing.T) {
+		root, owner, event := mcpFixture(t, "release-publish", "codex")
+		err := PublishMCPHandoff(root, owner, event)
+		if !errors.Is(err, releaseFailure) || !strings.Contains(err.Error(), "publication completed") {
+			t.Fatalf("release failure not reported with durable outcome: %v", err)
+		}
+		path, _ := handoffPath(root, owner, "release-publish")
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("publication was not durable: %v", statErr)
+		}
+	})
+
+	t.Run("claim", func(t *testing.T) {
+		root, owner, event := mcpFixture(t, "release-claim", "codex")
+		injectFailure = false
+		if err := PublishMCPHandoff(root, owner, event); err != nil {
+			t.Fatal(err)
+		}
+		injectFailure = true
+		tool, input := stringValue(event["tool_name"]), event["tool_input"].(map[string]any)
+		h, err := ClaimMCPHandoff(root, owner, "release-claim", tool, input)
+		if h == nil || !errors.Is(err, releaseFailure) || !strings.Contains(err.Error(), "claim completed") {
+			t.Fatalf("claim outcome/release failure not reported: handoff=%v err=%v", h, err)
+		}
+		path, _ := handoffPath(root, owner, "release-claim")
+		if _, statErr := os.Stat(path + ".claim"); statErr != nil {
+			t.Fatalf("claim tombstone was not durable: %v", statErr)
+		}
+		if _, retryErr := ClaimMCPHandoff(root, owner, "release-claim", tool, input); retryErr == nil {
+			t.Fatal("retried durable claim")
+		}
+		_, bothErr := ClaimMCPHandoff(root, owner, "release-claim", tool, map[string]any{"prompt": "wrong"})
+		if !errors.Is(bothErr, releaseFailure) || !strings.Contains(bothErr.Error(), "binding/lifecycle mismatch") {
+			t.Fatalf("primary claim error was not preserved with release error: %v", bothErr)
+		}
+	})
+}
+
 func TestMCPHandoffSweepCapacityAndFreshClaim(t *testing.T) {
 	root, owner, stale := mcpFixture(t, "stale-sweep", "codex")
 	if err := PublishMCPHandoff(root, owner, stale); err != nil {
