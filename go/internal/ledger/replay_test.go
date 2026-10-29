@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func TestPrepareJobReplayStagesOnlyJobPaths(t *testing.T) {
+func TestPrepareJobReplayStagesOnlyWorkerPatchPaths(t *testing.T) {
 	base := gitTempDir(t)
 	repo, worker := filepath.Join(base, "repo"), filepath.Join(base, "worker")
 	snapshot := initReplayRepository(t, repo, "")
@@ -22,7 +22,7 @@ func TestPrepareJobReplayStagesOnlyJobPaths(t *testing.T) {
 	writePatchTestFile(t, filepath.Join(repo, "other.txt"), []byte("outside scope\n"))
 	var addArgs [][]string
 	runner := func(root string, args []string, timeout time.Duration, operation string, input []byte, env map[string]string) ([]byte, error) {
-		if len(args) >= 2 && args[0] == "add" && args[1] == "-A" {
+		if len(args) >= 2 && args[0] == "add" && args[1] == "-A" && operation != "capturing current checkout state" {
 			addArgs = append(addArgs, append([]string(nil), args...))
 		}
 		return runGit(root, args, timeout, operation, input, env)
@@ -34,16 +34,16 @@ func TestPrepareJobReplayStagesOnlyJobPaths(t *testing.T) {
 	if result["status"] != "prepared" {
 		t.Fatalf("unexpected replay result: %#v", result)
 	}
-	if len(addArgs) < 2 {
-		t.Fatalf("expected patch and snapshot staging calls, got %#v", addArgs)
+	if len(addArgs) == 0 {
+		t.Fatalf("expected worker patch staging calls, got %#v", addArgs)
 	}
 	for _, args := range addArgs {
 		if len(args) < 4 || args[2] != "--" || strings.Join(args[3:], " ") != ":(literal)tracked.txt" {
 			t.Fatalf("replay preparation used unexpected add arguments: %#v", addArgs)
 		}
 	}
-	if got, _ := os.ReadFile(filepath.Join(worker, "other.txt")); string(got) != "other\n" {
-		t.Fatalf("outside-scope checkout content leaked into replay snapshot: %q", got)
+	if got, _ := os.ReadFile(filepath.Join(worker, "other.txt")); string(got) != "outside scope\n" {
+		t.Fatalf("outside-scope checkout content was lost from replay snapshot: %q", got)
 	}
 }
 
@@ -335,11 +335,7 @@ func TestPrepareJobReplayPythonFixture(t *testing.T) {
 			git(t, repo, "worktree", "add", "--detach", worker, "HEAD")
 			applyReplayChanges(t, repo, c.TargetChanges)
 			applyReplayChanges(t, worker, c.WorkerChanges)
-			jobPaths := make([]string, 0, len(c.WorkerChanges))
-			for _, change := range c.WorkerChanges {
-				jobPaths = append(jobPaths, change["path"])
-			}
-			target, err := checkoutSnapshotWithGit(repo, jobPaths, runGit)
+			target, err := checkoutSnapshotWithGit(repo, nil, runGit)
 			if err != nil {
 				t.Fatal(err)
 			}

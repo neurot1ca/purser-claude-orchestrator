@@ -174,7 +174,8 @@ func prepareJobReplay(repoRoot, worktreePath, snapshot, recoveryPath string, res
 		paths = []string{}
 	}
 	pathList = replayPaths(paths)
-	current, err := checkoutSnapshotWithGit(root, pathList, run)
+	// A path-limited tree would reset pre-existing changes outside the worker patch.
+	current, err := checkoutSnapshotWithGit(root, nil, run)
 	if err != nil {
 		return nil, err
 	}

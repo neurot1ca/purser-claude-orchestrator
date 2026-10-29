@@ -344,11 +344,19 @@ func changedCheckoutPaths(root, base string, run func(string, []string, time.Dur
 	if err != nil {
 		return nil, err
 	}
+	untrackedPaths := make([]string, 0)
 	for _, path := range strings.Split(string(untracked), "\x00") {
 		if path != "" {
-			paths = append(paths, decodeGitPath([]byte(path)))
+			untrackedPaths = append(untrackedPaths, decodeGitPath([]byte(path)))
 		}
 	}
+	if len(untrackedPaths) > 0 {
+		untrackedPaths, err = filterJobPaths(root, untrackedPaths)
+		if err != nil {
+			return nil, err
+		}
+	}
+	paths = append(paths, untrackedPaths...)
 	return paths, nil
 }
 

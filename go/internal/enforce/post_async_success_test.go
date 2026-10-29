@@ -717,6 +717,7 @@ func TestReplyAfterAppliedWorktreeFinalizesOnlyReplyDelta(t *testing.T) {
 
 func TestAsyncWorktreeDeltaContainsOnlyWorkerPathsAfterMainCommit(t *testing.T) {
 	state, repo, event, index, pending, original, job, resolved, loaded := newAsyncSuccessCase(t, "job_snapshot_delta")
+	loaded["reviewer1_timeout_seconds"] = 0
 	runAsyncSuccessGit(t, repo, "config", "core.autocrlf", "true")
 	oldCheckpoint := filepath.Join(repo, "checkpoint-before-start.md")
 	if err := os.WriteFile(oldCheckpoint, []byte("old checkpoint\n"), 0600); err != nil {
@@ -749,6 +750,9 @@ func TestAsyncWorktreeDeltaContainsOnlyWorkerPathsAfterMainCommit(t *testing.T) 
 	}
 	runAsyncSuccessGit(t, repo, "add", "-A")
 	runAsyncSuccessGit(t, repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "main commit after job start")
+	if err = os.WriteFile(mainFile, []byte("main uncommitted\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err = os.WriteFile(filepath.Join(worktree, "src", "file.go"), []byte("package src\n// worker change\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -767,6 +771,17 @@ func TestAsyncWorktreeDeltaContainsOnlyWorkerPathsAfterMainCommit(t *testing.T) 
 		t.Fatalf("review did not use the prepared replay snapshot: job=%v bundle=%v original=%s err=%v", stored["snapshot"], bundle["baseline_head"], snapshot, err)
 	}
 	snapshot = stringValue(stored["snapshot"])
+	if got, err := os.ReadFile(filepath.Join(worktree, "checkpoint-after-start.md")); err != nil || strings.ReplaceAll(string(got), "\r\n", "\n") != "main uncommitted\n" {
+		t.Fatalf("replay lost out-of-scope uncommitted content: %q err=%v", got, err)
+	}
+	revision, err := ledger.JobChangedPathsSHA256(worktree, snapshot)
+	if err != nil || bundle["changed_paths_sha256"] != revision {
+		t.Fatalf("bundle revision/scope check: revision=%q bundle=%#v err=%v", revision, bundle, err)
+	}
+	full, err := readAsyncObject(stringValue(bundle["full_bundle_path"]))
+	if err != nil || mapValue(full["whole_tree_anomaly"])["status"] != ledger.OK || mapValue(full["whole_tree_anomaly"])["code"] != "OUT_OF_SCOPE_CHECK_COMPLETED" || len(anyStringList(mapValue(full["whole_tree_anomaly"])["paths"])) != 0 {
+		t.Fatalf("full bundle scope check: bundle=%#v err=%v", full, err)
+	}
 	patch, err := ledger.JobPatch(worktree, snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -777,8 +792,8 @@ func TestAsyncWorktreeDeltaContainsOnlyWorkerPathsAfterMainCommit(t *testing.T) 
 	if applied := ledger.ApplyJobPatch(repo, patch); applied["applied"] != true {
 		t.Fatalf("worker patch did not apply: %#v", applied)
 	}
-	if got, err := os.ReadFile(mainFile); err != nil || string(got) != "main commit\n" {
-		t.Fatalf("later main commit was not preserved: %q err=%v", got, err)
+	if got, err := os.ReadFile(mainFile); err != nil || string(got) != "main uncommitted\n" {
+		t.Fatalf("later main checkout content was not preserved: %q err=%v", got, err)
 	}
 	if _, err := os.Stat(oldCheckpoint); !os.IsNotExist(err) {
 		t.Fatalf("apply restored main's deleted checkpoint: %v", err)

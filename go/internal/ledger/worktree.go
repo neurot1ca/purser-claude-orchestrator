@@ -97,6 +97,13 @@ func copyUntracked(root, worktree string, timeout time.Duration) error {
 	if err != nil {
 		return err
 	}
+	if len(raw) > 0 {
+		paths, filterErr := filterJobPaths(root, strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00"))
+		if filterErr != nil {
+			return filterErr
+		}
+		raw = []byte(strings.Join(paths, "\x00"))
+	}
 	return copyUntrackedFiles(root, worktree, raw)
 }
 
