@@ -55,7 +55,11 @@ func Stop(event map[string]any, started time.Time) []byte {
 	var turn []string
 	for _, record := range records[latestUser+1:] {
 		if transcriptRecordType(record) == "assistant" {
-			if text := transcriptText(record); text != "" {
+			recordMessage, _ := record["message"].(map[string]any)
+			if recordMessage == nil {
+				recordMessage = record
+			}
+			if text := transcriptText(recordMessage["content"]); text != "" {
 				turn = append(turn, text)
 			}
 		}
