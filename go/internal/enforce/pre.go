@@ -392,8 +392,12 @@ func WriteUndeliveredMarker(root string, event map[string]any) error {
 	return fsretry.Replace(tmp.Name(), path)
 }
 
-func cleanupUndeliveredAsyncStart(root, pendingPath, markerPath string) error {
-	defer os.Remove(markerPath)
+func cleanupUndeliveredAsyncStart(root, pendingPath, markerPath string) (err error) {
+	defer func() {
+		if removeErr := os.Remove(markerPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) && err == nil {
+			err = removeErr
+		}
+	}()
 	data, err := os.ReadFile(pendingPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err

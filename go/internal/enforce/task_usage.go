@@ -89,14 +89,18 @@ func markTaskUsageContention(root, session, taskID string) string {
 	if err != nil {
 		return "FAILED"
 	}
-	defer file.Close()
 	if taskID != "" && safeTaskUsageID.MatchString(taskID) {
 		if _, err = file.WriteString(taskID); err != nil {
+			_ = file.Close()
 			return "FAILED"
 		}
 		if err = file.Sync(); err != nil {
+			_ = file.Close()
 			return "FAILED"
 		}
+	}
+	if err = file.Close(); err != nil {
+		return "FAILED"
 	}
 	return "CREATED"
 }
@@ -315,9 +319,7 @@ func startActiveTask(root, session, taskID, projectKey, toolUseID, transcriptPat
 	if transcriptPath != "" {
 		var reason string
 		resolved, reason = validateTranscriptPath(transcriptPath, session, projectsRoot)
-		if reason != "" {
-			resolved = ""
-		} else {
+		if reason == "" {
 			identity, _ = snapshotTranscript(resolved)
 			file, err := os.Open(resolved)
 			if err != nil {

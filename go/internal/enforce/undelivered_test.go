@@ -79,6 +79,23 @@ func TestWriteUndeliveredMarkerMissingAsyncStartStateIsNoop(t *testing.T) {
 	}
 }
 
+func TestCleanupUndeliveredAsyncStartReportsMarkerRemovalFailure(t *testing.T) {
+	root := t.TempDir()
+	markerPath := filepath.Join(root, "undelivered-marker")
+	if err := os.Mkdir(markerPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(markerPath, "child"), []byte("held"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupUndeliveredAsyncStart(root, filepath.Join(root, "missing-pending"), markerPath); err == nil {
+		t.Fatal("cleanup succeeded despite marker removal failure")
+	}
+	if _, err := os.Stat(filepath.Join(markerPath, "child")); err != nil {
+		t.Fatalf("marker contents changed: %v", err)
+	}
+}
+
 func TestWriteUndeliveredMarkerLeavesSyncStateAndWritesMarker(t *testing.T) {
 	root := t.TempDir()
 	event := undeliveredEvent("mcp__plugin_purser_codex-main__codex", "p67-sync")
