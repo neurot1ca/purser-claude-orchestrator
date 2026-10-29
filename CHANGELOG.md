@@ -3,6 +3,16 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.204 — 2026-10-29
+
+- **Added:** each async result delivery is recorded in telemetry (`ASYNC_RESULT_DELIVERED`) with its delivery count and outcome.
+- **Fixed:** a plain `codex_apply` applies only the reviewed revision and accepts it in the same call; a changed patch is refused.
+- **Fixed:** preparing a worker replay keeps uncommitted checkout changes outside the worker patch, and untracked gitignored files are no longer copied.
+- **Fixed:** host validation gets ten minutes for up to four packages and 90 more seconds per extra package, up to 30 minutes.
+- **Fixed:** the Cursor reviewer fails closed when its confinement file cannot be written.
+- **Fixed:** a truncated worker stdout makes a synchronous run fail instead of succeeding.
+- **Fixed:** failed writes of receipt state, init output and backups, command results, and markers, and failed lock releases, are reported instead of silently ignored.
+
 ## 0.1.203 — 2026-10-28
 
 - **Fixed:** a finalized failed job shows as failed on the job board, and a replay failure keeps the job's thread.
