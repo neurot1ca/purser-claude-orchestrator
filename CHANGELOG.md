@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.213 — 2026-10-30
+
+- **Fixed:** marketplace export retries a briefly locked folder and names a running Purser process as the likely holder instead of failing with a bare access error.
+
 ## 0.1.212 — 2026-10-30
 
 - **Added:** post-apply validation runs golangci-lint, when installed, on the job's new lines and reports a one-line informational summary.
