@@ -26,7 +26,9 @@ func waitMain(args []string) int {
 	defer cancel()
 	result := jobs.WaitContext(ctx, stateRoot(), id)
 	for _, line := range result.Lines {
-		_, _ = fmt.Fprintln(os.Stdout, line)
+		if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
+			return 1
+		}
 	}
 	return result.ExitCode
 }
@@ -38,7 +40,9 @@ func waitValidationMain(args []string) int {
 	}
 	result := jobs.WaitApplyValidation(args[0], args[1], args[2])
 	for _, line := range result.Lines {
-		fmt.Fprintln(os.Stdout, line)
+		if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
+			return 1
+		}
 	}
 	return result.ExitCode
 }

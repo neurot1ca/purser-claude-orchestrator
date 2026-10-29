@@ -97,7 +97,9 @@ func maintenanceMain(args []string) int {
 			var path string
 			path, err = maintenance.RunAndPersistReport(maintenance.Runner{Jobs: maintenanceJobs{}}, state, root, reportType)
 			if err == nil && path != "" {
-				fmt.Fprintln(os.Stdout, path)
+				if _, err = fmt.Fprintln(os.Stdout, path); err != nil {
+					return 1
+				}
 			}
 		}
 		if err != nil {
@@ -129,7 +131,9 @@ func maintenanceMain(args []string) int {
 		return 1
 	}
 	if path != "" {
-		fmt.Fprintln(os.Stdout, path)
+		if _, err := fmt.Fprintln(os.Stdout, path); err != nil {
+			return 1
+		}
 	}
 	return 0
 }

@@ -43,7 +43,11 @@ func catalogRefreshMain(argv []string) int {
 	if err != nil {
 		return 0
 	}
-	defer unlock()
+	defer func() {
+		if err := unlock(); err != nil {
+			fmt.Fprintf(os.Stderr, "Purser: catalog refresh lock release failed: %v\n", err)
+		}
+	}()
 	if err := refreshCatalog(root, canonical); err != nil {
 		return catalogRefreshFailure(root, err)
 	}

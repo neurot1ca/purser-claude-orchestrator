@@ -32,9 +32,13 @@ func codeMapMain(args []string) int {
 		return codeMapError(err)
 	}
 	marker := filepath.Join(stateRoot(), "projects", contextio.ProjectKey(root), "code-map", "completion.lock")
-	defer os.Remove(marker)
 	path, status := enforce.RunCodeMapCompletion(root, stateRoot(), time.Duration(*budgetSeconds*float64(time.Second)))
+	removeErr := os.Remove(marker)
 	if _, err = fmt.Fprintf(os.Stdout, "CODE_MAP=%s STATUS=%s\n", path, status); err != nil {
+		return 1
+	}
+	if removeErr != nil && !os.IsNotExist(removeErr) {
+		fmt.Fprintf(os.Stderr, "Code map completion marker removal failed: %v\n", removeErr)
 		return 1
 	}
 	if status == "UNAVAILABLE" {

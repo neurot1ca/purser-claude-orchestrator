@@ -16,8 +16,12 @@ func watchSessionOwner(ctx context.Context, owner waiter.Owner, done chan struct
 		return err
 	}
 	go func() {
-		defer syscall.CloseHandle(handle)
 		defer close(done)
+		defer func() {
+			if err := syscall.CloseHandle(handle); err != nil {
+				fmt.Fprintf(stderr, "Purser: session owner monitor handle close failed: %v\n", err)
+			}
+		}()
 		for ctx.Err() == nil {
 			result, err := syscall.WaitForSingleObject(handle, 100)
 			if err != nil {
