@@ -47,10 +47,6 @@ func bounded(owner string) policy {
 func limits(files int, bytes int64) policy {
 	return policy{maxAgeDays: -1, maxFiles: files, maxBytes: bytes}
 }
-func aged(days, files int, bytes int64) policy {
-	return policy{maxAgeDays: days, maxFiles: files, maxBytes: bytes}
-}
-
 func byteLimit(bytes int64) policy { return policy{maxAgeDays: -1, maxFiles: -1, maxBytes: bytes} }
 
 // RemoveOldPrefixedEntries removes top-level temporary entries matching a name

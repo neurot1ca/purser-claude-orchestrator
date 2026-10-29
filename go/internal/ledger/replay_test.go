@@ -441,18 +441,6 @@ func initReplayRepository(t *testing.T, root, tracked string) string {
 	git(t, root, "config", "core.autocrlf", "false")
 	return stringsOutput(t, root, "rev-parse", "HEAD^{tree}")
 }
-func readReplayState(t *testing.T, root string) map[string]any {
-	t.Helper()
-	b, e := os.ReadFile(filepath.Join(root, "state.json"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	var s map[string]any
-	if e = json.Unmarshal(b, &s); e != nil {
-		t.Fatal(e)
-	}
-	return s
-}
 func replayArtifacts(t *testing.T, root string) map[string]any {
 	t.Helper()
 	files := []string{}

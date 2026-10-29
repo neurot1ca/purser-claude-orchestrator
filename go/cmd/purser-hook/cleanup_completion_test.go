@@ -37,10 +37,7 @@ func TestCleanupMaintenanceCompletionBoundaries(t *testing.T) {
 		t.Fatalf("completion/failure changed result: called=%v result=%v err=%v", called, result, err)
 	}
 	called = false
-	if _, err := dispatchOperation(context.Background(), "codex_start", map[string]any{"prompt": "x"}, root); err == nil {
-		// codex_start may fail because the fixture has no configured agent; cleanup
-		// scheduling is still the assertion below.
-	}
+	_, _ = dispatchOperation(context.Background(), "codex_start", map[string]any{"prompt": "x"}, root)
 	if called {
 		t.Fatal("non-final codex_start launched cleanup")
 	}

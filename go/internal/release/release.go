@@ -152,7 +152,7 @@ func stageCommit(root, commit, dest string) error {
 			if e = os.MkdirAll(out, os.FileMode(h.Mode)&0777); e != nil {
 				return e
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if e = os.MkdirAll(filepath.Dir(out), 0755); e != nil {
 				return e
 			}
