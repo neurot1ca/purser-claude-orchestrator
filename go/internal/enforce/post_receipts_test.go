@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -12,6 +13,102 @@ import (
 
 	"purser-hook/internal/contextio"
 )
+
+func TestPostDispatchReceiptWriteFailureIsReportedAndRetryable(t *testing.T) {
+	root, repo := t.TempDir(), t.TempDir()
+	event := map[string]any{"session_id": "queue-failure"}
+	original := postReceiptStateWriter
+	postReceiptStateWriter = func(string, map[string]any) error { return errors.New("write failed") }
+	t.Cleanup(func() { postReceiptStateWriter = original })
+	queuePostReceipt(root, event, repo, "receipt line")
+	if postPendingGuidance(root, event, repo) != "" || !postReceiptDiagnosticContains(t, root, "dispatch receipt state write") {
+		t.Fatal("failed dispatch queue write was not reported or leaked as queued")
+	}
+	postReceiptStateWriter = original
+	queuePostReceipt(root, event, repo, "receipt line")
+	queuePostReceipt(root, event, repo, "receipt line")
+	if got := postPendingGuidance(root, event, repo); strings.Count(got, "\nreceipt line") != 1 {
+		t.Fatalf("retry did not persist exactly one receipt: %q", got)
+	}
+}
+
+func TestDeliveredGuidanceWriteFailureIsReportedAndRetryable(t *testing.T) {
+	root, repo := t.TempDir(), t.TempDir()
+	event := map[string]any{"session_id": "guidance-failure"}
+	path := postReceiptStatePath(root, repo)
+	state := readPostReceiptState(path, event["session_id"].(string))
+	state["version_pending"] = map[string]any{"delivered": false}
+	mustPostTest(t, writePostReceiptState(path, state))
+	original := postReceiptStateWriter
+	postReceiptStateWriter = func(string, map[string]any) error { return errors.New("write failed") }
+	t.Cleanup(func() { postReceiptStateWriter = original })
+	markPostGuidanceDelivered(root, event, repo)
+	if mapValue(readPostReceiptState(path, event["session_id"].(string))["version_pending"])["delivered"] != false || !postReceiptDiagnosticContains(t, root, "delivered guidance state write") {
+		t.Fatal("failed delivered-state write was not reported or marked delivered")
+	}
+	postReceiptStateWriter = original
+	markPostGuidanceDelivered(root, event, repo)
+	if mapValue(readPostReceiptState(path, event["session_id"].(string))["version_pending"])["delivered"] != true {
+		t.Fatal("delivered guidance did not recover on retry")
+	}
+	postReceiptStateWriter = original
+}
+
+func TestCompletionDeliveryStateWriteFailureLeavesRetryAvailable(t *testing.T) {
+	root, repo := t.TempDir(), t.TempDir()
+	event := map[string]any{"session_id": "delivery-state-failure", "tool_use_id": "delivery-call"}
+	receipt := queuePostCompletionReceipt(root, event, repo, map[string]any{"model": "model", "effort": "high"})
+	original := postReceiptStateWriter
+	postReceiptStateWriter = func(string, map[string]any) error { return errors.New("write failed") }
+	t.Cleanup(func() { postReceiptStateWriter = original })
+	response := map[string]any{"completion_receipt": receipt}
+	deliverPostCompletionReceipt(response, root)
+	marker := filepath.Join(root, "receipt_deliveries", stringValue(receipt["id"])+".json")
+	if response["systemMessage"] != nil || !postReceiptDiagnosticContains(t, root, "completion delivery state write") {
+		t.Fatal("delivery was claimed after delivered-state write failed")
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed state write left a suppressing delivery marker: %v", err)
+	}
+	postReceiptStateWriter = original
+	response["completion_receipt"] = receipt
+	deliverPostCompletionReceipt(response, root)
+	if response["systemMessage"] == nil || readPostReceiptState(postReceiptStatePath(root, repo), event["session_id"].(string))["receipt_delivered"] != true {
+		t.Fatal("completion receipt did not deliver on retry")
+	}
+}
+
+func TestPostReceiptReleaseFailureIsReported(t *testing.T) {
+	root, repo := t.TempDir(), t.TempDir()
+	event := map[string]any{"session_id": "release-failure", "tool_use_id": "release-call"}
+	receipt := queuePostCompletionReceipt(root, event, repo, map[string]any{"model": "model", "effort": "high"})
+	original := postReceiptLockFile
+	postReceiptLockFile = func(path string) (func() error, error) {
+		unlock, err := original(path)
+		if err != nil {
+			return nil, err
+		}
+		return func() error {
+			if strings.HasSuffix(path, ".lock") && strings.Contains(path, "projects") {
+				_ = unlock()
+				return errors.New("release failed")
+			}
+			return unlock()
+		}, nil
+	}
+	t.Cleanup(func() { postReceiptLockFile = original })
+	response := map[string]any{"completion_receipt": receipt}
+	deliverPostCompletionReceipt(response, root)
+	if response["systemMessage"] == nil || !postReceiptDiagnosticContains(t, root, "completion delivery state lock release") {
+		t.Fatal("receipt lock release failure was not reported")
+	}
+}
+
+func postReceiptDiagnosticContains(t *testing.T, root, want string) bool {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "diagnostics.jsonl"))
+	return err == nil && strings.Contains(string(data), want)
+}
 
 func TestCompletionReceiptTurkishLine(t *testing.T) {
 	root, repo := t.TempDir(), t.TempDir()

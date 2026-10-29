@@ -3,6 +3,7 @@ package enforce
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -11,6 +12,16 @@ import (
 
 	"purser-hook/internal/contextio"
 )
+
+var postReceiptLockFile = contextio.LockFile
+var postReceiptStateWriter = writePostReceiptState
+
+func postReceiptFailure(root string, err error) {
+	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "post_receipt"}
+	if writePostDiagnostic(root, event, err) != nil {
+		_, _ = os.Stderr.Write(append(diagnosticJSON(postDiagnostic(event, err)), '\n'))
+	}
+}
 
 func postReceiptStatePath(root, repository string) string {
 	return filepath.Join(root, "projects", projectKey(&repository), "telemetry", "compaction_advisor.json")
@@ -42,7 +53,7 @@ func writePostReceiptState(path string, state map[string]any) error {
 }
 
 // queuePostCompletionReceipt stores the finalized completion receipt for the session.
-func queuePostCompletionReceipt(root string, event map[string]any, repository string, bundle map[string]any) map[string]any {
+func queuePostCompletionReceipt(root string, event map[string]any, repository string, bundle map[string]any) (result map[string]any) {
 	session, model := stringValue(event["session_id"]), stringValue(bundle["model"])
 	if repository == "" || session == "" || model == "" {
 		return nil
@@ -71,11 +82,17 @@ func queuePostCompletionReceipt(root string, event map[string]any, repository st
 		}
 	}
 	path := postReceiptStatePath(root, repository)
-	unlock, err := contextio.LockFile(path + ".lock")
+	unlock, err := postReceiptLockFile(path + ".lock")
 	if err != nil {
+		postReceiptFailure(root, fmt.Errorf("completion receipt lock: %w", err))
 		return nil
 	}
-	defer unlock()
+	defer func() {
+		if err := unlock(); err != nil {
+			postReceiptFailure(root, fmt.Errorf("completion receipt lock release: %w", err))
+			result = nil
+		}
+	}()
 	state := readPostReceiptState(path, session)
 	language := stringValue(state["last_context_language"])
 	if data, err := os.ReadFile(filepath.Join(filepath.Dir(path), "purser-handoff.md")); err == nil {
@@ -95,7 +112,11 @@ func queuePostCompletionReceipt(root string, event map[string]any, repository st
 		}
 		state["receipt_id"] = id
 	}
-	if writePostReceiptState(path, state) != nil || err != nil {
+	if writeErr := postReceiptStateWriter(path, state); writeErr != nil {
+		postReceiptFailure(root, fmt.Errorf("completion receipt state write: %w", writeErr))
+		return nil
+	}
+	if err != nil {
 		return nil
 	}
 	return map[string]any{"id": id, "message": PostReceiptAdvice(receipt, time.Now().UTC()), "repository": repository, "session_id": session}
@@ -108,6 +129,16 @@ func queuePostReceipt(root string, event map[string]any, repository, line string
 		return
 	}
 	path := postReceiptStatePath(root, repository)
+	unlock, err := postReceiptLockFile(path + ".lock")
+	if err != nil {
+		postReceiptFailure(root, fmt.Errorf("dispatch receipt lock: %w", err))
+		return
+	}
+	defer func() {
+		if err := unlock(); err != nil {
+			postReceiptFailure(root, fmt.Errorf("dispatch receipt lock release: %w", err))
+		}
+	}()
 	state := readPostReceiptState(path, session)
 	pending, _ := state["dispatch_pending"].(map[string]any)
 	if pending == nil {
@@ -122,7 +153,9 @@ func queuePostReceipt(root string, event map[string]any, repository, line string
 	pending["lines"] = append(lines, line)
 	pending["blocked"] = false
 	state["dispatch_pending"] = pending
-	writePostReceiptState(path, state)
+	if err := postReceiptStateWriter(path, state); err != nil {
+		postReceiptFailure(root, fmt.Errorf("dispatch receipt state write: %w", err))
+	}
 }
 
 // markPostGuidanceDelivered records that lifecycle guidance was emitted.
@@ -132,6 +165,16 @@ func markPostGuidanceDelivered(root string, event map[string]any, repository str
 		return
 	}
 	path := postReceiptStatePath(root, repository)
+	unlock, err := postReceiptLockFile(path + ".lock")
+	if err != nil {
+		postReceiptFailure(root, fmt.Errorf("delivered guidance lock: %w", err))
+		return
+	}
+	defer func() {
+		if err := unlock(); err != nil {
+			postReceiptFailure(root, fmt.Errorf("delivered guidance lock release: %w", err))
+		}
+	}()
 	state := readPostReceiptState(path, session)
 	changed := false
 	for _, field := range []string{"maintenance_pending", "version_pending", "leader_pending", "fallback_pending"} {
@@ -141,7 +184,9 @@ func markPostGuidanceDelivered(root string, event map[string]any, repository str
 		}
 	}
 	if changed {
-		writePostReceiptState(path, state)
+		if err := postReceiptStateWriter(path, state); err != nil {
+			postReceiptFailure(root, fmt.Errorf("delivered guidance state write: %w", err))
+		}
 	}
 }
 
@@ -181,25 +226,59 @@ func deliverPostCompletionReceipt(response map[string]any, root string) {
 		return
 	}
 	path := filepath.Join(root, "receipt_deliveries", id+".json")
-	unlock, err := contextio.LockFile(path + ".lock")
+	unlock, err := postReceiptLockFile(path + ".lock")
 	if err != nil {
+		postReceiptFailure(root, fmt.Errorf("completion delivery lock: %w", err))
 		return
 	}
-	defer unlock()
+	defer func() {
+		if err := unlock(); err != nil {
+			postReceiptFailure(root, fmt.Errorf("completion delivery lock release: %w", err))
+		}
+	}()
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			postReceiptFailure(root, fmt.Errorf("completion delivery marker read: %w", err))
+		}
 		return
 	}
-	if atomicAdmissionJSON(path, receipt) != nil {
+	if err := atomicAdmissionJSON(path, receipt); err != nil {
+		postReceiptFailure(root, fmt.Errorf("completion delivery marker write: %w", err))
 		return
 	}
 	statePath := postReceiptStatePath(root, stringValue(receipt["repository"]))
-	if release, err := contextio.LockFile(statePath + ".lock"); err == nil {
-		state := readPostReceiptState(statePath, stringValue(receipt["session_id"]))
-		if state["receipt_id"] == id {
-			state["receipt_delivered"] = true
-			writePostReceiptState(statePath, state)
+	release, err := postReceiptLockFile(statePath + ".lock")
+	if err != nil {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			postReceiptFailure(root, fmt.Errorf("completion delivery marker rollback: %w", removeErr))
 		}
-		release()
+		postReceiptFailure(root, fmt.Errorf("completion delivery state lock: %w", err))
+		return
+	}
+	state := readPostReceiptState(statePath, stringValue(receipt["session_id"]))
+	if state["receipt_id"] != id {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			postReceiptFailure(root, fmt.Errorf("completion delivery marker rollback: %w", err))
+		}
+		postReceiptFailure(root, errors.New("completion delivery state does not match receipt"))
+		if releaseErr := release(); releaseErr != nil {
+			postReceiptFailure(root, fmt.Errorf("completion delivery state lock release: %w", releaseErr))
+		}
+		return
+	}
+	state["receipt_delivered"] = true
+	if err := postReceiptStateWriter(statePath, state); err != nil {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			postReceiptFailure(root, fmt.Errorf("completion delivery marker rollback: %w", removeErr))
+		}
+		postReceiptFailure(root, fmt.Errorf("completion delivery state write: %w", err))
+		if releaseErr := release(); releaseErr != nil {
+			postReceiptFailure(root, fmt.Errorf("completion delivery state lock release: %w", releaseErr))
+		}
+		return
+	}
+	if err := release(); err != nil {
+		postReceiptFailure(root, fmt.Errorf("completion delivery state lock release: %w", err))
 	}
 	if prior := stringValue(response["systemMessage"]); prior != "" {
 		message = prior + "\n" + message
