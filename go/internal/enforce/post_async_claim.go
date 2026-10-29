@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"purser-hook/internal/contextio"
@@ -57,8 +58,24 @@ func claimAsyncResult(root string, event map[string]any, repoRoot string) (*os.F
 	if err != nil {
 		return release(err)
 	}
+	resultDelivery := strings.HasSuffix(stringValue(event["tool_name"]), "__codex_result")
+	if resultDelivery {
+		index["result_delivery_sequence"] = numberOr(index["result_delivery_sequence"], 0) + 1
+		if taskID := stringValue(pending["task_id"]); taskID != "" {
+			index["result_delivery_task_id"] = taskID
+		}
+	}
 	if index["stage"] == "CONSUMED" || index["stage"] == "FAILED" {
+		if resultDelivery {
+			index["result_delivery_outcome"] = "REPLAYED_" + stringValue(index["stage"])
+			if err = atomicAdmissionJSON(path, index); err != nil {
+				return release(err)
+			}
+		}
 		return lock, index, pending, original, index["response"], nil
+	}
+	if resultDelivery {
+		index["result_delivery_outcome"] = "FINALIZED"
 	}
 	if index["stage"] == "REVIEW_REFRESH" {
 		index["review_refresh_required"] = true

@@ -369,7 +369,7 @@ func postApply(event map[string]any, root string) map[string]any {
 	return response
 }
 
-func postAsyncDispatch(event map[string]any, root string) (map[string]any, error) {
+func postAsyncDispatch(event map[string]any, root string) (response map[string]any, failure error) {
 	repoRoot := stringValue(event["repo_root"])
 	lock, index, pending, original, cached, err := claimAsyncResult(root, event, repoRoot)
 	if err != nil {
@@ -382,6 +382,11 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 		return response, replaceErr
 	}
 	defer func() { releaseTaskUsageLock(lock); _ = lock.Close() }()
+	defer func() {
+		if failure == nil && strings.HasSuffix(stringValue(event["tool_name"]), "__codex_result") {
+			recordAsyncResultDelivery(root, event, pending, index)
+		}
+	}()
 	repoRoot = stringValue(pending["repo_root"])
 	if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_cancel") {
 		if job := asyncJob(root, index); job != nil && (job["discarded"] == true || job["applyState"] == "rejected") {
@@ -483,7 +488,7 @@ func postAsyncDispatch(event map[string]any, root string) (map[string]any, error
 		return recovered, recoveryErr
 	}
 	resolved := postProfileFromPending(pending, loaded)
-	response, err := finishAsyncSuccess(root, event, index, pending, original, stringValue(pending["repo_root"]), loaded,
+	response, err = finishAsyncSuccess(root, event, index, pending, original, stringValue(pending["repo_root"]), loaded,
 		resolved, nil, loaded, postNonReportCap(loaded), postReportLimit(loaded, pending["phase"]), 240*time.Second)
 	if err != nil {
 		if failed, handled, failErr := finalizeAsyncFailure(root, event, index, pending); handled {

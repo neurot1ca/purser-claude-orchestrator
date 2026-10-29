@@ -1,6 +1,7 @@
 package enforce
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -175,6 +176,89 @@ func TestConcurrentAsyncResultsForDifferentJobsBothConsume(t *testing.T) {
 		got := <-results
 		if got.err != nil || got.bundle["result"] != "review bundle" {
 			t.Fatalf("result consumption failed: %#v", got)
+		}
+	}
+}
+
+func TestAsyncResultDeliveryTelemetryFirstAndReplay(t *testing.T) {
+	state := t.TempDir()
+	repo := filepath.Join(state, "repo")
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := execGitInit(repo); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	project := projectKey(&repo)
+	jobID := "2235832b783efd26dc1e90c40f03a5b3604561d5815c955d2cdb72f87c3c6a9e"
+	call := "codex async fixture"
+	event := map[string]any{"tool_name": "mcp__codex-main__codex_result", "session_id": "session-delivery",
+		"tool_input": map[string]any{"jobId": jobID}}
+	origin := map[string]any{"tool_name": "mcp__codex-main__codex", "session_id": "session-delivery", "tool_use_id": "origin-delivery"}
+	key, err := callKey(origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := map[string]any{"call": call, "call_key": key, "jobId": jobID, "project_key": project,
+		"session_id": "session-delivery", "stage": "FINISHED"}
+	pending := map[string]any{"async_call": call, "baseline": map[string]any{}, "job_id": jobID,
+		"project_key": project, "session_id": "session-delivery", "task_id": "delivery-task", "tool_use_id": "origin-delivery",
+		"repo_root": repo}
+	writeAsyncFixtureObject(t, filepath.Join(state, "async_jobs"), jobID, index)
+	writeAsyncFixtureObject(t, filepath.Join(state, "pending"), key, pending)
+
+	lock, claimed, gotPending, _, cached, err := claimAsyncResult(state, event, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached != nil || claimed["result_delivery_sequence"] != float64(1) || claimed["result_delivery_outcome"] != "FINALIZED" {
+		t.Fatalf("first delivery metadata = (%v, %v), cached=%#v", claimed["result_delivery_sequence"], claimed["result_delivery_outcome"], cached)
+	}
+	recordAsyncResultDelivery(state, event, gotPending, claimed)
+	response := map[string]any{"review": "cached"}
+	indexPath := filepath.Join(state, "async_jobs", jobID+".json")
+	if err := consumeAsyncResult(indexPath, claimed, "bundle.json", response); err != nil {
+		t.Fatal(err)
+	}
+	releaseTaskUsageLock(lock)
+	_ = lock.Close()
+
+	lock, replayed, gotPending, _, cached, err := claimAsyncResult(state, event, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { releaseTaskUsageLock(lock); _ = lock.Close() }()
+	if !reflect.DeepEqual(cached, response) || replayed["result_delivery_sequence"] != float64(2) || replayed["result_delivery_outcome"] != "REPLAYED_CONSUMED" {
+		t.Fatalf("replay metadata = (%v, %v), cached=%#v", replayed["result_delivery_sequence"], replayed["result_delivery_outcome"], cached)
+	}
+	persisted, err := readAsyncObject(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted["result_delivery_sequence"] != float64(2) || persisted["result_delivery_outcome"] != "REPLAYED_CONSUMED" {
+		t.Fatalf("persisted replay metadata = (%v, %v)", persisted["result_delivery_sequence"], persisted["result_delivery_outcome"])
+	}
+	recordAsyncResultDelivery(state, event, gotPending, replayed)
+	data, err := os.ReadFile(filepath.Join(state, "telemetry", "events", "by_task", pending["task_id"].(string)+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []map[string]any
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var event map[string]any
+		if err := json.Unmarshal(line, &event); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 2 {
+		t.Fatalf("delivery telemetry events = %d, want 2; data=%s", len(events), data)
+	}
+	wantOutcomes := []string{"FINALIZED", "REPLAYED_CONSUMED"}
+	for i, event := range events {
+		payload := mapValue(event["payload"])
+		if event["event_type"] != "ASYNC_RESULT_DELIVERED" || payload["job_id"] != jobID || payload["result_delivery_sequence"] != float64(i+1) || payload["result_delivery_outcome"] != wantOutcomes[i] {
+			t.Fatalf("delivery event %d = %#v", i+1, event)
 		}
 	}
 }

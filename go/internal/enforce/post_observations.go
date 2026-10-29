@@ -9,6 +9,7 @@ import (
 
 func init() {
 	observationFields["IMPLEMENTER_FINISHED"] = mergeFields(fields(`duration_ms longest_silent_gap_seconds implementer served_model served_route served_effort served_agent served_provider route phase task_type has_code_map suspected_route_mismatch changed_paths_count known_concurrent_scopes validation worker_validation_status thread_id claude_review_mode routing_enforced codex_usage_known claude_continuation_turn_count reason reason_source previous_route new_route eta_minutes scope_count codex_input_tokens codex_cached_input_tokens codex_output_tokens codex_reasoning_output_tokens`), claudeUsagePayloadFields)
+	observationFields["ASYNC_RESULT_DELIVERED"] = fields("job_id result_delivery_sequence result_delivery_outcome")
 	observationFields["MECHANICAL_SHADOW_STARTED"] = fields("")
 	observationFields["MECHANICAL_SHADOW_FINISHED"] = fields("success")
 	setObservationRule("bool", "success")
@@ -21,9 +22,35 @@ func init() {
 	setObservationRule("enum:PASS FAIL UNKNOWN", "validation worker_validation_status")
 	setObservationRule("enum:AUDIT FULL", "claude_review_mode")
 	setObservationRule("string_map_list", "known_concurrent_scopes")
+	setObservationRule("id", "job_id")
+	setObservationRule("int", "result_delivery_sequence")
+	setObservationRule("enum:FINALIZED REPLAYED_CONSUMED REPLAYED_FAILED", "result_delivery_outcome")
 	for _, key := range []string{"codex_input_tokens", "codex_cached_input_tokens", "codex_output_tokens", "codex_reasoning_output_tokens"} {
 		setObservationRule("number", key)
 	}
+}
+
+func recordAsyncResultDelivery(root string, event, pending, index map[string]any) {
+	taskID := stringValue(pending["task_id"])
+	if taskID == "" {
+		taskID = stringValue(index["result_delivery_task_id"])
+	}
+	project := pendingProjectKey(pending)
+	if project == "" {
+		project = stringValue(index["project_key"])
+	}
+	repository := stringValue(pending["repo_root"])
+	if repository == "" {
+		repository = stringValue(event["repo_root"])
+	}
+	var repositoryPtr *string
+	if repository != "" {
+		repositoryPtr = &repository
+	}
+	preEmit(root, event, repositoryPtr, taskID, project, "ASYNC_RESULT_DELIVERED", map[string]any{
+		"job_id": index["jobId"], "result_delivery_sequence": index["result_delivery_sequence"],
+		"result_delivery_outcome": index["result_delivery_outcome"],
+	})
 }
 
 // PostImplementerObservations mirrors the implementer event and task fold at
