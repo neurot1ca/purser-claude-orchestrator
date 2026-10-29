@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.209 — 2026-10-29
+
+- **Fixed:** Claude coder jobs can edit their worktree again, and accept the workspace-write sandbox that other coders use.
+
 ## 0.1.208 — 2026-10-29
 
 - **Fixed:** Purser's hooks load again on older Claude Code versions, which refused the module, so jobs failed to start with a missing MCP identity handoff.
