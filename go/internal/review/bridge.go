@@ -2,7 +2,6 @@ package review
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 )
@@ -46,17 +45,4 @@ func RunBridge(ctx context.Context, pluginRoot string, args map[string]any, time
 		}
 	}()
 	return nativeReview(ctx, pluginRoot, args)
-}
-
-func bridgeContextError(err error) *BridgeError {
-	code := "BRIDGE_CANCELED"
-	if errors.Is(err, context.DeadlineExceeded) {
-		code = "BRIDGE_TIMEOUT"
-	}
-	return &BridgeError{Code: code, Err: err}
-}
-
-func bridgeInvalidInput(output []byte) bool {
-	var reply map[string]any
-	return json.Unmarshal(output, &reply) == nil && reply["error"] == "INVALID_INPUT"
 }

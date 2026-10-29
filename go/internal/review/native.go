@@ -365,7 +365,8 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	if provider == "cursor" {
 		configName, configData := adapter.ConfinementConfig(nil)
 		configPath := filepath.Join(working, configName)
-		if err := os.MkdirAll(filepath.Dir(configPath), 0700); err == nil {
+		err = os.MkdirAll(filepath.Dir(configPath), 0700)
+		if err == nil {
 			err = os.WriteFile(configPath, configData, 0600)
 		}
 		if err != nil {

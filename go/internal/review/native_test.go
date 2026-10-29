@@ -100,6 +100,44 @@ func envelope(result string, findings []map[string]string) string {
 	return string(b)
 }
 
+type failingConfinementAdapter struct{ reviewerAdapter }
+
+func (failingConfinementAdapter) ConfinementConfig([]string) (string, []byte) {
+	return ".", []byte("{}")
+}
+
+func TestNativeCursorConfinementWriteFailureFailsClosed(t *testing.T) {
+	root, _ := nativeFixture(t)
+	configPath := filepath.Join(root, ".claude", "hooks", "orchestrator", "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	config["reviewer1_internal_cursor_enabled"] = true
+	data, err = json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := reviewerAdapters["cursor"]
+	if err := RegisterReviewerAdapter("cursor", failingConfinementAdapter{reviewerAdapter{"cursor"}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reviewerAdapters["cursor"] = previous })
+	args := nativeArgs(root, "", NoMaterialFinding)
+	args["reviewer_agent"], args["reviewer_model"] = "cursor", "claude-sonnet-4-5"
+	got, err := RunBridge(context.Background(), root, args, 30*time.Second)
+	if err != nil || got.Outcome != "unavailable" || got.Attributes["error_code"] != "REVIEWER_CURSOR_CONFINEMENT_UNAVAILABLE" {
+		t.Fatalf("Cursor confinement write failure = %#v, %v", got, err)
+	}
+}
+
 func TestNativeRunBridgeCompletedPassAndFindings(t *testing.T) {
 	for _, tc := range []struct {
 		name, result string

@@ -40,7 +40,8 @@ func TestAdapterGoldens(t *testing.T) {
 			prompt := ReviewPrompt(`C:\tmp\packet.json`)
 			var command []string
 			if name == "agy" {
-				repository, err := filepath.Abs(filepath.Join("tmp", "repo"))
+				var repository string
+				repository, err = filepath.Abs(filepath.Join("tmp", "repo"))
 				if err != nil {
 					t.Fatal(err)
 				}
