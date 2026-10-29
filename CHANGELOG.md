@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.211 — 2026-10-29
+
+- **Fixed:** the Stop hook sees an update notice shown earlier in the turn instead of asking for it again.
+
 ## 0.1.210 — 2026-10-29
 
 - **Fixed:** OpenCode, Cursor and Antigravity coders accept the workspace-write sandbox instead of refusing the job.
