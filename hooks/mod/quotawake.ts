@@ -96,9 +96,14 @@ export function registerClaudeWake(on) {
     }
     return next(e)
   })
+  // Registered here because older Claude Code rejects $ passed across an import.
+  on('classic.StopFailure', async ($, e, next) => {
+    await scheduleClaudeWake($, e.error)
+    return next(e)
+  })
 }
 
-export async function scheduleClaudeWake($, error: string) {
+async function scheduleClaudeWake($, error: string) {
   if (error !== 'rate_limit') return
   try {
     const usage = await $.session.usage()

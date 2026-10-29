@@ -6,7 +6,7 @@ import { registerUsage } from './mod/usage.js'
 import { register as registerEnforcement } from './mod/enforcement.js'
 import { registerAutoCompact } from './mod/autocompact.js'
 import { registerLanguage } from './mod/language.js'
-import { cancelClaudeWake, registerClaudeWake, registerQuotaWake, scheduleClaudeWake } from './mod/quotawake.js'
+import { cancelClaudeWake, registerClaudeWake, registerQuotaWake } from './mod/quotawake.js'
 
 const reported = new Set<string>()
 const lifecycleReported = new Set<string>()
@@ -104,10 +104,6 @@ export function register(on) {
   })
 
   on('classic.UserPromptSubmit', ($, e, next) => lifecycle($, e, next, 'UserPromptSubmit'))
-  on('classic.StopFailure', async ($, e, next) => {
-    await scheduleClaudeWake($, e.error)
-    return next(e)
-  })
   on('classic.SessionStart', async ($, e, next) => {
     const prior = await next(e)
     return lifecycle($, e, () => prior, 'SessionStart')
