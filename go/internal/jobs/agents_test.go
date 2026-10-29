@@ -235,3 +235,16 @@ func assertAgentError(t *testing.T, err error, want string) {
 }
 
 func stringPointer(value string) *string { return &value }
+
+func TestWorkspaceWriteSandboxIsTheBridgedCodersDefault(t *testing.T) {
+	in := AgentCommandInput{Agent: "opencode", Tool: "codex", Model: "opencode/big-pickle", Prompt: "work"}
+	want, err := BuildAgentCommand(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Sandbox = stringPointer("workspace-write")
+	got, err := BuildAgentCommand(in)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("workspace-write command = %q, %v; want %q", got, err, want)
+	}
+}

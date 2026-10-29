@@ -124,6 +124,10 @@ func AgentCommandEnvironment(in AgentCommandInput) []string {
 
 // BuildAgentCommand maps the OpenCode and Antigravity bridge options to argv.
 func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
+	// workspace-write is Codex's name for every bridged coder's default mode.
+	if in.Sandbox != nil && *in.Sandbox == "workspace-write" {
+		in.Sandbox = nil
+	}
 	switch in.Agent {
 	case "cursor":
 		if in.Model == "" || in.Model != "auto" && !cursorModel.MatchString(in.Model) {
@@ -195,8 +199,7 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 			return nil, errors.New("Claude effort is required and sandbox is unsupported")
 		}
 		readOnly := in.Sandbox != nil && *in.Sandbox == "read-only"
-		// workspace-write is the Claude worker's normal mode, not a separate sandbox.
-		if in.Sandbox != nil && !readOnly && *in.Sandbox != "workspace-write" {
+		if in.Sandbox != nil && !readOnly {
 			return nil, errors.New("Claude effort is required and sandbox is unsupported")
 		}
 		command := append([]string{}, in.Prefix...)
