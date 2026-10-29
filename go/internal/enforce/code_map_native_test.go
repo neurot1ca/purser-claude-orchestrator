@@ -381,28 +381,3 @@ func nativeMapRepo(t *testing.T, files map[string]string) (string, string) {
 	git(t, r, "add", ".")
 	return r, t.TempDir()
 }
-
-func nativeMapFixture(t *testing.T, name string) string {
-	t.Helper()
-	p := filepath.Join("testdata", "code_map.json")
-	b, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var f struct {
-		Cases []struct {
-			Name string
-			Map  string `json:"expected_map"`
-		} `json:"cases"`
-	}
-	if err = json.Unmarshal(b, &f); err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range f.Cases {
-		if c.Name == name {
-			return c.Map
-		}
-	}
-	t.Fatalf("missing fixture %s", name)
-	return ""
-}

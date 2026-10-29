@@ -23,7 +23,7 @@ func TestReconcileMechanicalInventoryTransitions(t *testing.T) {
 	if err := ReconcileMechanicalInventory(root, []string{"vendor/new-a", "vendor/served", "vendor/shadow", "vendor/new-b"}, "2026-10-16"); err != nil {
 		t.Fatal(err)
 	}
-	active, history := readMechanicalCandidates(t, root)
+	active, _ := readMechanicalCandidates(t, root)
 	if got := candidateIDs(active); !reflect.DeepEqual(got, []string{"vendor/new-a", "vendor/served", "vendor/shadow", "vendor/new-b"}) {
 		t.Fatalf("active IDs = %v", got)
 	}
@@ -39,7 +39,7 @@ func TestReconcileMechanicalInventoryTransitions(t *testing.T) {
 	if err := ReconcileMechanicalInventory(root, []string{"vendor/served", "vendor/new-a"}, "2026-10-17"); err != nil {
 		t.Fatal(err)
 	}
-	active, history = readMechanicalCandidates(t, root)
+	active, history := readMechanicalCandidates(t, root)
 	if candidateByID(active, "vendor/shadow") != nil || candidateByID(active, "vendor/new-b") != nil {
 		t.Fatalf("retired model remained active: %v", candidateIDs(active))
 	}

@@ -69,7 +69,7 @@ func observationResolvedPathDepth(abs string, depth int) (string, error) {
 	}
 	volume := filepath.VolumeName(abs)
 	current := volume + string(filepath.Separator)
-	rest := strings.TrimLeft(strings.TrimPrefix(abs, volume), `\\/`)
+	rest := strings.TrimLeft(strings.TrimPrefix(abs, volume), `\/`)
 	parts := strings.Split(rest, string(filepath.Separator))
 	for index, part := range parts {
 		if part == "" || part == "." {

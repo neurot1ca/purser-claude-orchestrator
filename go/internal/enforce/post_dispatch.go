@@ -182,10 +182,10 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 		recordPostReviewerObservations(root, event, optionalRepository(&repoRoot), stringValue(pending["task_id"]), project,
 			false, "", stringValue(loaded["reviewer1_model_requested"]), stringValue(bundle["reviewer1_skipped_reason"]), review.BridgeOutcome{}, nil, 0, -1)
 	}
-	if err = finishPostReviewDelta(repoRoot, root, event, pending, bundle, resolved, loaded, delta, classification, foreignOwners, started); err != nil {
+	if err = finishPostReviewDelta(repoRoot, root, event, pending, bundle, resolved, loaded, classification, foreignOwners, started); err != nil {
 		return nil, err
 	}
-	delta, classification = mapValue(bundle["delta"]), mapValue(bundle["concurrent_writer"])
+	classification = mapValue(bundle["concurrent_writer"])
 	gate := review.GateDecision{Run: bundle["reviewer1_skipped_reason"] == nil,
 		Reason: stringValue(bundle["reviewer1_skipped_reason"])}
 	finalizePostReview(bundle, pending, loaded, gate, classification, routeKnown,
@@ -318,7 +318,7 @@ func postNonReportCap(config map[string]any) int {
 }
 
 func finishPostReviewDelta(repoRoot, root string, event, pending, bundle map[string]any, resolved postProfile,
-	loaded map[string]any, delta, classification map[string]any, foreignOwners []map[string]any, started time.Time) error {
+	loaded, classification map[string]any, foreignOwners []map[string]any, started time.Time) error {
 	findings := []postRepairFinding{}
 	for _, finding := range postReviewerFindings(bundle["findings"]) {
 		findings = append(findings, postRepairFinding{Code: stringValue(finding["code"]), Message: stringValue(finding["message"])})
@@ -328,7 +328,7 @@ func finishPostReviewDelta(repoRoot, root string, event, pending, bundle map[str
 		_, attempted := attemptPostMicroRepair(bundle, "codex", result, stringValue(bundle["thread_id"]), repoRoot,
 			findings, postScope(pending), true, int(numberOr(loaded["micro_repair_timeout_seconds"], 60)), time.Until(started.Add(time.Duration(numberOr(loaded["max_total_hook_budget_seconds"], 240))*time.Second)), postMicroRepairDispatch)
 		if attempted {
-			delta = recomputePostRepairDelta(repoRoot, pending, bundle, resolved.ProtectedPaths, foreignOwners, mapValue(bundle["micro_repair"])["status"] == "SUCCEEDED")
+			delta := recomputePostRepairDelta(repoRoot, pending, bundle, resolved.ProtectedPaths, foreignOwners, mapValue(bundle["micro_repair"])["status"] == "SUCCEEDED")
 			bundle["delta"] = delta
 			if mapValue(bundle["micro_repair"])["status"] == "SUCCEEDED" {
 				if err := rereviewPostRepair(root, root, pending, bundle, resolved, loaded, delta, classification, started, time.Duration(numberOr(loaded["max_total_hook_budget_seconds"], 240))*time.Second); err != nil {

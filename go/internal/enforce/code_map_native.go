@@ -83,10 +83,6 @@ func refreshCodeMapNativeWithLimit(repo, stateRoot string, budget, maxBudget tim
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return fail()
 	}
-	manifest, valid, _ := readCodeMapCache(directory, "unavailable", deadline)
-	if !valid {
-		manifest = nil
-	}
 	lock, err := os.OpenFile(filepath.Join(directory, "index.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return fail()
@@ -112,6 +108,7 @@ func refreshCodeMapNativeWithLimit(repo, stateRoot string, budget, maxBudget tim
 		return fail()
 	}
 	cache, readErr := os.ReadFile(filepath.Join(directory, "manifest.json"))
+	var manifest *codeMapManifest
 	var latest codeMapManifest
 	if readErr == nil && json.Unmarshal(cache, &latest) == nil && latest.Version == codeMapVersion && latest.Parser == "unavailable" && latest.Entries != nil {
 		if info, e := os.Stat(target); e == nil && info.Mode().IsRegular() {

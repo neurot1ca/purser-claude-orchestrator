@@ -44,7 +44,8 @@ func TestPostAsyncCancelPythonFixture(t *testing.T) {
 			case "terminal_job", "running_job", "start_job_absent", "malformed_job":
 				pending := map[string]any{"async_call": call}
 				jobPath := filepath.Join(root, "codex_exec_mcp", "jobs", jobID+".json")
-				if item.Name == "terminal_job" || item.Name == "running_job" {
+				switch item.Name {
+				case "terminal_job", "running_job":
 					owner, project := "owner", "project"
 					pending["lease_owner"], pending["project_key"] = owner, project
 					if got := lease.New(filepath.Join(root, "projects", project)).Acquire(owner, "task", []string{"src"}, lease.AcquireOptions{}, 100); got.Status != "OK" {
@@ -57,11 +58,14 @@ func TestPostAsyncCancelPythonFixture(t *testing.T) {
 					writeAsyncFixtureObject(t, filepath.Dir(jobPath), jobID, map[string]any{
 						"jobId": jobID, "call": call, "state": state})
 					var cleanupErr error
-					got, cleanupErr = cleanupTerminalAsyncStart(root, pending, nil, 200)
+					cleanupResult, cleanupErr := cleanupTerminalAsyncStart(root, pending, nil, 200)
 					if cleanupErr != nil {
 						t.Fatal(cleanupErr)
 					}
-				} else if item.Name == "malformed_job" {
+					if cleanupResult != item.Expected {
+						t.Fatalf("cleanup result = %v, want %v", cleanupResult, item.Expected)
+					}
+				case "malformed_job":
 					if err := os.MkdirAll(filepath.Dir(jobPath), 0700); err != nil {
 						t.Fatal(err)
 					}

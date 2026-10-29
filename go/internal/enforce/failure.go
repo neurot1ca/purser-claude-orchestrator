@@ -96,10 +96,6 @@ func postSynchronousFailure(event map[string]any, root string) (response map[str
 		return failedWithDiagnostic(err)
 	}
 	undeliveredPath, _ = failureUndelivered(root, event, pending)
-	projectKey := stringValue(pending["project_key"])
-	if projectKey == "" {
-		projectKey = "unresolved"
-	}
 	evidence := failureEvidence(event, pending)
 	evidencePath, err := persistFailureEvidence(root, key, evidence)
 	if err != nil {

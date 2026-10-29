@@ -123,7 +123,6 @@ func workerValidationPassed(validation map[string]any) bool {
 }
 
 func recordMechanicalSample(root, model string, success bool) error {
-	path := filepath.Join(root, "opencode", "candidates.json")
 	path, unlock, err := lockCandidateInventory(root)
 	if err != nil {
 		return err
@@ -814,7 +813,7 @@ func startMechanicalShadow(root, projectKey, repository, prompt, report, served,
 	if err != nil {
 		return false, err
 	}
-	_, writeErr := lf.WriteString(fmt.Sprint(os.Getpid()))
+	_, writeErr := fmt.Fprint(lf, os.Getpid())
 	closeErr := lf.Close()
 	if writeErr != nil {
 		_ = os.Remove(lock)

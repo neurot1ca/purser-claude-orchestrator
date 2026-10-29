@@ -15,8 +15,6 @@ import (
 	"purser-hook/internal/review"
 )
 
-const cursorAgent = "cursor"
-
 type postReviewerAttempt struct {
 	Agent   string `json:"agent"`
 	Model   string `json:"model"`

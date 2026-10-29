@@ -70,14 +70,6 @@ func TestSchedulePostReviewImplementationDeltaUnchanged(t *testing.T) {
 	}
 }
 
-func anyList(values []string) []any {
-	result := make([]any, len(values))
-	for i, value := range values {
-		result[i] = value
-	}
-	return result
-}
-
 func postReviewRepo(t *testing.T, git, root string, delta map[string]any) {
 	t.Helper()
 	command := testutil.Hide(exec.Command(git, "init", "-q", root))
