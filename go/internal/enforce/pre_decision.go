@@ -507,7 +507,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 			if etaReason == "" && reply && live != nil {
 				etaReason = stringValue(live["reason"])
 			}
-			if median, ok := contextio.RouteMedianMinutes(defaultPreStateRoot(runtimeRoot), projectKey(root), stringValue(route.Route), selection.Agent, len(parsed.Scope), etaReason); ok {
+			if median, ok := contextio.RouteMedianMinutes(defaultPreStateRoot(runtimeRoot), projectKey(root), stringValue(route.Route), pointerValue(parsed.Phase), selection.Agent, len(parsed.Scope), etaReason); ok {
 				pendingETA = &median
 			} else if fallback := routeDurationDefault(pointerValue(parsed.Route)); fallback > 0 {
 				pendingETA = &fallback
@@ -1166,8 +1166,10 @@ func codexCallUUID(name string) string {
 func routeDurationDefault(route string) int {
 	switch route {
 	case "mechanical":
+		return 2
+	case "subtle":
 		return 3
-	case "subtle", "normal":
+	case "normal":
 		return 5
 	case "consequential":
 		return 8
@@ -1176,7 +1178,9 @@ func routeDurationDefault(route string) int {
 	case "operation":
 		return 3
 	case "plan_standard":
-		return 8
+		return 4
+	case "research":
+		return 1
 	}
 	return 0
 }

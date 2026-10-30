@@ -82,7 +82,7 @@ func TestRouteMedianMinutesUsesScopeAndReasonBucket(t *testing.T) {
 	var lines []string
 	add := func(scope any, reason string, minutes int) {
 		t.Helper()
-		payload := map[string]any{"route": "normal", "duration_ms": minutes * 60000, "implementer": "codex-main", "reason": reason}
+		payload := map[string]any{"route": "normal", "phase": "implementation", "duration_ms": minutes * 60000, "implementer": "codex-main", "reason": reason}
 		if scope != nil {
 			payload["scope_count"] = scope
 		}
@@ -106,7 +106,7 @@ func TestRouteMedianMinutesUsesScopeAndReasonBucket(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, ok := RouteMedianMinutes(root, "project", "normal", "codex-main", 5, "new_task")
+	got, ok := RouteMedianMinutes(root, "project", "normal", "implementation", "codex-main", 5, "new_task")
 	if !ok || got != 9 {
 		t.Fatalf("matching bucket median = %d, %v; want 9, true", got, ok)
 	}
@@ -117,7 +117,7 @@ func TestRouteMedianMinutesFallsBackWhenBucketIsInsufficient(t *testing.T) {
 	path := filepath.Join(root, "telemetry", "events", time.Now().UTC().Format("2006-01"), "session_eta.jsonl")
 	var lines []string
 	for i := 0; i < 10; i++ {
-		payload := map[string]any{"route": "normal", "duration_ms": 2 * 60000, "implementer": "codex-main"}
+		payload := map[string]any{"route": "normal", "phase": "implementation", "duration_ms": 2 * 60000, "implementer": "codex-main"}
 		if i == 0 {
 			payload["scope_count"], payload["reason"] = float64(4), "new_task"
 		}
@@ -135,9 +135,53 @@ func TestRouteMedianMinutesFallsBackWhenBucketIsInsufficient(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, ok := RouteMedianMinutes(root, "project", "normal", "codex-main", 4, "new_task")
+	got, ok := RouteMedianMinutes(root, "project", "normal", "implementation", "codex-main", 4, "new_task")
 	if !ok || got != 2 {
 		t.Fatalf("fallback route median = %d, %v; want 2, true", got, ok)
+	}
+}
+
+func TestRouteMedianMinutesUsesPhaseAndRoundsNearestMinute(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "telemetry", "events", time.Now().UTC().Format("2006-01"), "session_eta.jsonl")
+	var lines []string
+	for _, sample := range []struct {
+		phase string
+		ms    int
+	}{
+		{"implementation", 144000},
+		{"implementation", 144000},
+		{"implementation", 144000},
+		{"implementation", 144000},
+		{"implementation", 144000},
+		{"plan", 588000},
+		{"plan", 588000},
+		{"plan", 588000},
+		{"plan", 588000},
+		{"plan", 588000},
+	} {
+		item := map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": "project",
+			"ts_utc": time.Now().UTC().Format(time.RFC3339), "payload": map[string]any{
+				"route": "normal", "phase": sample.phase, "duration_ms": sample.ms,
+				"implementer": "codex-main", "scope_count": 4, "reason": "new_task",
+			}}
+		data, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, string(data))
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := RouteMedianMinutes(root, "project", "normal", "implementation", "codex-main", 4, "new_task"); !ok || got != 2 {
+		t.Fatalf("implementation ETA = %d, %v; want rounded 2 minutes from 2.4", got, ok)
+	}
+	if got, ok := RouteMedianMinutes(root, "project", "normal", "plan", "codex-main", 4, "new_task"); !ok || got != 10 {
+		t.Fatalf("plan ETA = %d, %v; want 10 minutes from 9.8", got, ok)
 	}
 }
 
@@ -155,7 +199,7 @@ func TestRouteDurationSamplesPreferNewestLinesUnderCap(t *testing.T) {
 	write := func(minutes int) {
 		t.Helper()
 		item := map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": "project", "ts_utc": now,
-			"payload": map[string]any{"route": "normal", "duration_ms": minutes * 60000, "implementer": "codex-main"}}
+			"payload": map[string]any{"route": "normal", "phase": "implementation", "duration_ms": minutes * 60000, "implementer": "codex-main"}}
 		data, e := json.Marshal(item)
 		if e != nil {
 			t.Fatal(e)

@@ -816,7 +816,7 @@ func TestPreCodexStartUsesMeasuredRouteETA(t *testing.T) {
 				encoder := json.NewEncoder(file)
 				for i := 1; i <= tc.samples; i++ {
 					item := map[string]any{"event_type": "IMPLEMENTER_FINISHED", "project_key": projectKey(&repo), "ts_utc": stamp,
-						"payload": map[string]any{"route": "normal", "implementer": "codex-main", "duration_ms": i * 60000}}
+						"payload": map[string]any{"route": "normal", "phase": "implementation", "implementer": "codex-main", "duration_ms": i * 60000}}
 					if err := encoder.Encode(item); err != nil {
 						file.Close()
 						t.Fatal(err)
@@ -842,6 +842,17 @@ func TestPreCodexStartUsesMeasuredRouteETA(t *testing.T) {
 				t.Fatalf("start ETA = %v, want %d; response %#v", updated["etaMinutes"], tc.wantETA, got)
 			}
 		})
+	}
+}
+
+func TestRouteDurationDefaultUsesMeasuredRouteMedians(t *testing.T) {
+	for route, want := range map[string]int{
+		"mechanical": 2, "subtle": 3, "normal": 5, "consequential": 8,
+		"operation": 3, "plan_standard": 4, "research": 1,
+	} {
+		if got := routeDurationDefault(route); got != want {
+			t.Errorf("routeDurationDefault(%q) = %d, want %d", route, got, want)
+		}
 	}
 }
 

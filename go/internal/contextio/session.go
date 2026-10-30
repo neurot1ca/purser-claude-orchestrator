@@ -178,13 +178,14 @@ func SessionStart(event map[string]any) []byte {
 	return []byte(output)
 }
 
-var finishedRoutes = []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation"}
+var finishedRoutes = []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard", "research"}
 var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type DurationSample struct {
 	DurationMS  float64
 	Implementer string
 	JobID       string
+	Phase       string
 	ScopeCount  int
 	HasScope    bool
 	NewTask     bool
@@ -200,10 +201,15 @@ func RouteDurationSamples(root, key, route string) []DurationSample {
 
 // RouteMedianMinutes returns the measured route median once the same sample
 // sufficiency rules used by SessionStart's duration hint are met.
-func RouteMedianMinutes(root, key, route, implementer string, scopeCount int, reason string) (int, bool) {
+func RouteMedianMinutes(root, key, route, phase, implementer string, scopeCount int, reason string) (int, bool) {
 	groups := map[string][]DurationSample{}
 	readRouteDurationSamples(root, key, groups)
-	samples := groups[route]
+	var samples []DurationSample
+	for _, sample := range groups[route] {
+		if sample.Phase == phase {
+			samples = append(samples, sample)
+		}
+	}
 	bucket := scopeCount >= 4
 	var scoped []DurationSample
 	for _, sample := range samples {
@@ -212,13 +218,13 @@ func RouteMedianMinutes(root, key, route, implementer string, scopeCount int, re
 		}
 	}
 	if median, _, ok := routeMedian(scoped, implementer, ""); ok {
-		return max(1, int(math.Ceil(median/60000))), true
+		return max(1, int(math.Round(median/60000))), true
 	}
 	median, _, ok := routeMedian(samples, implementer, "")
 	if !ok {
 		return 0, false
 	}
-	return max(1, int(math.Ceil(median/60000))), true
+	return max(1, int(math.Round(median/60000))), true
 }
 
 // RouteP90 uses the SessionStart duration hint's sample sufficiency and p90 rule.
@@ -327,6 +333,7 @@ func readRouteDurationSamples(root, key string, groups map[string][]DurationSamp
 			if !ok || duration < 1000 || !contains(finishedRoutes, route) {
 				continue
 			}
+			phase, _ := p["phase"].(string)
 			agent, _ := p["implementer"].(string)
 			if agent == "codex" {
 				agent = "codex-main"
@@ -334,7 +341,7 @@ func readRouteDurationSamples(root, key string, groups map[string][]DurationSamp
 			jobID, _ := item["job_id"].(string)
 			scopeCount, hasScope := numeric(p["scope_count"])
 			reason, _ := p["reason"].(string)
-			groups[route] = append(groups[route], DurationSample{DurationMS: duration, Implementer: agent,
+			groups[route] = append(groups[route], DurationSample{DurationMS: duration, Implementer: agent, Phase: phase,
 				JobID: jobID, ScopeCount: int(scopeCount), HasScope: hasScope && scopeCount >= 0 && math.Trunc(scopeCount) == scopeCount,
 				NewTask: reason == "new_task"})
 		}
