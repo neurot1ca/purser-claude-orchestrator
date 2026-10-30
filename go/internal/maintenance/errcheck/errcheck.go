@@ -24,9 +24,10 @@ import (
 )
 
 type Finding struct {
+	Check  string
 	File   string
 	Line   int
-	Callee string
+	Detail string
 }
 
 type Result struct {
@@ -35,12 +36,12 @@ type Result struct {
 }
 
 type pkg struct {
-	Dir, ImportPath, Export  string
-	GoFiles, CompiledGoFiles []string
-	ImportMap                map[string]string
-	Error                    *struct{ Err string }
-	DepsErrors               []struct{ Err string }
-	Incomplete               bool
+	Dir, ImportPath, Export                    string
+	GoFiles, CompiledGoFiles, CgoFiles, SFiles []string
+	ImportMap                                  map[string]string
+	Error                                      *struct{ Err string }
+	DepsErrors                                 []struct{ Err string }
+	Incomplete                                 bool
 }
 
 type importerMap struct {
@@ -173,7 +174,8 @@ ready:
 	return ""
 }
 
-// Run is advisory: failures return no partial findings and never mean a clean scan.
+// Run is advisory: a failed check publishes no findings and never means clean.
+// Shared load failures invalidate all checks. Analyzer failures are isolated.
 // Dependencies and toolchains must already be available locally.
 func Run(ctx context.Context, root string) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
@@ -229,8 +231,10 @@ func Run(ctx context.Context, root string) (Result, error) {
 	}
 	sort.Strings(dirs)
 	found := map[string]Finding{}
+	dead := newUnused()
+	statuses := map[string]string{}
 	for _, dir := range dirs {
-		if err := scan(ctx, goPath, root, dir, found); err != nil {
+		if err := scan(ctx, goPath, root, dir, found, dead, statuses); err != nil {
 			module, _ := filepath.Rel(root, dir)
 			return fail("load/type-check module "+filepath.ToSlash(module), err)
 		}
@@ -238,9 +242,30 @@ func Run(ctx context.Context, root string) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return fail("timeout/canceled", err)
 	}
+	dead.finish(found)
 	result := Result{Status: "ok"}
+	for _, check := range Checks {
+		if statuses[check] != "" || len(dead.skippedAsm)+len(dead.skippedCgo) > 0 {
+			result.Status = ""
+			break
+		}
+	}
+	if result.Status == "" {
+		for _, check := range Checks {
+			status := statuses[check]
+			if status == "" {
+				status = "ok"
+			}
+			if check == "unused" {
+				status += fmt.Sprintf("; skipped_asm_packages=%d; skipped_cgo_packages=%d", len(dead.skippedAsm), len(dead.skippedCgo))
+			}
+			result.Status += check + "=" + status + "\n"
+		}
+	}
 	for _, finding := range found {
-		result.Findings = append(result.Findings, finding)
+		if statuses[finding.Check] == "" {
+			result.Findings = append(result.Findings, finding)
+		}
 	}
 	sortFindings(result.Findings)
 	return result, nil
@@ -249,6 +274,12 @@ func Run(ctx context.Context, root string) (Result, error) {
 func sortFindings(findings []Finding) {
 	sort.Slice(findings, func(i, j int) bool {
 		a, b := findings[i], findings[j]
+		if pa, pb := testRank(a), testRank(b); pa != pb {
+			return pa < pb
+		}
+		if pa, pb := checkRank(a.Check), checkRank(b.Check); pa != pb {
+			return pa < pb
+		}
 		if pa, pb := priority(a), priority(b); pa != pb {
 			return pa < pb
 		}
@@ -258,16 +289,16 @@ func sortFindings(findings []Finding) {
 		if a.Line != b.Line {
 			return a.Line < b.Line
 		}
-		return a.Callee < b.Callee
+		return a.Detail < b.Detail
 	})
 }
 
 func priority(f Finding) int {
 	rank := 0
-	if strings.HasSuffix(f.File, "_test.go") || strings.Contains("/"+f.File, "/testdata/") {
-		rank = 2
+	if f.Check != "" && f.Check != "errcheck" {
+		return 0
 	}
-	expr, _ := parser.ParseExpr(f.Callee)
+	expr, _ := parser.ParseExpr(f.Detail)
 	var name string
 	for expr != nil {
 		switch x := ast.Unparen(expr).(type) {
@@ -294,7 +325,7 @@ func priority(f Finding) int {
 	return rank + 1
 }
 
-func scan(ctx context.Context, goPath, root, dir string, found map[string]Finding) error {
+func scan(ctx context.Context, goPath, root, dir string, found map[string]Finding, dead *unused, statuses map[string]string) error {
 	cmd := proc.Hide(exec.CommandContext(ctx, goPath, "list", "-mod=readonly", "-deps", "-export", "-compiled", "-test", "-json", "./..."))
 	proc.ConfigureProcessTreeKill(cmd)
 	cmd.WaitDelay = time.Second
@@ -354,7 +385,7 @@ func scan(ctx context.Context, goPath, root, dir string, found map[string]Findin
 			if !filepath.IsAbs(file) {
 				file = filepath.Join(p.Dir, file)
 			}
-			node, err := parser.ParseFile(fs, file, nil, 0)
+			node, err := parser.ParseFile(fs, file, nil, parser.ParseComments)
 			if err != nil {
 				return err
 			}
@@ -363,52 +394,58 @@ func scan(ctx context.Context, goPath, root, dir string, found map[string]Findin
 		if len(nodes) == 0 {
 			continue
 		}
-		info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
+		info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
 		conf := types.Config{Importer: importerMap{imp, p.ImportMap}, FakeImportC: true}
 		if _, err := conf.Check(p.ImportPath, fs, nodes, info); err != nil {
 			return err
 		}
-		for _, node := range nodes {
-			ast.Inspect(node, func(n ast.Node) bool {
-				var expr ast.Expr
-				switch x := n.(type) {
-				case *ast.ExprStmt:
-					expr = ast.Unparen(x.X)
-				case *ast.DeferStmt:
-					expr = x.Call
-				case *ast.GoStmt:
-					expr = x.Call
-				default:
-					return true
-				}
-				callee := expr
-				switch x := expr.(type) {
-				case *ast.CallExpr:
-					if !returnsError(info.TypeOf(x)) || exclude(x, info) != "" {
+		runCheck("unused", statuses, func() {
+			dead.scan(root, fs, nodes, info, dead.skip(p))
+		})
+		runCheck("ineffassign", statuses, func() { ineffassign(root, fs, nodes, info, found) })
+		runCheck("errcheck", statuses, func() {
+			for _, node := range nodes {
+				ast.Inspect(node, func(n ast.Node) bool {
+					var expr ast.Expr
+					switch x := n.(type) {
+					case *ast.ExprStmt:
+						expr = ast.Unparen(x.X)
+					case *ast.DeferStmt:
+						expr = x.Call
+					case *ast.GoStmt:
+						expr = x.Call
+					default:
 						return true
 					}
-					callee = x.Fun
-				case *ast.UnaryExpr:
-					if x.Op != token.ARROW || !isError(info.TypeOf(x)) {
+					callee := expr
+					switch x := expr.(type) {
+					case *ast.CallExpr:
+						if !returnsError(info.TypeOf(x)) || exclude(x, info) != "" {
+							return true
+						}
+						callee = x.Fun
+					case *ast.UnaryExpr:
+						if x.Op != token.ARROW || !isError(info.TypeOf(x)) {
+							return true
+						}
+					default:
 						return true
 					}
-				default:
+					pos := fs.PositionFor(expr.Pos(), false)
+					if !within(root, pos.Filename) {
+						return true
+					}
+					rel, _ := filepath.Rel(root, pos.Filename)
+					var name bytes.Buffer
+					if format.Node(&name, fs, callee) != nil {
+						return true
+					}
+					key := fmt.Sprintf("errcheck:%s:%d:%d", rel, pos.Line, pos.Column)
+					found[key] = Finding{Check: "errcheck", File: filepath.ToSlash(rel), Line: pos.Line, Detail: name.String()}
 					return true
-				}
-				pos := fs.PositionFor(expr.Pos(), false)
-				if !within(root, pos.Filename) {
-					return true
-				}
-				rel, _ := filepath.Rel(root, pos.Filename)
-				var name bytes.Buffer
-				if format.Node(&name, fs, callee) != nil {
-					return true
-				}
-				key := fmt.Sprintf("%s:%d:%d", rel, pos.Line, pos.Column)
-				found[key] = Finding{File: filepath.ToSlash(rel), Line: pos.Line, Callee: name.String()}
-				return true
-			})
-		}
+				})
+			}
+		})
 	}
 	return nil
 }

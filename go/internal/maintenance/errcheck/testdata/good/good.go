@@ -6,7 +6,7 @@ import (
 )
 
 func returnsError() error { return nil }
-func check(f *os.File, ch chan error) {
+func Check(f *os.File, ch chan error) {
 	f.Close()
 	fmt.Println("excluded")
 	_ = returnsError()

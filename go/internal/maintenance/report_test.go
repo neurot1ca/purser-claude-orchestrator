@@ -18,8 +18,8 @@ func TestUncheckedErrorSection(t *testing.T) {
 	result := errcheck.Result{Status: "ok"}
 	var want strings.Builder
 	for i := 1; i <= 41; i++ {
-		result.Findings = append(result.Findings, errcheck.Finding{File: "a.go", Line: i, Callee: "f.Close"})
-		fmt.Fprintf(&want, "a.go:%d f.Close\n", i)
+		result.Findings = append(result.Findings, errcheck.Finding{File: "a.go", Line: i, Detail: "f.Close"})
+		fmt.Fprintf(&want, "errcheck a.go:%d f.Close\n", i)
 	}
 	path := filepath.Join(maintenanceScratch(t), "reports", "cleanup", "errcheck-run.txt")
 	section, version := uncheckedErrorSection(result, path)
@@ -30,6 +30,13 @@ func TestUncheckedErrorSection(t *testing.T) {
 	if !strings.Contains(section, "count=41") || !strings.Contains(version, "file="+path) || strings.Contains(section, "f.Close") || !strings.Contains(section, "evidence `errcheck(builtin)`") {
 		t.Fatalf("incorrect candidate summary: %s", section)
 	}
+	mixed := errcheck.Result{Status: "errcheck=ok\nineffassign=failed:analyze\nunused=ok; skipped_asm_packages=2; skipped_cgo_packages=1\n", Findings: []errcheck.Finding{{Check: "unused", File: "dead.go", Line: 1, Detail: "func dead"}}}
+	section, version = uncheckedErrorSection(mixed, path)
+	data, err = os.ReadFile(path)
+	if err != nil || string(data) != "unused dead.go:1 func dead\n" || !strings.Contains(version, "unused(builtin): ok; skipped_asm_packages=2; skipped_cgo_packages=1; count=1") || !strings.Contains(section, "ineffassign(builtin): failed:analyze") {
+		t.Fatalf("check failure affected siblings: %s %s %v", section, data, err)
+	}
+
 	for _, status := range []string{"skipped:not-go", "failed:load/type-check"} {
 		section, _ := uncheckedErrorSection(errcheck.Result{Status: status}, path)
 		if !strings.Contains(section, status) || !strings.Contains(section, "(unavailable)") {

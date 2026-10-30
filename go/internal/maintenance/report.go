@@ -372,7 +372,7 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 			limitations = "Vulture unavailable; grep-based search only, which can miss indirect and dynamic use."
 		}
 		checked, _ := errcheck.Run(context.Background(), root)
-		section, version := uncheckedErrorSection(checked, filepath.Join(MaintenanceDirectory(state, root), "reports", "cleanup", "errcheck-"+timestamp+".txt"))
+		section, version := uncheckedErrorSection(checked, filepath.Join(MaintenanceDirectory(state, root), "reports", "cleanup", "go-checks-"+timestamp+".txt"))
 		prompt += section
 		versions = append(versions, version)
 	}
@@ -425,27 +425,49 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 
 func uncheckedErrorSection(result errcheck.Result, path string) (string, string) {
 	absolute, err := filepath.Abs(path)
-	if err != nil {
-		result.Status = "failed:write"
-	} else {
+	if err == nil {
 		path = absolute
 	}
-	if result.Status == "ok" {
-		var lines strings.Builder
-		for _, finding := range result.Findings {
-			fmt.Fprintf(&lines, "%s:%d %s\n", finding.File, finding.Line, finding.Callee)
+	var lines strings.Builder
+	counts := map[string]int{}
+	for _, f := range result.Findings {
+		check := f.Check
+		if check == "" {
+			check = "errcheck"
 		}
-		if writeAtomic(path, []byte(lines.String())) != nil {
-			result.Status = "failed:write"
+		if result.CheckStatus(check) == "ok" {
+			fmt.Fprintf(&lines, "%s %s:%d %s\n", check, f.File, f.Line, f.Detail)
+			counts[check]++
 		}
 	}
-	if result.Status != "ok" {
-		path += " (unavailable)"
+	available := false
+	for _, check := range errcheck.Checks {
+		available = available || result.CheckStatus(check) == "ok"
 	}
-	version := fmt.Sprintf("errcheck(builtin): %s; count=%d; file=%s", result.Status, len(result.Findings), path)
-	return "\n" + version + "\n" +
-		"Order: non-test files first; within each group, state-changing callees first; ties by path then line.\n" +
-		"Verify the candidates in the file and include real unchecked errors as findings with evidence `errcheck(builtin)`.\n", version
+	if err == nil && available {
+		err = writeAtomic(path, []byte(lines.String()))
+	}
+	var versions, instructions []string
+	for _, check := range errcheck.Checks {
+		status := result.CheckSummary(check)
+		if err != nil && result.CheckStatus(check) == "ok" {
+			status = "failed:write" + strings.TrimPrefix(status, "ok")
+		}
+		file := path
+		if result.CheckStatus(check) != "ok" || err != nil {
+			file += " (unavailable)"
+		}
+		if check == "unused" && !strings.Contains(status, "skipped_asm_packages=") {
+			status += "; skipped_asm_packages=0; skipped_cgo_packages=0"
+		}
+		versions = append(versions, fmt.Sprintf("%s(builtin): %s; count=%d; file=%s", check, status, counts[check], file))
+		instructions = append(instructions, fmt.Sprintf("Verify the %s candidates in the file and include confirmed findings with evidence `%s(builtin)`.", check, check))
+	}
+	version := strings.Join(versions, "; ")
+	return "\n" + strings.Join(versions, "\n") + "\n" +
+		"Order: non-test before test/testdata; then errcheck, ineffassign, unused; errcheck state-changing callees first; ties by path then line.\n" +
+		"Scope: current GOOS/GOARCH and build tags only; inactive files are not analyzed. Unused skips methods and directive-protected files, and assembly/cgo packages.\n" +
+		strings.Join(instructions, "\n") + "\n", version
 }
 
 func nullableConfidence(findings []map[string]any, counts map[string]int, key string) any {
