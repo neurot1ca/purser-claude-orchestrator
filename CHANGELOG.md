@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.214 — 2026-10-30
+
+- **Fixed:** session notices name the user's language when Purser knows it and fall back to English otherwise, so headless sessions no longer guess a language.
+
 ## 0.1.213 — 2026-10-30
 
 - **Fixed:** marketplace export retries a briefly locked folder and names a running Purser process as the likely holder instead of failing with a bare access error.
