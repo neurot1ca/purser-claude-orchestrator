@@ -86,6 +86,9 @@ func Update(stateRoot, component, reason, pathClass string, failed bool) (err er
 		previous["consecutive_failures"] = int64(0)
 	}
 	components[component] = previous
+	if component == "projection" && !failed {
+		health["last_projection_write_at"] = now
+	}
 	health["schema_version"] = 1
 	health["components"] = components
 	health["updated_at"] = now

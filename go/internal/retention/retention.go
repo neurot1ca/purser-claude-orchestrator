@@ -213,6 +213,7 @@ func newerPluginVersion(a, b string) bool {
 	return false
 }
 
+// retireArtifacts applies raw/bundle age limits only after proving ownership and disposition.
 var registry = map[string]policy{
 	"preparations":                   bounded("preparations"),
 	"wt":                             bounded("worktrees"),
@@ -222,8 +223,8 @@ var registry = map[string]policy{
 	"apply_validation":               bounded("validation-retention"),
 	"task_retries":                   bounded("task-retry-evidence"),
 	"codex_exec_mcp":                 bounded("jobs-cleanup"),
-	"raw_tool_outputs":               {maxAgeDays: 7, maxFiles: -1, maxBytes: 64 * mib},
-	"bundle_artifacts":               {maxAgeDays: 7, maxFiles: -1, maxBytes: 32 * mib},
+	"raw_tool_outputs":               byteLimit(64 * mib),
+	"bundle_artifacts":               byteLimit(32 * mib),
 	"async_jobs":                     bounded("jobs-cleanup"),
 	"worktree_ownership":             {owner: "worktree-retirement", maxAgeDays: 3, maxFiles: -1, maxBytes: -1},
 	"pending":                        bounded("jobs-cleanup"),
@@ -433,6 +434,7 @@ func buildArtifactReferences(root string) artifactReferences {
 
 func retireArtifacts(root string, now float64, refs artifactReferences, warn func(string, string)) {
 	bundleExcess := rootSize(filepath.Join(root, "bundle_artifacts")) - registry["bundle_artifacts"].maxBytes
+	rawExcess := rootSize(filepath.Join(root, "raw_tool_outputs")) - registry["raw_tool_outputs"].maxBytes
 	projectExcess := rootSize(filepath.Join(root, "projects")) - registry["projects"].maxBytes
 	for _, path := range filesUnder(filepath.Join(root, "apply_validation")) {
 		if filepath.Ext(path) != ".json" || !jobIDPattern.MatchString(strings.TrimSuffix(filepath.Base(path), ".json")) {
@@ -532,11 +534,15 @@ func retireArtifacts(root string, now float64, refs artifactReferences, warn fun
 			}
 			if value != nil && stringValue(value["task_id"]) != "" && ownedRaw && !artifactReferenced(refs, []string{id, key, stringValue(value["task_id"]), bundle, raw}) {
 				// Keep the bundle as ownership evidence until its raw output is gone.
-				rawLimit := &bundleExcess
+				rawPressure := max(rawExcess, bundleExcess)
+				rawLimit := &rawPressure
 				if ageOnly {
 					rawLimit = nil
 				}
-				retireArtifactFile(root, raw, now, 7, rawLimit, warn)
+				rawSize := fileSize(raw)
+				if retireArtifactFile(root, raw, now, 7, rawLimit, warn) {
+					rawExcess -= rawSize
+				}
 				if !pathExists(raw) {
 					bundleLimit := &bundleExcess
 					if ageOnly {

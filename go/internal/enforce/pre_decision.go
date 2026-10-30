@@ -799,8 +799,8 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		}
 	}
 	var eta any
-	if parsed.ETAMinutes != nil {
-		eta = *parsed.ETAMinutes
+	if pendingETA != nil {
+		eta = *pendingETA
 	}
 	var observedReasonSource any
 	if reasonSource != nil {
@@ -1023,12 +1023,13 @@ func preEmit(root string, event map[string]any, repository *string, taskID, proj
 	if observation, err := buildObservationAtStateRoot(eventType, envelope, payload, taskID, root); err == nil {
 		telemetryRoot := filepath.Join(root, "telemetry")
 		if code, err := persistObservation(telemetryRoot, observation); err == nil {
+			recordObservationHealth(root, "OK", "")
 			updateObservationTaskBestEffort(telemetryRoot, taskID, project)
 		} else {
-			recordObservationHealth(root, "DEGRADED", code)
+			recordObservationHealth(root, "DEGRADED", code, err)
 		}
 	} else {
-		recordObservationHealth(root, "DEGRADED", "TELEMETRY_EMIT_FAILED")
+		recordObservationHealth(root, "DEGRADED", "TELEMETRY_EMIT_FAILED", fmt.Errorf("%w: %v", errObservationSchema, err))
 	}
 }
 
@@ -1043,10 +1044,12 @@ func RecordUnfetchedResult(root string, projectKey, route any) {
 	envelope := map[string]any{"project_key": projectKey}
 	if event, err := buildObservationAtStateRoot("CODEX_RESULT_UNFETCHED", envelope, payload, nil, root); err == nil {
 		if code, err := persistObservation(filepath.Join(root, "telemetry"), event); err != nil {
-			recordObservationHealth(root, "DEGRADED", code)
+			recordObservationHealth(root, "DEGRADED", code, err)
+		} else {
+			recordObservationHealth(root, "OK", "")
 		}
 	} else {
-		recordObservationHealth(root, "DEGRADED", "TELEMETRY_EMIT_FAILED")
+		recordObservationHealth(root, "DEGRADED", "TELEMETRY_EMIT_FAILED", fmt.Errorf("%w: %v", errObservationSchema, err))
 	}
 }
 

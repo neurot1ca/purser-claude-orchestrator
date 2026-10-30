@@ -14,9 +14,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"purser-hook/internal/contextio"
@@ -37,6 +39,8 @@ const (
 var errObservationRunNoteUndated = errors.New("run note has no anchor time")
 
 var errObservationMalformedCursor = errors.New("malformed task telemetry cursor")
+var errObservationSchema = errors.New("invalid telemetry schema")
+var errObservationNoteConflict = errors.New("refusing to overwrite non-projection note")
 
 var observationMarker = regexp.MustCompile(`(?m)^(?:<!-- orchestrator projection v1 sha256=([0-9a-f]{64}) -->|# orchestrator projection v1 sha256=([0-9a-f]{64}))\n`)
 
@@ -172,7 +176,7 @@ func renderObservationRunNote(aggregate map[string]any, vaultRoot string) (strin
 	}
 	p, err := prepareObservationRun(aggregate)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("%w: %v", errObservationSchema, err)
 	}
 	zone, _ := observationResolveDisplayZone()
 	year, month := "0000", "00"
@@ -611,7 +615,16 @@ func prepareObservationRun(a map[string]any) (observationRun, error) {
 		}
 		return e
 	}
-	for _, key := range []string{"repo", "branch", "model", "thread_id", "reviewer1_provider", "reviewer1_model_requested", "policy_fingerprint"} {
+	for _, key := range []string{"model", "reviewer1_model_requested"} {
+		if x := a[key]; x != nil {
+			s, ok := x.(string)
+			if !ok || !modelValue.MatchString(s) {
+				return bad(key, "is not a valid model")
+			}
+		}
+		v[key] = a[key]
+	}
+	for _, key := range []string{"repo", "branch", "thread_id", "reviewer1_provider", "policy_fingerprint"} {
 		if err = copyID(key); err != nil {
 			return bad(key, "is not a sanitized identifier")
 		}
@@ -661,11 +674,11 @@ func prepareObservationRun(a map[string]any) (observationRun, error) {
 	}
 	for _, enum := range []struct{ key, allowed string }{
 		{"status", "UNKNOWN_OR_IN_PROGRESS IN_PROGRESS FINISHED FAILED ACCEPTED REJECTED APPLIED VERIFIED NOT_VERIFIED INCONCLUSIVE NO_CHANGE"},
-		{"phase", "implementation operation plan"}, {"task_type", "implementation operation plan unknown"},
-		{"route", "mechanical subtle normal consequential escalated operation plan_standard research"}, {"effort", "low medium high xhigh max ultra"},
+		{"phase", "implementation operation plan"}, {"task_type", "implementation operation plan unknown counting_status"},
+		{"route", "mechanical subtle normal consequential escalated operation plan_standard research"}, {"effort", "low medium high xhigh max ultra none"},
 		{"validation", "PASS FAIL UNKNOWN"}, {"claude_review_mode", "AUDIT FULL"},
 		{"reviewer1_result", "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE CHANGES_REQUIRED UNCERTAIN REVIEWER1_UNAVAILABLE"},
-		{"reviewer1_skipped_reason", "PHASE_OPERATION NO_DELTA BELOW_THRESHOLD REVIEWER_UNAVAILABLE"},
+		{"reviewer1_skipped_reason", "PHASE_OPERATION PHASE_PLAN NO_DELTA BELOW_THRESHOLD REVIEWER_UNAVAILABLE REVIEWER_DISABLED REVIEWER1_UNAVAILABLE REVIEWER1_INCOMPLETE REVIEWER_ADAPTER_UNAVAILABLE"},
 	} {
 		key, allowed := enum.key, enum.allowed
 		if key == "task_type" {
@@ -794,6 +807,7 @@ func prepareObservationRun(a map[string]any) (observationRun, error) {
 		}
 		c := map[string]any{}
 		allow := map[string]bool{}
+		allow["runtime"] = true
 		for _, k := range observationContextKeys {
 			allow[k] = true
 		}
@@ -801,6 +815,9 @@ func prepareObservationRun(a map[string]any) (observationRun, error) {
 			if !allow[k] {
 				return bad("context_io", "contains an unregistered field")
 			}
+		}
+		if x := m["runtime"]; x != nil && !oneOf(x, "go python") {
+			return bad("context_io", "runtime is outside its controlled enum")
 		}
 		for _, k := range observationContextKeys {
 			x := m[k]
@@ -848,7 +865,7 @@ func validateObservationAcceptance(value any) error {
 	}
 	for _, item := range sources {
 		src, ok := item.(map[string]any)
-		if !ok || (len(src) != 5 && len(src) != 7) || !oneOf(src["kind"], "apply reply discard") || !oneOf(src["decision"], "accepted send_back rejected") {
+		if !ok || (len(src) != 5 && len(src) != 7) || !oneOf(src["kind"], "apply reply discard result redispatch") || !oneOf(src["decision"], "accepted send_back rejected") {
 			return fmt.Errorf("invalid")
 		}
 		if len(src) == 7 {
@@ -1870,7 +1887,7 @@ func atomicObservationNote(path, content string) (retErr error) {
 		return err
 	}
 	if data, err := os.ReadFile(path); err == nil && !observationGeneratedContentIsIntact(string(data)) {
-		return fmt.Errorf("refusing to overwrite non-projection note")
+		return errObservationNoteConflict
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -1901,6 +1918,12 @@ func observationErrorCategory(err error) string {
 	switch {
 	case err == nil:
 		return "FAILED"
+	case errors.Is(err, errObservationSchema):
+		return "SCHEMA"
+	case errors.Is(err, errObservationNoteConflict):
+		return "CONFLICT"
+	case errors.Is(err, syscall.EBUSY), runtime.GOOS == "windows" && (errors.Is(err, syscall.Errno(32)) || errors.Is(err, syscall.Errno(33))):
+		return "LOCKED"
 	case errors.Is(err, os.ErrPermission):
 		return "PERMISSION"
 	case errors.Is(err, os.ErrNotExist):
@@ -2351,7 +2374,7 @@ func init() {
 	setObservationRule("enum:new_task continue fix route_change reanchor repeated_failure user_override", "reason")
 	setObservationRule("enum:CODEX_CALL_FAILED CODEX_CALL_INTERRUPTED REVIEWER1_UNAVAILABLE REVIEWER1_INCOMPLETE", "failure_code")
 	setObservationRule("enum:NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE CHANGES_REQUIRED UNCERTAIN REVIEWER1_UNAVAILABLE", "reviewer1_result")
-	setObservationRule("enum:PHASE_OPERATION NO_DELTA BELOW_THRESHOLD REVIEWER_UNAVAILABLE", "reviewer1_skipped_reason")
+	setObservationRule("enum:PHASE_OPERATION PHASE_PLAN NO_DELTA BELOW_THRESHOLD REVIEWER_UNAVAILABLE REVIEWER_DISABLED REVIEWER1_UNAVAILABLE REVIEWER1_INCOMPLETE REVIEWER_ADAPTER_UNAVAILABLE", "reviewer1_skipped_reason")
 	setObservationRule("enum:UNAVAILABLE", "served_model_attestation")
 	setObservationRule("bool", "gemini_usage_known reviewer1_retry_recovered")
 	setObservationRule("int", "reviewer1_retry_count reviewer1_initial_finding_count reviewer1_valid_count reviewer1_false_count")
@@ -2646,6 +2669,9 @@ func recordObservationHealth(root, status, errorCode string, underlying ...error
 	}
 	if status == "DEGRADED" && errorCode == "TELEMETRY_UPDATE_TASK_FAILED" && len(underlying) > 0 {
 		errorCode = "INGESTION_TASK_UPDATE_" + observationErrorCategory(underlying[0])
+	}
+	if status == "DEGRADED" && errorCode == "TELEMETRY_EMIT_FAILED" && len(underlying) > 0 {
+		errorCode = "INGESTION_EMIT_" + observationErrorCategory(underlying[0])
 	}
 	_ = telemetryhealth.Update(root, "ingestion", errorCode, "state", status == "DEGRADED")
 }

@@ -588,6 +588,18 @@ func TestRetentionArtifactOwnership(t *testing.T) {
 			if pathExists(bundle) != protected || pathExists(raw) != protected || !pathExists(filepath.Join(root, "bundle_artifacts", "unknown.json")) {
 				t.Fatal("artifact ownership protection failed")
 			}
+			data, err := os.ReadFile(filepath.Join(root, "telemetry", "telemetry_health.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var health map[string]any
+			if err := json.Unmarshal(data, &health); err != nil {
+				t.Fatal(err)
+			}
+			retention := health["components"].(map[string]any)["retention"].(map[string]any)
+			if retention["status"] != "OK" {
+				t.Fatalf("protected artifact age reported as breach: %#v", retention)
+			}
 		})
 	}
 }
@@ -665,6 +677,26 @@ func TestRetentionBytePressureKeepsUnappliedSuccess(t *testing.T) {
 	PruneState(root, 1000+601, false)
 	if !pathExists(bundle) || !pathExists(raw) {
 		t.Fatal("unapplied successful job artifacts were removed under byte pressure")
+	}
+}
+
+func TestRetentionRawBytePressure(t *testing.T) {
+	root := t.TempDir()
+	previous := registry["raw_tool_outputs"]
+	p := previous
+	p.maxBytes = 1
+	registry["raw_tool_outputs"] = p
+	t.Cleanup(func() { registry["raw_tool_outputs"] = previous })
+	id, key := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	putFile(t, filepath.Join(root, "async_jobs", id+".json"), []byte(`{"jobId":"`+id+`","call_key":"`+key+`","stage":"CONSUMED"}`), 1000)
+	putFile(t, filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"), []byte(`{"jobId":"`+id+`","state":"SUCCEEDED","applyState":"applied"}`), 1000)
+	raw := filepath.Join(root, "raw_tool_outputs", key+".json")
+	bundle := filepath.Join(root, "bundle_artifacts", key+".json")
+	putFile(t, raw, []byte(`{}`), 1000)
+	putFile(t, bundle, []byte(`{"task_id":"task","raw_output_path":`+strconv.Quote(raw)+`}`), 1000)
+	PruneState(root, 1000+601, false)
+	if pathExists(raw) || !pathExists(bundle) {
+		t.Fatal("raw byte pressure did not retire just the eligible raw output")
 	}
 }
 

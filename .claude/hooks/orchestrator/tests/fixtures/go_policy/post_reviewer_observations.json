@@ -340,7 +340,24 @@
       "requested_model": "gemini-pro",
       "initial_finding_count": 0,
       "attributes": {},
-      "events": []
+      "events": [
+        {
+          "schema_version": 1,
+          "event_type": "REVIEWER1_SKIPPED",
+          "task_id": "reviewer-task",
+          "project_key": "0123456789abcdef",
+          "session_id": "reviewer-fixture-session",
+          "repo": null,
+          "branch": null,
+          "agent_id": null,
+          "agent_type": null,
+          "payload": {
+            "reviewer1_skipped_reason": "PHASE_PLAN",
+            "reviewer1_model_requested": "gemini-pro",
+            "served_model_attestation": "UNAVAILABLE"
+          }
+        }
+      ]
     },
     {
       "name": "bridge_exception",

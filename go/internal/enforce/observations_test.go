@@ -1649,8 +1649,57 @@ func TestObservationProjectionRetryExhaustionRecordsFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	projection := health["components"].(map[string]any)["projection"].(map[string]any)
-	if projection["status"] != "DEGRADED" || projection["last_error_code"] != "PROJECTION_RUN_NOTE_IO" {
+	if projection["status"] != "DEGRADED" || projection["last_error_code"] != "PROJECTION_RUN_NOTE_LOCKED" {
 		t.Fatalf("exhausted retry error was not recorded: %#v", projection)
+	}
+}
+
+func TestObservationRunNoteAcceptsProducerSchema(t *testing.T) {
+	// These values are produced by contextio, routing, and decision folding.
+	aggregate := map[string]any{
+		"task_id": "task", "started_at": "2026-10-30T10:00:00Z",
+		"model": "provider/model", "task_type": "counting_status", "effort": "none", "reviewer1_skipped_reason": "PHASE_PLAN",
+		"context_io": map[string]any{"runtime": "go", "read_count": json.Number("1")},
+		"claude_acceptance": map[string]any{"outcome": "accepted", "send_backs": 0, "applied_as_is": true,
+			"sources": []any{map[string]any{"kind": "result", "job_id": "job", "task_type": "operation", "decision": "accepted", "ts_utc": "2026-10-30T10:01:00Z"}}},
+	}
+	if _, _, err := renderObservationRunNote(aggregate, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	mapValue(aggregate["context_io"])["runtime"] = "unregistered"
+	if _, _, err := renderObservationRunNote(aggregate, t.TempDir()); !errors.Is(err, errObservationSchema) {
+		t.Fatalf("invalid producer schema = %v, want schema error", err)
+	}
+}
+
+func TestObservationIngestionReportsErrorAndRecovery(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PURSER_OBSIDIAN_VAULT", "")
+	preEmit(root, map[string]any{}, nil, "task", "unresolved", "TASK_ROUTE_SELECTED", map[string]any{"route": "invalid"})
+	read := func() map[string]any {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(root, "telemetry", "telemetry_health.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var health map[string]any
+		if err := json.Unmarshal(data, &health); err != nil {
+			t.Fatal(err)
+		}
+		return mapValue(mapValue(health["components"])["ingestion"])
+	}
+	if got := read(); got["last_error_code"] != "INGESTION_EMIT_SCHEMA" || got["status"] != "DEGRADED" {
+		t.Fatalf("schema failure was lost: %#v", got)
+	}
+	preEmit(root, map[string]any{}, nil, "task", "unresolved", "TASK_ROUTE_SELECTED", map[string]any{"route": "normal"})
+	if got := read(); got["status"] != "OK" || got["consecutive_failures"] != float64(0) || got["lifetime_failures"] != float64(1) {
+		t.Fatalf("successful ingestion did not recover: %#v", got)
+	}
+	for _, reason := range []string{"PHASE_PLAN", "REVIEWER_DISABLED", "REVIEWER1_UNAVAILABLE", "REVIEWER1_INCOMPLETE", "REVIEWER_ADAPTER_UNAVAILABLE"} {
+		preEmit(root, map[string]any{}, nil, "task", "unresolved", "REVIEWER1_SKIPPED", map[string]any{"reviewer1_skipped_reason": reason})
+		if got := read(); got["status"] != "OK" || got["lifetime_failures"] != float64(1) {
+			t.Fatalf("producer skip %s was rejected: %#v", reason, got)
+		}
 	}
 }
 

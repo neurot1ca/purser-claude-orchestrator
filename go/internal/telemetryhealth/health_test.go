@@ -84,6 +84,17 @@ func TestSuccessfulCheckClearsOnlyItsComponent(t *testing.T) {
 	if projection["status"] != "DEGRADED" || health["status"] != "DEGRADED" || health["consecutive_failure_count"] != float64(1) {
 		t.Fatalf("recovery cleared unrelated failure: %#v", health)
 	}
+	if health["last_projection_write_at"] != nil {
+		t.Fatal("failed projection recorded a successful write")
+	}
+	if err := Update(root, "projection", "", "vault", false); err != nil {
+		t.Fatal(err)
+	}
+	health = readHealth(t, root)
+	projection = health["components"].(map[string]any)["projection"].(map[string]any)
+	if health["last_projection_write_at"] != projection["last_successful_check"] {
+		t.Fatalf("projection write timestamp not refreshed: %#v", health)
+	}
 }
 
 func TestFailedPublicationPreservesPriorFile(t *testing.T) {

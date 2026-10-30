@@ -841,6 +841,19 @@ func TestPreCodexStartUsesMeasuredRouteETA(t *testing.T) {
 			if gotETA, ok := intValue(updated["etaMinutes"]); !ok || gotETA != tc.wantETA {
 				t.Fatalf("start ETA = %v, want %d; response %#v", updated["etaMinutes"], tc.wantETA, got)
 			}
+			data, err := os.ReadFile(filepath.Join(state, "telemetry", "events", "by_task", "eta-task.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				var observation map[string]any
+				if err := json.Unmarshal([]byte(line), &observation); err != nil {
+					t.Fatal(err)
+				}
+				if eta := mapValue(observation["payload"])["eta_minutes"]; eta != float64(tc.wantETA) {
+					t.Fatalf("%s ETA = %v, want %d", observation["event_type"], eta, tc.wantETA)
+				}
+			}
 		})
 	}
 }
