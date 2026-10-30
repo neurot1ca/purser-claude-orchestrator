@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.218 — 2026-10-30
+
+- **Added:** the cleanup report's built-in Go pre-scan also finds ineffective assignments and unused unexported code, using the same single package load.
+
 ## 0.1.217 — 2026-10-30
 
 - **Added:** the cleanup maintenance report first runs a built-in check for unchecked Go errors and hands the worker every finding, ordered by importance.
