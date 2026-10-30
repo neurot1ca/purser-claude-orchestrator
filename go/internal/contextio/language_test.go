@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+func TestNoticeLanguagePhrase(t *testing.T) {
+	if got := noticeLanguagePhrase("Turkish"); got != "in Turkish" {
+		t.Fatalf("known language phrase = %q, want %q", got, "in Turkish")
+	}
+	if got := noticeLanguagePhrase(""); got != "in the user's language (English if unclear)" {
+		t.Fatalf("unknown language phrase = %q, want English fallback", got)
+	}
+}
+
 func TestSessionStartLanguageFallback(t *testing.T) {
 	tests := []struct {
 		name    string

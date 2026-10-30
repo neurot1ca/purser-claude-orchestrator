@@ -210,10 +210,10 @@ func TestSessionCompactAccuracyHintPythonParity(t *testing.T) {
 	}
 	statePath := filepath.Join(root, "projects", project, "duration_accuracy.json")
 	writeSessionMaintenanceJSON(t, statePath, map[string]any{"version": 2, "compacts": 4, "errors": map[string]any{"claude": 75}})
-	if got := compactAccuracyHint(root, project); !strings.Contains(got, "> ⚓ **Claude's task duration estimates are now typically within 25% of the actual time.**") {
+	if got := compactAccuracyHint(root, project, ""); !strings.Contains(got, "> ⚓ **Claude's task duration estimates are now typically within 25% of the actual time.**") {
 		t.Fatalf("accuracy improvement hint = %q", got)
 	}
-	if got := compactAccuracyHint(root, project); got != "" {
+	if got := compactAccuracyHint(root, project, ""); got != "" {
 		t.Fatalf("accuracy hint repeated before next five compactions: %q", got)
 	}
 	var state map[string]any
@@ -233,7 +233,7 @@ func TestSessionCompactAccuracyHintPythonParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeSessionMaintenanceJSON(t, statePath, map[string]any{"version": 2, "compacts": 4, "errors": map[string]any{"agent-x": 75}})
-	if got := compactAccuracyHint(root, project); !strings.Contains(got, "> ⚓ **agent-x's task duration estimates are now typically within 25% of the actual time.**") {
+	if got := compactAccuracyHint(root, project, ""); !strings.Contains(got, "> ⚓ **agent-x's task duration estimates are now typically within 25% of the actual time.**") {
 		t.Fatalf("unknown implementer possessive hint = %q", got)
 	}
 }
@@ -285,7 +285,7 @@ func TestSessionCompactAccuracyHintAnnouncementThresholds(t *testing.T) {
 				state["compacts"] = 4
 				writeSessionMaintenanceJSON(t, statePath, state)
 			}
-			got := compactAccuracyHint(root, project)
+			got := compactAccuracyHint(root, project, "")
 			if tc.want == "" && got != "" {
 				t.Fatalf("accuracy hint = %q, want no notice", got)
 			}
@@ -315,7 +315,7 @@ func TestSessionCompactAccuracyHintUnversionedStateSetsBaseline(t *testing.T) {
 	}
 	statePath := filepath.Join(root, "projects", project, "duration_accuracy.json")
 	writeSessionMaintenanceJSON(t, statePath, map[string]any{"compacts": 4, "errors": map[string]any{"codex-main": 8871198}})
-	if got := compactAccuracyHint(root, project); got != "" {
+	if got := compactAccuracyHint(root, project, ""); got != "" {
 		t.Fatalf("unversioned accuracy state announced improvement: %q", got)
 	}
 	stateData, err := os.ReadFile(statePath)
@@ -353,32 +353,32 @@ func TestFollowupHintsTerminalPythonParity(t *testing.T) {
 	}
 
 	write("FAILED", true)
-	if got := followupHints(root, project, session); got != "" {
+	if got := followupHints(root, project, session, ""); got != "" {
 		t.Fatalf("observed failure in same session produced hint: %q", got)
 	}
-	if got := followupHints(root, project, "session-2"); !strings.Contains(got, "adopt: true") {
+	if got := followupHints(root, project, "session-2", ""); !strings.Contains(got, "adopt: true") {
 		t.Fatalf("observed failure in other session hint = %q", got)
 	}
 	write("FAILED", false)
-	if got := followupHints(root, project, session); !strings.Contains(got, "Call codex_result") {
+	if got := followupHints(root, project, session, ""); !strings.Contains(got, "Call codex_result") {
 		t.Fatalf("unobserved failure hint = %q", got)
 	}
 	write("SUCCEEDED", true)
-	if got := followupHints(root, project, session); !strings.Contains(got, "Call codex_result") {
+	if got := followupHints(root, project, session, ""); !strings.Contains(got, "Call codex_result") {
 		t.Fatalf("observed success hint = %q", got)
 	}
 	write("UNKNOWN_OR_IN_PROGRESS", false)
-	if got := followupHints(root, project, session); !strings.Contains(got, "Call codex_result") {
+	if got := followupHints(root, project, session, ""); !strings.Contains(got, "Call codex_result") {
 		t.Fatalf("same-session unknown hint = %q", got)
 	}
-	if got := followupHints(root, project, "session-2"); got != "" {
+	if got := followupHints(root, project, "session-2", ""); got != "" {
 		t.Fatalf("other-session unknown hint = %q", got)
 	}
 	write("RUNNING", false)
 	writeSessionMaintenanceJSON(t, jobPath, map[string]any{"jobId": id, "call": call, "state": "RUNNING",
 		"errorCode": "STALLED", "stallDetectedAt": time.Now().Unix(),
 		"liveness": map[string]any{"lastActivityAt": time.Now().Add(-125 * time.Second).Unix()}})
-	got := followupHints(root, project, session)
+	got := followupHints(root, project, session, "")
 	if !strings.Contains(strings.ToLower(got), "do not call codex_result") ||
 		!strings.Contains(got, "Restart ") || !strings.Contains(got, " wait "+id) ||
 		!strings.Contains(got, fmt.Sprintf("%d minutes", 2)) {

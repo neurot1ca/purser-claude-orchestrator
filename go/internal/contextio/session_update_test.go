@@ -107,7 +107,7 @@ func TestSessionStartPluginVersionNoticeParity(t *testing.T) {
 
 	write(versionPath, `{"announced_version":"1.8.0"}`)
 	changed := sessionStartContext(t, event)
-	want := "On your next reply, put exactly one notice line first, then handle the user's request in full; the notice never replaces the task. Render the notice in the user's language, translating from English, in this form: `> ⚓ **Purser upgraded to 2.0.0:** <one short sentence summarizing the bullets>`. Keep ⚓ and 2.0.0. Source bullets (summarize them in one short sentence):\n- First change.\n- Second change."
+	want := "On your next reply, put exactly one notice line first, then handle the user's request in full; the notice never replaces the task. Render the notice in the user's language (English if unclear), translating from English, in this form: `> ⚓ **Purser upgraded to 2.0.0:** <one short sentence summarizing the bullets>`. Keep ⚓ and 2.0.0. Source bullets (summarize them in one short sentence):\n- First change.\n- Second change."
 	if !strings.Contains(changed, want) || strings.Contains(changed, "Old change.") {
 		t.Fatalf("version notice differs from Python notice: %q", changed)
 	}
@@ -162,7 +162,7 @@ func TestSessionStartMechanicalLeaderNoticeParity(t *testing.T) {
 	}
 	event := map[string]any{"hook_event_name": "SessionStart", "session_id": "session-leader", "source": "startup", "cwd": repo}
 	context := sessionStartContext(t, event)
-	want := "On your next reply, render exactly one line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged, in this form: " +
+	want := "On your next reply, render exactly one line in the user's language (English if unclear), translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged, in this form: " +
 		"> ⚓ **Free model ranking changed:** `vendor/free-model` succeeded in 7 of its last 9 attempts and moved to the top of the ranking. Mechanical tasks will go to this model first."
 	if !strings.Contains(context, want) {
 		t.Fatalf("leader notice differs from Python notice: %q", context)

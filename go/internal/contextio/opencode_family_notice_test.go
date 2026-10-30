@@ -55,18 +55,18 @@ func TestOpenCodeFamilyNoticeUsesSessionNoticePath(t *testing.T) {
 	writeNoticeJSON(t, filepath.Join(root, "projects", repositoryProjectKey(repo), "telemetry", "compaction_advisor.json"), `{}`)
 	writeNoticeJSON(t, filepath.Join(root, "model-resolution.json"), `{"opencode_snapshot_on":"2026-10-16","agents":{"opencode":["alpha/one"]}}`)
 	writeNoticeJSON(t, filepath.Join(root, "projects", repositoryProjectKey(repo), "roles.toml"), "schema_version = 1\n[roles]\ncoder = \"opencode\"\n")
-	if got := sessionUpdateContext("session-a", repo, nil); strings.Contains(got, "New OpenCode model family") {
+	if got := sessionUpdateContext("session-a", repo, "", nil); strings.Contains(got, "New OpenCode model family") {
 		t.Fatalf("uninitialized session notice state claimed family: %q", got)
 	}
-	if got := sessionUpdateContext("session-a", repo, map[string]any{}); strings.Contains(got, "New OpenCode model family") {
+	if got := sessionUpdateContext("session-a", repo, "", map[string]any{}); strings.Contains(got, "New OpenCode model family") {
 		t.Fatalf("first successful listing was not treated as baseline: %q", got)
 	}
 	writeNoticeJSON(t, filepath.Join(root, "model-resolution.json"), `{"opencode_snapshot_on":"2026-10-17","agents":{"opencode":["alpha/one","beta/two"]}}`)
-	got := sessionUpdateContext("session-a", repo, map[string]any{})
+	got := sessionUpdateContext("session-a", repo, "", map[string]any{})
 	if !strings.Contains(got, "New OpenCode model family") {
 		t.Fatalf("session notice path omitted family notice: %q", got)
 	}
-	if repeated := sessionUpdateContext("session-b", repo, map[string]any{}); strings.Contains(repeated, "New OpenCode model family") {
+	if repeated := sessionUpdateContext("session-b", repo, "", map[string]any{}); strings.Contains(repeated, "New OpenCode model family") {
 		t.Fatalf("family notice repeated in another session: %q", repeated)
 	}
 }

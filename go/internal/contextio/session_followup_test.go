@@ -40,7 +40,7 @@ func TestFollowupWaiterInstructions(t *testing.T) {
 		"jobId": jobID, "call": call, "state": "RUNNING",
 	})
 
-	if got := followupHints(root, project, session); !strings.Contains(got,
+	if got := followupHints(root, project, session, ""); !strings.Contains(got,
 		"Start "+waiter.Command(jobID)+" in the background (use the PowerShell tool on Windows); call codex_result when it finishes, without adopt or asking the user.") {
 		t.Fatalf("running job hint = %q", got)
 	}
@@ -86,21 +86,21 @@ func followupHintFixture(t *testing.T, state string, finishedAt any) (string, st
 
 func TestFollowupHintsSkipsOldFinishedJob(t *testing.T) {
 	root, project, session := followupHintFixture(t, "SUCCEEDED", time.Now().UTC().Add(-48*time.Hour).Unix())
-	if got := followupHints(root, project, session); got != "" {
+	if got := followupHints(root, project, session, ""); got != "" {
 		t.Fatalf("old finished job hint = %q, want no hint", got)
 	}
 }
 
 func TestFollowupHintsSurfacesRecentFinishedJob(t *testing.T) {
 	root, project, session := followupHintFixture(t, "SUCCEEDED", time.Now().UTC().Add(-time.Hour).Unix())
-	if got := followupHints(root, project, session); !strings.Contains(got, "Call codex_result") {
+	if got := followupHints(root, project, session, ""); !strings.Contains(got, "Call codex_result") {
 		t.Fatalf("recent finished job hint = %q, want codex_result instruction", got)
 	}
 }
 
 func TestFollowupHintsSurfacesRunningJob(t *testing.T) {
 	root, project, session := followupHintFixture(t, "RUNNING", nil)
-	if got := followupHints(root, project, session); !strings.Contains(got, "call codex_result when it finishes") {
+	if got := followupHints(root, project, session, ""); !strings.Contains(got, "call codex_result when it finishes") {
 		t.Fatalf("running job hint = %q, want wait instruction", got)
 	}
 }

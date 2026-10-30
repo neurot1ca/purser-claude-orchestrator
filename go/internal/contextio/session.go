@@ -58,7 +58,7 @@ func SessionStart(event map[string]any) []byte {
 	source, _ := event["source"].(string)
 	validSession := session != ""
 	var state map[string]any
-	updateContext := sessionUpdateContext(session, repository, nil)
+	updateContext := sessionUpdateContext(session, repository, language, nil)
 	statePath := ""
 	if handoff != "" {
 		statePath = filepath.Join(filepath.Dir(handoff), "compaction_advisor.json")
@@ -105,7 +105,7 @@ func SessionStart(event map[string]any) []byte {
 			}
 			state["notice_pending"] = nil
 		}
-		updateContext = sessionUpdateContext(session, repository, state)
+		updateContext = sessionUpdateContext(session, repository, language, state)
 		state["session_id"] = session
 		state["last_context_language"] = nullableLanguage(language)
 		reset := source == "compact" || source == "clear"
@@ -154,10 +154,10 @@ func SessionStart(event map[string]any) []byte {
 			additional = joinContext(additional, "Purser is installed for this project. Delegate repository code changes (features, fixes, refactors, tests) to the configured coder through the `purser:dispatcher` agent or `codex_start`; Purser's refusal messages explain the required first prompt line. Make trivial edits, such as a typo or a one-line change, yourself. Review each result, then accept and apply it with `codex_apply`.")
 		}
 		additional = joinContext(additional, durationHint(root, projectKey, "codex-main"))
-		additional = joinContext(additional, followupHints(root, projectKey, session))
+		additional = joinContext(additional, followupHints(root, projectKey, session, language))
 		additional = joinContext(additional, recoverGearAdvice(root, projectKey, time.Now().UTC()))
 		if source == "compact" {
-			additional = joinContext(additional, compactAccuracyHint(root, projectKey))
+			additional = joinContext(additional, compactAccuracyHint(root, projectKey, language))
 		}
 	}
 	systemMessage := TakePurserUpdateNotice()
@@ -382,7 +382,7 @@ func contains(values []string, value string) bool {
 	return false
 }
 
-func followupHints(root, key, session string) string {
+func followupHints(root, key, session, language string) string {
 	paths, _ := filepath.Glob(filepath.Join(root, "async_jobs", "*.json"))
 	if len(paths) > 256 {
 		paths = paths[:256]
@@ -474,11 +474,11 @@ func followupHints(root, key, session string) string {
 		}
 		resumedHint := ""
 		if resumed, ok := job["resumedAfterInterruption"].(json.Number); ok && jsonInteger(resumed) && resumed.String() != "0" && !strings.HasPrefix(resumed.String(), "-") {
-			resumedHint = fmt.Sprintf("Render the line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **The Codex task (%s) was interrupted when the computer shut down; I resumed it from where it left off.**\" ", task)
+			resumedHint = fmt.Sprintf("Render the line "+noticeLanguagePhrase(language)+", translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **The Codex task (%s) was interrupted when the computer shut down; I resumed it from where it left off.**\" ", task)
 		}
 		userHint := ""
 		if message != "" {
-			userHint = fmt.Sprintf("Render the line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **%s**\" ", strings.TrimPrefix(message, "⚓ "))
+			userHint = fmt.Sprintf("Render the line "+noticeLanguagePhrase(language)+", translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **%s**\" ", strings.TrimPrefix(message, "⚓ "))
 		}
 		lines = append(lines, fmt.Sprintf("Purser (jobId=%s, for Claude only): %s%s%s Do not show the jobId to the user.", id, resumedHint, userHint, instruction))
 	}
@@ -527,7 +527,7 @@ func hashText(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func compactAccuracyHint(root, key string) string {
+func compactAccuracyHint(root, key, language string) string {
 	path := filepath.Join(root, "projects", key, "duration_accuracy.json")
 	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
@@ -613,11 +613,18 @@ func compactAccuracyHint(root, key string) string {
 				name = agent
 			}
 			announced[agent] = rounded
-			messages = append(messages, fmt.Sprintf("Render the line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **%s's task duration estimates are now typically within %d%% of the actual time.**\"", name, rounded))
+			messages = append(messages, fmt.Sprintf("Render the line "+noticeLanguagePhrase(language)+", translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged: \"> ⚓ **%s's task duration estimates are now typically within %d%% of the actual time.**\"", name, rounded))
 		}
 	}
 	_ = writeJSONAtomically(path, state)
 	return strings.Join(messages, "\n")
+}
+
+func noticeLanguagePhrase(language string) string {
+	if usableUserLanguage(language) {
+		return "in " + strings.TrimSpace(language)
+	}
+	return "in the user's language (English if unclear)"
 }
 
 // HandoffUserLanguage reads the user language recorded in the Purser handoff.

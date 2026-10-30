@@ -14,9 +14,9 @@ import (
 var changelogHeader = regexp.MustCompile(`(?m)^##\s+(\S+)\s+—\s+\d{4}-\d{2}-\d{2}\s*$`)
 var changelogBullet = regexp.MustCompile(`^\s*[-*+]\s+`)
 
-func sessionUpdateContext(session, repository string, state map[string]any) string {
+func sessionUpdateContext(session, repository, language string, state map[string]any) string {
 	var notices []string
-	if notice := mechanicalLeaderContext(session, repository, state); notice != "" {
+	if notice := mechanicalLeaderContext(session, repository, language, state); notice != "" {
 		notices = append(notices, notice)
 	}
 	if state != nil && repository != "" && session != "" {
@@ -27,13 +27,13 @@ func sessionUpdateContext(session, repository string, state map[string]any) stri
 			notices = append(notices, notice)
 		}
 	}
-	if notice := pluginVersionContext(session, repository, state); notice != "" {
+	if notice := pluginVersionContext(session, repository, language, state); notice != "" {
 		notices = append(notices, notice)
 	}
 	return strings.Join(notices, "\n")
 }
 
-func pluginVersionContext(session, repository string, state map[string]any) string {
+func pluginVersionContext(session, repository, language string, state map[string]any) string {
 	manifest, err := os.ReadFile(filepath.Join(obsidian.PluginRoot(), ".claude-plugin", "plugin.json"))
 	if err != nil {
 		return ""
@@ -96,13 +96,13 @@ func pluginVersionContext(session, repository string, state map[string]any) stri
 	}
 	state["version_pending"].(map[string]any)["delivered"] = true
 	_ = writeJSONAtomically(versionPath, map[string]any{"announced_version": version})
-	return "On your next reply, put exactly one notice line first, then handle the user's request in full; the notice never replaces the task. Render the notice in the user's language, translating from English, in this form: " +
+	return "On your next reply, put exactly one notice line first, then handle the user's request in full; the notice never replaces the task. Render the notice " + noticeLanguagePhrase(language) + ", translating from English, in this form: " +
 		"`> ⚓ **Purser upgraded to " + version + ":** <one short sentence summarizing the bullets>`. " +
 		"Keep ⚓ and " + version + ". " +
 		"Source bullets (summarize them in one short sentence):\n" + strings.Join(bullets, "\n")
 }
 
-func mechanicalLeaderContext(session, repository string, state map[string]any) string {
+func mechanicalLeaderContext(session, repository, language string, state map[string]any) string {
 	if state == nil || repository == "" || session == "" {
 		return ""
 	}
@@ -141,7 +141,7 @@ func mechanicalLeaderContext(session, repository string, state map[string]any) s
 		return ""
 	}
 	state["leader_pending"].(map[string]any)["delivered"] = true
-	return "On your next reply, render exactly one line in the user's language, translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged, in this form: " +
+	return "On your next reply, render exactly one line " + noticeLanguagePhrase(language) + ", translating from the English text and keeping ⚓, markdown, model names, numbers, and commands unchanged, in this form: " +
 		"> ⚓ **Free model ranking changed:** `" + model + "` succeeded in " + strconv.Itoa(successes) + " of its last " + strconv.Itoa(sampleCount) +
 		" attempts and moved to the top of the ranking. Mechanical tasks will go to this model first."
 }
