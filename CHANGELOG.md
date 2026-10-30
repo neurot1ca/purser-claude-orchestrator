@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.217 — 2026-10-30
+
+- **Added:** the cleanup maintenance report first runs a built-in check for unchecked Go errors and hands the worker every finding, ordered by importance.
+- **Fixed:** apply validation no longer treats `testdata`, `vendor` or ignored folders as Go modules, and shows the `go list` error when package selection fails.
+- **Fixed:** replies to Codex research jobs reuse the recorded repository and scratch folder.
+
 ## 0.1.216 — 2026-10-30
 
 - **Fixed:** background maintenance reports run again; orphaned job records whose host died no longer block them indefinitely.
