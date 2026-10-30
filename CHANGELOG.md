@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.216 — 2026-10-30
+
+- **Fixed:** background maintenance reports run again; orphaned job records whose host died no longer block them indefinitely.
+- **Fixed:** Codex research jobs can clone repositories and write notes in their own scratch folder, while the project repository stays read-only.
+- **Fixed:** saving job ledger records retries brief Windows file locks and reports the underlying error.
+- **Added:** each finished apply validation is recorded in telemetry, so failures and repair rounds can be counted.
+- **Changed:** README lists OpenCode among the supported agents.
+
 ## 0.1.215 — 2026-10-30
 
 - **Fixed:** background helpers and waiters run from a stable copy of the hook binary, so a running WSL or Windows session no longer locks the plugin folder during updates.
