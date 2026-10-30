@@ -1554,6 +1554,17 @@ func selectValidationPackages(stateRoot, repo string, paths []string) (string, [
 	dirs := map[string]bool{}
 	for _, name := range paths {
 		clean := filepath.Clean(filepath.FromSlash(name))
+		elements := strings.Split(filepath.ToSlash(clean), "/")
+		ignored := false
+		for _, element := range elements[:len(elements)-1] {
+			if element == "testdata" || element == "vendor" || strings.HasPrefix(element, "_") || strings.HasPrefix(element, ".") {
+				ignored = true
+				break
+			}
+		}
+		if ignored {
+			continue
+		}
 		full := filepath.Join(repo, clean)
 		if _, err := os.Stat(filepath.Dir(full)); errors.Is(err, os.ErrNotExist) {
 			continue
@@ -1629,8 +1640,13 @@ func selectValidationPackages(stateRoot, repo string, paths []string) (string, [
 				cmd := proc.Hide(exec.Command("go", "list", "./..."))
 				cmd.Dir = mod
 				cmd.Env = validationEnvironment(stateRoot)
+				var stderr bytes.Buffer
+				cmd.Stderr = &stderr
 				out, err := cmd.Output()
 				if err != nil {
+					if message := strings.TrimSpace(stderr.String()); message != "" {
+						return "", nil, nil, fmt.Errorf("%w: %s", err, message)
+					}
 					return "", nil, nil, err
 				}
 				for _, line := range strings.Fields(string(out)) {

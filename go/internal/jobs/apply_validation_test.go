@@ -393,6 +393,16 @@ func TestValidationPackageSelectionIncludesDeletedGoAndTouchedModule(t *testing.
 	}
 }
 
+func TestValidationPackageSelectionSkipsIgnoredGoDirectories(t *testing.T) {
+	root, repo, _ := validationFixture(t, []string{"pkg/testdata/bad/go.mod", "pkg/testdata/bad/bad.go"})
+	_, modules, packages, err := selectValidationPackages(root, repo, []string{
+		"pkg/testdata/bad/go.mod", "pkg/testdata/bad/bad.go",
+	})
+	if err != nil || len(modules) != 0 || len(packages) != 0 {
+		t.Fatalf("ignored testdata paths selected validation: modules=%v packages=%v err=%v", modules, packages, err)
+	}
+}
+
 func TestValidationPackageSelectionDropsMissingDirectories(t *testing.T) {
 	root, repo, _ := validationFixture(t, []string{"main.go"})
 	_, modules, packages, err := selectValidationPackages(root, repo, []string{
