@@ -30,7 +30,7 @@ func TestObservationEventTypesMatchPythonSchema(t *testing.T) {
 		"TELEMETRY_WARNING", "CLAUDE_TASK_USAGE_RECORDED", "CONTEXT_IO_TURN_RECORDED",
 		"CODEX_RESULT_UNFETCHED", "CLAUDE_DECISION_RECORDED", "WORKER_REPLAY_CONFLICT",
 		"MECHANICAL_EDIT_OBSERVED", "MAINTENANCE_REPORT_FINISHED", "MAINTENANCE_REPORT_ACTED",
-		"READINESS_CHECK_OUTCOME", "APPLY_RECORDED",
+		"READINESS_CHECK_OUTCOME", "APPLY_RECORDED", "APPLY_VALIDATION_FINISHED",
 		"PLAN_REDIRECT",
 	}
 	if len(observationEventTypes) != len(want) {
@@ -1826,4 +1826,44 @@ func TestObservationP56AcceptsControlledUsageEnums(t *testing.T) {
 		return
 	}
 	t.Fatal("no valid fixture aggregate with usage")
+}
+
+func TestApplyValidationObservationSpoolRecovery(t *testing.T) {
+	root := t.TempDir()
+	telemetry := filepath.Join(root, "telemetry")
+	release, err := contextio.LockFile(filepath.Join(telemetry, "events", ".append.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{"job_id": "job-1", "validation_status": "failed", "failing_tests": []string{"TestBroken"}, "packages": []string{"./pkg"}}
+	if err := EmitApplyValidationObservation(root, root, "task-1", "run-1", "2026-10-30T12:00:00Z", payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	spool, err := filepath.Glob(filepath.Join(telemetry, "events", "spool", "*.json"))
+	if err != nil || len(spool) != 1 {
+		t.Fatalf("spool = %v, %v", spool, err)
+	}
+	if err := mergeObservationSpool(telemetry); err != nil {
+		t.Fatal(err)
+	}
+	// Re-publication after recovery must not count the same run twice.
+	if err := EmitApplyValidationObservation(root, root, "task-1", "run-1", "2026-10-30T12:00:00Z", payload); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(telemetry, "events", "by_task", "task-1.jsonl"))
+	if err != nil || bytes.Count(data, []byte{'\n'}) != 1 {
+		t.Fatalf("indexed outcome = %s, %v", data, err)
+	}
+}
+
+func TestApplyValidationObservationRejectsUnboundedIdentifiers(t *testing.T) {
+	for _, identifiers := range []any{[]string{strings.Repeat("T", 513)}, make([]string, 101), []any{1}} {
+		_, err := buildObservation("APPLY_VALIDATION_FINISHED", nil, map[string]any{"failing_tests": identifiers}, "task")
+		if err == nil {
+			t.Fatalf("accepted identifiers: %#v", identifiers)
+		}
+	}
 }

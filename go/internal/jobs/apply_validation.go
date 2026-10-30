@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
@@ -87,6 +88,11 @@ func isGoTestExecutable(executable string) bool {
 }
 
 type applyValidation struct {
+	TaskID         string         `json:"task_id,omitempty"`
+	Route          string         `json:"route,omitempty"`
+	Model          string         `json:"model,omitempty"`
+	StartedAt      string         `json:"started_at,omitempty"`
+	FinishedAt     string         `json:"finished_at,omitempty"`
 	JobID          string         `json:"job_id"`
 	Repository     string         `json:"repository"`
 	Revision       string         `json:"revision"`
@@ -182,7 +188,7 @@ func enqueueAppliedValidation(stateRoot string, job map[string]any, value map[st
 		result = validationSummary(prior)
 		return
 	}
-	record := applyValidation{JobID: id, Repository: repo, Revision: revision, Snapshot: snapshot, Paths: paths,
+	record := applyValidation{JobID: id, TaskID: stringValue(job["taskId"]), Route: stringValue(job["route"]), Model: stringValue(job["model"]), Repository: repo, Revision: revision, Snapshot: snapshot, Paths: paths,
 		Status: "pending", Counts: map[string]int{}, FailedTests: []string{}, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	if err = writeApplyValidation(path, record); err != nil {
 		result["reason"] = err.Error()
@@ -349,7 +355,7 @@ func boundedValidationIdentifiers(values []string) []string {
 		if len(value) > maxLength {
 			value = value[:maxLength]
 		}
-		out = append(out, value)
+		out = append(out, strings.ToValidUTF8(value, ""))
 	}
 	return out
 }
@@ -661,6 +667,7 @@ func RunApplyValidation(stateRoot, key, id string) (resultErr error) {
 	}
 	defer cacheUser()
 	record.Status = "running"
+	record.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err = writeApplyValidation(path, record); err != nil {
 		return err
 	}
@@ -1003,6 +1010,29 @@ func recoverApplyValidationsInDirectory(stateRoot, dir string) {
 }
 
 func finishValidation(root, path string, record *applyValidation, status, reason string) error {
+	// Preserve the test outcome before freshness checks can invalidate the receipt.
+	if status == "passed" || status == "failed" || status == "timeout" {
+		if record.FinishedAt == "" {
+			record.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		started, startErr := time.Parse(time.RFC3339Nano, record.StartedAt)
+		finished, _ := time.Parse(time.RFC3339Nano, record.FinishedAt)
+		payload := map[string]any{
+			"job_id": record.JobID, "applied_snapshot": record.Snapshot, "applied_revision": record.Revision,
+			"validation_status": status, "validation_reason": strings.ToValidUTF8(reason[:min(len(reason), 4200)], ""),
+			"failing_tests": boundedValidationIdentifiers(record.FailedTests), "packages": boundedValidationIdentifiers(record.Packages),
+		}
+		if startErr == nil && !finished.Before(started) {
+			payload["duration_ms"] = finished.Sub(started).Milliseconds()
+		}
+		for name, value := range map[string]string{"route": record.Route, "model": record.Model} {
+			if value != "" {
+				payload[name] = value
+			}
+		}
+		identity := record.JobID + ":" + record.Snapshot + ":" + record.StartedAt
+		_ = enforce.EmitApplyValidationObservation(root, record.Repository, record.TaskID, identity, record.FinishedAt, payload)
+	}
 	_, currentSnapshot, err := checkoutRevision(record.Repository)
 	packageSnapshot := ""
 	if err == nil && record.TestedSnapshot != "" {

@@ -1161,3 +1161,100 @@ func TestValidationMissingPluginBinaryIsSkipped(t *testing.T) {
 		t.Fatalf("plugin absence was not recorded separately: %#v", summary)
 	}
 }
+
+func TestApplyValidationOutcomeSurvivesStaleness(t *testing.T) {
+	for _, status := range []string{"passed", "failed", "timeout"} {
+		t.Run(status, func(t *testing.T) {
+			root, repo, record := validationFixture(t, []string{"main.go"})
+			record.TaskID, record.Route, record.Model = "repair-task", "normal", "gpt-test"
+			record.StartedAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+			record.FailedTests = []string{strings.Repeat("T", 600)}
+			record.Packages = make([]string, 101)
+			for i := range record.Packages {
+				record.Packages[i] = "./pkg"
+			}
+			path := validationRecordPath(root, validationRepositoryKey(repo), record.JobID)
+			if err := writeApplyValidation(path, record); err != nil {
+				t.Fatal(err)
+			}
+			// A concurrent checkout change invalidates the receipt, but not the historical outcome.
+			write(t, filepath.Join(repo, "main.go"), "package validation\nfunc Value() int { return 3 }\n")
+			for range 2 {
+				if err := finishValidation(root, path, &record, status, "go test outcome"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stored, err := readApplyValidation(path)
+			if err != nil || stored.Status != "stale" {
+				t.Fatalf("receipt = %#v, %v", stored, err)
+			}
+			data, err := os.ReadFile(filepath.Join(root, "telemetry", "events", "by_task", record.TaskID+".jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			if len(lines) != 1 {
+				t.Fatalf("outcomes = %d: %s", len(lines), data)
+			}
+			var event struct {
+				TaskID    string         `json:"task_id"`
+				Type      string         `json:"event_type"`
+				Timestamp string         `json:"ts_utc"`
+				Payload   map[string]any `json:"payload"`
+			}
+			if err := json.Unmarshal(data, &event); err != nil {
+				t.Fatal(err)
+			}
+			p := event.Payload
+			if event.TaskID != record.TaskID || event.Type != "APPLY_VALIDATION_FINISHED" || event.Timestamp != record.FinishedAt || p["job_id"] != record.JobID || p["route"] != record.Route || p["model"] != record.Model || p["applied_snapshot"] != record.Snapshot || p["applied_revision"] != record.Revision || p["validation_status"] != status || p["validation_reason"] != "go test outcome" || p["duration_ms"].(float64) < 1000 {
+				t.Fatalf("outcome = %#v", event)
+			}
+			if len(p["failing_tests"].([]any)[0].(string)) != 512 || len(p["packages"].([]any)) != 100 {
+				t.Fatalf("unbounded payload: %#v", p)
+			}
+			canonical, err := os.ReadFile(filepath.Join(root, "telemetry", "events", record.FinishedAt[:7], "session_unknown.jsonl"))
+			if err != nil || string(canonical) != string(data) {
+				t.Fatalf("canonical event differs: %s, %v", canonical, err)
+			}
+		})
+	}
+}
+
+func TestApplyValidationOutcomeWriteFailureKeepsTerminalReceipt(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"main.go"})
+	path := validationRecordPath(root, validationRepositoryKey(repo), record.JobID)
+	if err := writeApplyValidation(path, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "telemetry"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "telemetry", "events"), []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := finishValidation(root, path, &record, "passed", ""); err != nil {
+		t.Fatalf("telemetry failure affected validation result: %v", err)
+	}
+	stored, err := readApplyValidation(path)
+	if err != nil || stored.Status != "passed" || stored.Reason != "" {
+		t.Fatalf("terminal receipt = %#v, %v", stored, err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "telemetry", "telemetry_health.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health struct {
+		Status     string `json:"status"`
+		Components map[string]struct {
+			Status    string `json:"status"`
+			ErrorCode string `json:"last_error_code"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(data, &health); err != nil {
+		t.Fatal(err)
+	}
+	ingestion := health.Components["ingestion"]
+	if health.Status != "DEGRADED" || ingestion.Status != "DEGRADED" || !strings.HasPrefix(ingestion.ErrorCode, "INGESTION_EMIT_") {
+		t.Fatalf("telemetry health = %s", data)
+	}
+}

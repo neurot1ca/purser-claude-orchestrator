@@ -1575,7 +1575,7 @@ func fields(names string) map[string]bool {
 var (
 	callObservationFields  = fields("phase route model model_source effort routing_enforced fresh_thread reply_call reason reason_source previous_route new_route route_adjustment_reason eta_minutes worker_prompt_chars scope_path_count task_type suspected_route_mismatch agent provider orch_normalizations")
 	startObservationFields = fields("implementer claude_usage_session_id claude_usage_captured_at claude_5h_start_pct claude_5h_end_pct claude_5h_resets_at claude_7d_start_pct claude_7d_end_pct claude_7d_resets_at claude_context_used_percentage claude_context_window_size claude_context_total_tokens claude_context_input_tokens claude_context_output_tokens claude_cache_creation_input_tokens claude_cache_read_input_tokens claude_session_estimated_cost_usd claude_session_total_duration_ms claude_usage_known claude_rate_limit_delta_scope")
-	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "REVIEWER1_STARTED": fields("reviewer1_provider reviewer1_model_requested"), "REVIEWER1_FINISHED": reviewerFinishedObservationFields, "REVIEWER1_FAILED": reviewerFailedObservationFields, "REVIEWER1_SKIPPED": fields("reviewer1_skipped_reason reviewer1_model_requested served_model_attestation"), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CODEX_RESULT_UNFETCHED": fields("route code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source reviewer1_valid_count reviewer1_false_count review_attribution review_finding_refs"), "APPLY_RECORDED": fields("job_id applied_paths_count base_head validation_status"), "READINESS_CHECK_OUTCOME": fields("verdict agent duration_ms"), "PLAN_REDIRECT": fields("route non_test_scope_count"), "MAINTENANCE_REPORT_FINISHED": fields("report_id report_type outcome reason_code elapsed_seconds quota_change_active_window_pct findings_high_count findings_medium_count findings_low_count line_coverage_pct")}
+	observationFields      = map[string]map[string]bool{"TASK_ROUTE_SELECTED": callObservationFields, "IMPLEMENTER_STARTED": mergeFields(callObservationFields, startObservationFields), "IMPLEMENTER_FAILED": mergeFields(fields("failure_code duration_ms eta_minutes reason reason_source previous_route new_route longest_silent_gap_seconds"), claudeUsagePayloadFields), "REVIEWER1_STARTED": fields("reviewer1_provider reviewer1_model_requested"), "REVIEWER1_FINISHED": reviewerFinishedObservationFields, "REVIEWER1_FAILED": reviewerFailedObservationFields, "REVIEWER1_SKIPPED": fields("reviewer1_skipped_reason reviewer1_model_requested served_model_attestation"), "SCOPE_CONFLICT_OUTCOME": fields("action job_id queue_wait_ms"), "ROUTING_PROTOCOL_VIOLATION": fields("violation_code"), "THREAD_CONTINUITY_VIOLATION": fields("violation_code"), "CODEX_RESULT_UNFETCHED": fields("route code"), "CLAUDE_DECISION_RECORDED": fields("decision task_type source reviewer1_valid_count reviewer1_false_count review_attribution review_finding_refs"), "APPLY_RECORDED": fields("job_id applied_paths_count base_head validation_status"), "APPLY_VALIDATION_FINISHED": fields("job_id route model applied_snapshot applied_revision validation_status validation_reason failing_tests packages duration_ms"), "READINESS_CHECK_OUTCOME": fields("verdict agent duration_ms"), "PLAN_REDIRECT": fields("route non_test_scope_count"), "MAINTENANCE_REPORT_FINISHED": fields("report_id report_type outcome reason_code elapsed_seconds quota_change_active_window_pct findings_high_count findings_medium_count findings_low_count line_coverage_pct")}
 	observationID          = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 	observationUUID        = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	unsafeObservationID    = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -2274,7 +2274,7 @@ var reviewerObservationFields = fields("reviewer1_retry_count reviewer1_retry_re
 var reviewerFinishedObservationFields = mergeFields(reviewerObservationFields, fields("reviewer1_result reviewer1_initial_finding_count reviewer1_finding_refs reviewer1_job_id"))
 var reviewerFailedObservationFields = mergeFields(reviewerObservationFields, fields("failure_code reviewer1_error_code reviewer1_result reviewer_stdout reviewer_stderr reviewer_exit reviewer_parse_error"))
 
-var observationEventTypes = fields("TASK_ROUTE_SELECTED IMPLEMENTER_STARTED IMPLEMENTER_FINISHED IMPLEMENTER_FAILED ASYNC_RESULT_DELIVERED REVIEWER1_STARTED REVIEWER1_FINISHED COMPACTION_ADVICE_OUTCOME STOP_BLOCKED SCOPE_CONFLICT_OUTCOME REVIEWER1_SKIPPED REVIEWER1_FAILED ROUTING_PROTOCOL_VIOLATION THREAD_CONTINUITY_VIOLATION UNKNOWN_CONCURRENT_WRITER WORKFLOW_VERDICT_RECORDED TELEMETRY_WARNING CLAUDE_TASK_USAGE_RECORDED CONTEXT_IO_TURN_RECORDED CODEX_RESULT_UNFETCHED CLAUDE_DECISION_RECORDED APPLY_RECORDED WORKER_REPLAY_CONFLICT MECHANICAL_EDIT_OBSERVED MAINTENANCE_REPORT_FINISHED MAINTENANCE_REPORT_ACTED READINESS_CHECK_OUTCOME PLAN_REDIRECT")
+var observationEventTypes = fields("TASK_ROUTE_SELECTED IMPLEMENTER_STARTED IMPLEMENTER_FINISHED IMPLEMENTER_FAILED ASYNC_RESULT_DELIVERED REVIEWER1_STARTED REVIEWER1_FINISHED COMPACTION_ADVICE_OUTCOME STOP_BLOCKED SCOPE_CONFLICT_OUTCOME REVIEWER1_SKIPPED REVIEWER1_FAILED ROUTING_PROTOCOL_VIOLATION THREAD_CONTINUITY_VIOLATION UNKNOWN_CONCURRENT_WRITER WORKFLOW_VERDICT_RECORDED TELEMETRY_WARNING CLAUDE_TASK_USAGE_RECORDED CONTEXT_IO_TURN_RECORDED CODEX_RESULT_UNFETCHED CLAUDE_DECISION_RECORDED APPLY_RECORDED APPLY_VALIDATION_FINISHED WORKER_REPLAY_CONFLICT MECHANICAL_EDIT_OBSERVED MAINTENANCE_REPORT_FINISHED MAINTENANCE_REPORT_ACTED READINESS_CHECK_OUTCOME PLAN_REDIRECT")
 
 const claudeUsageSnapshotLimit = 16 << 10
 
@@ -2391,7 +2391,9 @@ func init() {
 	setObservationRule("enum:UNMET NO_UNMET_FOUND UNKNOWN UNAVAILABLE", "verdict")
 	setObservationRule("id", "code")
 	setObservationRule("id", "implementer agent provider claude_usage_session_id job_id reviewer1_job_id")
-	setObservationRule("id", "base_head validation_status")
+	setObservationRule("id", "base_head validation_status applied_snapshot applied_revision")
+	setObservationRule("evidence", "validation_reason")
+	setObservationRule("validation_identifiers", "failing_tests packages")
 	setObservationRule("enum:denied queued promoted applied resolved_by_hand discarded expired", "action")
 	setObservationRule("time", "claude_usage_captured_at claude_5h_resets_at claude_7d_resets_at")
 	setObservationRule("scope", "claude_rate_limit_delta_scope")
@@ -2449,6 +2451,52 @@ func EmitMaintenanceReportObservation(stateRoot, repository, eventType string, p
 	}
 	_, err = persistObservation(filepath.Join(stateRoot, "telemetry"), event)
 	return err
+}
+
+// EmitApplyValidationObservation durably spools one outcome per validation run.
+// The shared merger serializes appends and repairs interrupted writes on every OS.
+func EmitApplyValidationObservation(stateRoot, repository, taskID, identity, timestamp string, payload map[string]any) (resultErr error) {
+	root := filepath.Join(stateRoot, "telemetry")
+	defer func() {
+		if resultErr != nil {
+			recordObservationHealth(stateRoot, "DEGRADED", "TELEMETRY_EMIT_FAILED", resultErr)
+		}
+	}()
+	if err := validateObservationValue("claude_usage_captured_at", timestamp); err != nil {
+		return err
+	}
+	if !oneOf(payload["validation_status"], "passed failed timeout") {
+		return fmt.Errorf("invalid validation outcome")
+	}
+	event, err := buildObservationAtStateRoot("APPLY_VALIDATION_FINISHED", map[string]any{"project_key": contextio.ProjectKey(repository)}, payload, taskID, stateRoot)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256([]byte(identity))
+	event["event_id"] = fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", sum[:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
+	event["ts_utc"] = timestamp
+	encoded, err := canonicalJSON(event)
+	if err != nil {
+		return err
+	}
+	if err = atomicObservationJSON(filepath.Join(root, "events", "spool", event["event_id"].(string)+".json"), encoded); err != nil {
+		return err
+	}
+	// Once spooled, a sharing violation or contention can defer publication safely.
+	lock, err := os.OpenFile(filepath.Join(root, "events", ".append.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		recordObservationHealth(stateRoot, "DEGRADED", "TELEMETRY_EMIT_FAILED", err)
+		return nil
+	}
+	defer lock.Close()
+	if err = contextio.TryLock(lock); err != nil {
+		return nil
+	}
+	defer contextio.Unlock(lock)
+	if err = mergeObservationSpool(root); err != nil {
+		recordObservationHealth(stateRoot, "DEGRADED", "TELEMETRY_SPOOL_MERGE_FAILED", err)
+	}
+	return nil
 }
 
 // EmitApplyObservation records a successful job apply through the shared
@@ -2568,6 +2616,28 @@ func validateObservationValue(name string, value any) error {
 		valid = value == nil || (name == "findings_high_count" || name == "findings_medium_count" || name == "findings_low_count") && validNumber(value, true) || (name == "quota_change_active_window_pct" || name == "line_coverage_pct") && validNumber(value, false)
 	case name == "reviewer1_retry_count":
 		valid = validNumber(value, true) && oneOfNumeric(value, 0, 1)
+	case rule == "validation_identifiers":
+		items, ok := value.([]string)
+		if !ok {
+			if raw, rawOK := value.([]any); rawOK {
+				ok = true
+				for _, item := range raw {
+					text, textOK := item.(string)
+					if !textOK {
+						ok = false
+						break
+					}
+					items = append(items, text)
+				}
+			}
+		}
+		valid = ok && len(items) <= 100
+		for _, item := range items {
+			if len(item) > 512 {
+				valid = false
+				break
+			}
+		}
 	case rule == "bool":
 		_, valid = value.(bool)
 	case rule == "int":
