@@ -4,11 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -238,16 +239,62 @@ func TestSaveAndFailedReplacementPreservesPriorRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldReplace := replaceFile
-	replaceFile = func(string, string) error { return errors.New("injected replacement failure") }
+	wantErr := &os.LinkError{Op: "rename", Old: "temp", New: path, Err: syscall.Errno(123)}
+	attempts := 0
+	replaceFile = func(string, string) error {
+		attempts++
+		return wantErr
+	}
 	t.Cleanup(func() { replaceFile = oldReplace })
 	replacement := testRecord("go-save-test")
 	replacement["last_outcome"] = map[string]any{"status": "changed"}
-	if got := Save(root, replacement); got.Status != "UNKNOWN" || got.Code != "LEDGER_WRITE_FAILED" {
+	if got := Save(root, replacement); got.Status != "UNKNOWN" || got.Code != "LEDGER_WRITE_FAILED" ||
+		got.Record["error_class"] != "syscall.Errno" || got.Record["error"] != wantErr.Error() {
 		t.Fatalf("failed replacement: %#v", got)
+	}
+	if attempts != 1 {
+		t.Fatalf("permanent replacement failure attempted %d times, want 1", attempts)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil || string(after) != string(prior) {
 		t.Fatalf("prior record changed after failed replacement: err=%v", err)
+	}
+}
+
+func TestSaveRetriesTransientReplacement(t *testing.T) {
+	root := t.TempDir()
+	record := testRecord("transient-save")
+	if got := Save(root, record); got.Status != OK {
+		t.Fatalf("seed: %#v", got)
+	}
+	oldReplace := replaceFile
+	t.Cleanup(func() { replaceFile = oldReplace })
+	attempts := 0
+	transient := []error{os.ErrPermission}
+	if runtime.GOOS == "windows" {
+		transient = []error{syscall.Errno(5), syscall.Errno(32), syscall.Errno(33)}
+	}
+	replaceFile = func(src, dst string) error {
+		attempts++
+		if attempts <= len(transient) {
+			return &os.LinkError{Op: "rename", Old: src, New: dst, Err: transient[attempts-1]}
+		}
+		return oldReplace(src, dst)
+	}
+	record["last_outcome"] = map[string]any{"status": "changed"}
+	if got := Save(root, record); got.Status != OK || got.Code != "LEDGER_WRITTEN" {
+		t.Fatalf("save after transient failure: %#v", got)
+	}
+	if attempts != len(transient)+1 {
+		t.Fatalf("replacement attempts = %d, want %d", attempts, len(transient)+1)
+	}
+	path, _ := PathForTask(root, "transient-save")
+	if got := Load(path, "transient-save"); got.Status != OK || !reflect.DeepEqual(got.Record, record) {
+		t.Fatalf("saved record: %#v", got)
+	}
+	temps, err := filepath.Glob(path + ".*.tmp")
+	if err != nil || len(temps) != 0 {
+		t.Fatalf("temporary files after save = %v, err = %v", temps, err)
 	}
 }
 

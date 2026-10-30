@@ -14,6 +14,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"purser-hook/internal/fsretry"
 )
 
 const (
@@ -167,11 +169,11 @@ func Save(root string, record map[string]any) Result {
 	}
 	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return Result{Status: "UNKNOWN", Code: "LEDGER_WRITE_FAILED"}
+		return writeFailed(err)
 	}
 	temporary, err := os.CreateTemp(dir, filepath.Base(target)+".*.tmp")
 	if err != nil {
-		return Result{Status: "UNKNOWN", Code: "LEDGER_WRITE_FAILED"}
+		return writeFailed(err)
 	}
 	tempPath := temporary.Name()
 	defer os.Remove(tempPath)
@@ -182,12 +184,22 @@ func Save(root string, record map[string]any) Result {
 		err = closeErr
 	}
 	if err == nil {
-		err = replaceFile(tempPath, target)
+		err = fsretry.ReplaceWith(replaceFile, tempPath, target)
 	}
 	if err != nil {
-		return Result{Status: "UNKNOWN", Code: "LEDGER_WRITE_FAILED"}
+		return writeFailed(err)
 	}
 	return Result{Status: OK, Code: "LEDGER_WRITTEN"}
+}
+
+func writeFailed(err error) Result {
+	cause := err
+	for errors.Unwrap(cause) != nil {
+		cause = errors.Unwrap(cause)
+	}
+	return Result{Status: "UNKNOWN", Code: "LEDGER_WRITE_FAILED", Record: map[string]any{
+		"error_class": fmt.Sprintf("%T", cause), "error": err.Error(),
+	}}
 }
 
 // Load reads and validates one Python SessionLedger envelope without changing it.

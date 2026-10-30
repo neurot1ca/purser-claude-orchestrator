@@ -115,6 +115,8 @@ func TestReplaceRetriesWindowsSharingErrors(t *testing.T) {
 			return syscall.Errno(5)
 		case 2:
 			return syscall.Errno(32)
+		case 3:
+			return syscall.Errno(33)
 		default:
 			return nil
 		}
@@ -122,7 +124,7 @@ func TestReplaceRetriesWindowsSharingErrors(t *testing.T) {
 	if err := Replace("src", "dst"); err != nil {
 		t.Fatal(err)
 	}
-	if attempts != 3 {
-		t.Fatalf("attempts = %d, want 3", attempts)
+	if attempts != 4 {
+		t.Fatalf("attempts = %d, want 4", attempts)
 	}
 }

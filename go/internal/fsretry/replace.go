@@ -52,5 +52,5 @@ func transient(err error) bool {
 		return false
 	}
 	var errno syscall.Errno
-	return errors.As(err, &errno) && (errno == syscall.Errno(5) || errno == syscall.Errno(32))
+	return errors.As(err, &errno) && (errno == syscall.Errno(5) || errno == syscall.Errno(32) || errno == syscall.Errno(33))
 }
