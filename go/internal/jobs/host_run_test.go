@@ -1061,6 +1061,67 @@ func TestResearchScratchAndSandboxStayOutsideRepository(t *testing.T) {
 	}
 }
 
+func TestResearchReplyReusesPriorScratchWithRecordedRepository(t *testing.T) {
+	isolateHostUserConfigDir(t)
+	t.Setenv("GOCACHE", "")
+	t.Setenv("GOTMPDIR", "")
+	base := t.TempDir()
+	repo := filepath.Join(base, "repository")
+	stateRoot := filepath.Join(base, "state")
+	priorScratch := filepath.Join(stateRoot, "research", strings.Repeat("a", 64))
+	if err := os.MkdirAll(priorScratch, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(priorScratch, "prior.txt"), []byte("research notes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	gitStart(t, repo, "init", "-q")
+	dir := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": float64(time.Now().Add(time.Minute).UnixNano()) / 1e9,
+		"repoRoot": repo, "route": "research", "phase": "operation",
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex-reply", "agent": "codex", "args": map[string]any{
+			"prompt": "continue", "threadId": "research-thread", "cwd": priorScratch, "worktree": true,
+		},
+	})
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := HostOptions{StateRoot: stateRoot, WorkerCommand: func(args LaunchArgs) ([]string, error) {
+		if filepath.Clean(args.Cwd) != filepath.Clean(priorScratch) {
+			t.Errorf("research reply cwd = %q, want prior scratch %q", args.Cwd, priorScratch)
+		}
+		if pathsOverlap(repo, args.Cwd) {
+			t.Errorf("research reply cwd overlaps repository: %q", args.Cwd)
+		}
+		if _, err := os.ReadFile(filepath.Join(args.Cwd, "prior.txt")); err != nil {
+			t.Errorf("prior research file is unavailable from reply cwd: %v", err)
+		}
+		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+	}}
+	if _, err = RunHostGeneration(dir, hostTestID, 1, "owner", options); err != nil {
+		t.Fatal(err)
+	}
+	got := readJob(dir, hostTestID)
+	var state string
+	got.Get("state", &state)
+	if state != "SUCCEEDED" {
+		t.Fatalf("research reply state = %s, want SUCCEEDED", state)
+	}
+}
+
 func isolateHostUserConfigDir(t *testing.T) {
 	t.Helper()
 	configRoot := t.TempDir()

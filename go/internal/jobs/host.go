@@ -141,6 +141,9 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	job.Get("route", &route)
 	job.Get("phase", &phase)
 	research := route == "research" && phase == "operation" && agent == "codex"
+	if research && repoRoot == "" {
+		job.Get("repoRoot", &repoRoot)
+	}
 	if launch.Name != "codex" && launch.Name != "codex-reply" {
 		return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Invalid host launch tool")
 	}
@@ -330,9 +333,10 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		if repoRoot == "" {
 			return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Research scratch must be outside the repository")
 		}
-		if pathWithin(repoRoot, stateRoot) || pathsOverlap(repoRoot, filepath.Join(stateRoot, "research", jobID)) {
+		researchRoot := filepath.Join(stateRoot, "research")
+		if pathWithin(repoRoot, stateRoot) || pathsOverlap(repoRoot, filepath.Join(researchRoot, jobID)) {
 			args.Sandbox = "read-only"
-		} else {
+		} else if !pathWithin(researchRoot, args.Cwd) || pathsOverlap(repoRoot, args.Cwd) {
 			args.Cwd, err = prepareResearchScratch(stateRoot, jobID, repoRoot)
 			if err != nil {
 				return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Research scratch directory is unavailable")
