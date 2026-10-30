@@ -968,7 +968,7 @@ func TestConfigureCodexGoCacheWritableRootsIncludeTelemetryWhenPresent(t *testin
 			var childEnv []string
 			args := LaunchArgs{}
 			jobTempDir := filepath.Join(configRoot, "cache", "tmp", hostTestID)
-			if err := configureCodexGoCache(&args, &childEnv, configRoot, jobTempDir, nil); err != nil {
+			if err := configureCodexGoCache(&args, &childEnv, configRoot, jobTempDir, nil, false, ""); err != nil {
 				t.Fatal(err)
 			}
 			config := args.Config.(map[string]any)
@@ -984,6 +984,80 @@ func TestConfigureCodexGoCacheWritableRootsIncludeTelemetryWhenPresent(t *testin
 				t.Errorf("writable roots = %#v, want [%q]", roots, jobTempDir)
 			}
 		})
+	}
+}
+
+func TestPathWithinDifferentWindowsVolumes(t *testing.T) {
+	if os.PathSeparator != '\\' {
+		t.Skip("Windows volume semantics")
+	}
+	directory := t.TempDir()
+	volume := filepath.VolumeName(directory)
+	for drive := 'A'; drive <= 'Z'; drive++ {
+		root := fmt.Sprintf("%c:\\", drive)
+		if strings.EqualFold(filepath.VolumeName(root), volume) {
+			continue
+		}
+		if info, err := os.Stat(root); err != nil || !info.IsDir() {
+			continue
+		}
+		if pathWithin(root, directory) || pathWithin(directory, root) {
+			t.Fatal("paths on different volumes overlap")
+		}
+		return
+	}
+	t.Skip("no second existing volume")
+}
+
+func TestResearchScratchAndSandboxStayOutsideRepository(t *testing.T) {
+	isolateHostUserConfigDir(t)
+	t.Setenv("GOCACHE", "")
+	t.Setenv("GOTMPDIR", "")
+	base := t.TempDir()
+	repo := filepath.Join(base, "repository")
+	stateRoot := filepath.Join(base, "state")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	scratch, err := prepareResearchScratch(stateRoot, hostTestID, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := LaunchArgs{Cwd: scratch, Sandbox: "workspace-write"}
+	jobTempDir := filepath.Join(stateRoot, "cache", "tmp", hostTestID)
+	var childEnv []string
+	if err := configureCodexGoCache(&args, &childEnv, stateRoot, jobTempDir, []any{scratch}, true, repo); err != nil {
+		t.Fatal(err)
+	}
+	if args.Cwd != scratch {
+		t.Fatalf("research cwd = %q, want %q", args.Cwd, scratch)
+	}
+	workspace := args.Config.(map[string]any)["sandbox_workspace_write"].(map[string]any)
+	if workspace["network_access"] != true {
+		t.Fatalf("research network_access = %#v", workspace["network_access"])
+	}
+	if workspace["exclude_slash_tmp"] != true || workspace["exclude_tmpdir_env_var"] != true {
+		t.Fatalf("research temp exclusions missing: %#v", workspace)
+	}
+	roots := workspace["writable_roots"].([]any)
+	for _, root := range roots {
+		value := root.(string)
+		if pathsOverlap(repo, value) {
+			t.Fatalf("research writable root overlaps repository: %q", value)
+		}
+	}
+	if os.PathSeparator != '\\' {
+		info, err := os.Stat(scratch)
+		if err != nil || info.Mode().Perm() != 0700 {
+			t.Fatalf("research scratch permissions = %v, %v", info, err)
+		}
+	}
+	if _, err := prepareResearchScratch(stateRoot, hostTestID, stateRoot); err == nil {
+		t.Fatal("scratch overlapping repository was accepted")
+	}
+	args.Cwd = repo
+	if err := configureCodexGoCache(&args, &childEnv, stateRoot, jobTempDir, []any{scratch}, true, repo); err != nil || args.Sandbox != "read-only" {
+		t.Fatalf("overlapping research sandbox = %q, error = %v", args.Sandbox, err)
 	}
 }
 

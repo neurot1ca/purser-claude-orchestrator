@@ -44,6 +44,33 @@ func TestAppendPreCodeMapScopedExcerpt(t *testing.T) {
 	}
 }
 
+func TestDispatchSandboxKeepsResearchWritableAndPlanReadOnly(t *testing.T) {
+	if sandbox, approval, restricted := dispatchSandbox("operation", "research", "codex"); !restricted || sandbox != "workspace-write" || approval != "never" {
+		t.Fatalf("research sandbox = %q/%q restricted=%v", sandbox, approval, restricted)
+	}
+	for _, agent := range []string{"codex", "claude"} {
+		if sandbox, approval, restricted := dispatchSandbox("plan", "plan_standard", agent); !restricted || sandbox != "read-only" || approval != "never" {
+			t.Fatalf("plan %s sandbox = %q/%q restricted=%v", agent, sandbox, approval, restricted)
+		}
+	}
+}
+
+func TestDispatchSandboxOtherResearchAgentsStayReadOnly(t *testing.T) {
+	for _, agent := range []string{"claude", "agy", "opencode", "cursor"} {
+		if sandbox, approval, restricted := dispatchSandbox("operation", "research", agent); !restricted || sandbox != "read-only" || approval != "never" {
+			t.Fatalf("research %s sandbox = %q/%q restricted=%v", agent, sandbox, approval, restricted)
+		}
+	}
+}
+
+func TestDispatchSandboxNonOperationResearchStaysReadOnly(t *testing.T) {
+	for _, phase := range []string{"plan", "implementation", ""} {
+		if sandbox, approval, restricted := dispatchSandbox(phase, "research", "codex"); !restricted || sandbox != "read-only" || approval != "never" {
+			t.Fatalf("research phase %q sandbox = %q/%q restricted=%v", phase, sandbox, approval, restricted)
+		}
+	}
+}
+
 func TestAppendPreCodeMapExcerptCapKeepsWholeSections(t *testing.T) {
 	mapPath := filepath.Join(t.TempDir(), "map.txt")
 	large := strings.Repeat("x", 3200)

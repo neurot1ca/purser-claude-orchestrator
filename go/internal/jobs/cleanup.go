@@ -378,6 +378,7 @@ func cleanupJobs(stateRoot, tempRoot string, now time.Time, checkCeiling bool) (
 		return fmt.Errorf("resolve state root: %w", err)
 	}
 	sweepTemporaryDirectories(root, now)
+	retention.RemoveOldPrefixedEntries(filepath.Join(root, "research"), now, 24*time.Hour, []string{""})
 	retention.RemoveOldPrefixedEntries(filepath.Join(root, "cache", "go-tmp"), now, 24*time.Hour, []string{""})
 	retention.RemoveOldPrefixedEntries(tempRoot, now, 24*time.Hour, []string{"purser-", "reviewer1-", "readiness-check-", "go-build"})
 	if err := trimPurserGoCache(root); err != nil {

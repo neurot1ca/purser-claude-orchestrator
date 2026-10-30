@@ -481,8 +481,8 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		if outputLimit := config["tool_output_token_limit"]; selection.Agent == "codex" && outputLimit != nil {
 			updatedConfig["tool_output_token_limit"] = outputLimit
 		}
-		if (pointerValue(parsed.Phase) == "plan" || research) && (selection.Agent == "codex" || selection.Agent == "claude") {
-			updated["sandbox"], updated["approval-policy"] = "read-only", "never"
+		if sandbox, approval, restricted := dispatchSandbox(pointerValue(parsed.Phase), pointerValue(parsed.Route), selection.Agent); restricted {
+			updated["sandbox"], updated["approval-policy"] = sandbox, approval
 		}
 		updated["config"] = updatedConfig
 	}
@@ -584,6 +584,19 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		}
 	}
 	return result, err
+}
+
+func dispatchSandbox(phase, route, agent string) (sandbox, approval string, restricted bool) {
+	if phase == "plan" && (agent == "codex" || agent == "claude") {
+		return "read-only", "never", true
+	}
+	if route == "research" && phase == "operation" && agent == "codex" {
+		return "workspace-write", "never", true
+	}
+	if route == "research" {
+		return "read-only", "never", true
+	}
+	return "", "", false
 }
 
 func failedTaskReplyDenial() map[string]any {

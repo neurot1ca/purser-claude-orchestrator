@@ -137,6 +137,10 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	if agent == "" {
 		agent = "codex"
 	}
+	var route, phase string
+	job.Get("route", &route)
+	job.Get("phase", &phase)
+	research := route == "research" && phase == "operation" && agent == "codex"
 	if launch.Name != "codex" && launch.Name != "codex-reply" {
 		return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Invalid host launch tool")
 	}
@@ -218,7 +222,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 	}
 	var childEnv []string
-	if worktreePath != "" || argsMap["worktree"] == true {
+	if !research && (worktreePath != "" || argsMap["worktree"] == true) {
 		stateRoot := opt.StateRoot
 		if stateRoot == "" {
 			stateRoot = filepath.Dir(filepath.Dir(dir))
@@ -318,6 +322,23 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		args.Cwd = mapped
 		prompt += "\nUse the job worktree as project root; map absolute checkout paths to the same relative path here."
 	}
+	if research {
+		stateRoot := opt.StateRoot
+		if stateRoot == "" {
+			stateRoot = filepath.Dir(filepath.Dir(dir))
+		}
+		if repoRoot == "" {
+			return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Research scratch must be outside the repository")
+		}
+		if pathWithin(repoRoot, stateRoot) || pathsOverlap(repoRoot, filepath.Join(stateRoot, "research", jobID)) {
+			args.Sandbox = "read-only"
+		} else {
+			args.Cwd, err = prepareResearchScratch(stateRoot, jobID, repoRoot)
+			if err != nil {
+				return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Research scratch directory is unavailable")
+			}
+		}
+	}
 	if agent == "codex" {
 		stateRoot := opt.StateRoot
 		if stateRoot == "" {
@@ -330,11 +351,20 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		defer cacheUser()
 		jobTempDir = filepath.Join(stateRoot, "cache", "tmp", jobID)
 		var writableRoots []any
-		if worktreePath != "" {
+		if research {
+			writableRoots = append(writableRoots, args.Cwd)
+		} else if worktreePath != "" {
 			writableRoots = append(writableRoots, worktreePath)
 		}
-		if err = configureCodexGoCache(&args, &childEnv, stateRoot, jobTempDir, writableRoots); err != nil {
+		protectedRoot := ""
+		if research {
+			protectedRoot = repoRoot
+		}
+		if err = configureCodexGoCache(&args, &childEnv, stateRoot, jobTempDir, writableRoots, research, protectedRoot); err != nil {
 			return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "Codex Go cache directory is unavailable")
+		}
+		if research && args.Sandbox == "read-only" {
+			jobTempDir = ""
 		}
 	}
 	if launch.CodexBin != nil {
@@ -693,7 +723,11 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	return map[string]any{"status": "ok"}, nil
 }
 
-func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot, jobTempDir string, writableRoots []any) error {
+func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot, jobTempDir string, writableRoots []any, research bool, protectedRoot string) error {
+	// Enable research writes only after all writable paths pass the overlap checks.
+	if research {
+		args.Sandbox = "read-only"
+	}
 	config := map[string]any{}
 	switch existing := args.Config.(type) {
 	case OrderedObject:
@@ -737,6 +771,16 @@ func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot, jobT
 			writableRoots = append(writableRoots, telemetryDir)
 		}
 	}
+	if research && protectedRoot != "" {
+		if pathsOverlap(protectedRoot, args.Cwd) || pathsOverlap(protectedRoot, jobTempDir) {
+			return nil
+		}
+		for _, root := range writableRoots {
+			if value, ok := root.(string); ok && pathsOverlap(protectedRoot, value) {
+				return nil
+			}
+		}
+	}
 	if err := os.MkdirAll(jobTempDir, 0700); err != nil {
 		return err
 	}
@@ -749,6 +793,9 @@ func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot, jobT
 		if os.Getenv(variable.name) != "" {
 			continue
 		}
+		if research && protectedRoot != "" && pathsOverlap(protectedRoot, variable.directory) {
+			return nil
+		}
 		if err := os.MkdirAll(variable.directory, 0700); err != nil {
 			return err
 		}
@@ -756,6 +803,16 @@ func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot, jobT
 		*childEnv = append(*childEnv, variable.name+"="+variable.directory)
 	}
 	writableRoots = append(writableRoots, jobTempDir)
+	if research && protectedRoot != "" {
+		for _, root := range writableRoots {
+			if value, ok := root.(string); ok && pathsOverlap(protectedRoot, value) {
+				return nil
+			}
+		}
+		if pathsOverlap(protectedRoot, args.Cwd) {
+			return nil
+		}
+	}
 	if os.Getenv("GOTMPDIR") == "" {
 		*childEnv = append(*childEnv, "GOTMPDIR="+jobTempDir)
 	}
@@ -765,10 +822,79 @@ func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot, jobT
 		}
 	}
 	if len(writableRoots) > 0 {
-		config["sandbox_workspace_write"] = map[string]any{"writable_roots": writableRoots}
+		workspace := map[string]any{"writable_roots": writableRoots}
+		if research {
+			workspace["network_access"] = true
+			workspace["exclude_slash_tmp"] = true
+			workspace["exclude_tmpdir_env_var"] = true
+			args.Sandbox = "workspace-write"
+		}
+		config["sandbox_workspace_write"] = workspace
 	}
 	args.Config = config
 	return nil
+}
+
+func pathWithin(root, path string) bool {
+	root, rootErr := resolvedPath(root)
+	path, pathErr := resolvedPath(path)
+	if rootErr != nil || pathErr != nil {
+		return true
+	}
+	if !strings.EqualFold(filepath.VolumeName(root), filepath.VolumeName(path)) {
+		return false
+	}
+	relative, err := filepath.Rel(root, path)
+	return err != nil || relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func resolvedPath(path string) (string, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	var suffix []string
+	for {
+		if _, err = os.Lstat(path); err == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(path)
+			if resolveErr != nil {
+				return "", resolveErr
+			}
+			path = resolved
+			for index := len(suffix) - 1; index >= 0; index-- {
+				path = filepath.Join(path, suffix[index])
+			}
+			return filepath.Clean(path), nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", err
+		}
+		suffix = append(suffix, filepath.Base(path))
+		path = parent
+	}
+}
+
+func pathsOverlap(first, second string) bool {
+	return pathWithin(first, second) || pathWithin(second, first)
+}
+
+func prepareResearchScratch(stateRoot, jobID, repoRoot string) (string, error) {
+	directory := filepath.Join(stateRoot, "research", jobID)
+	if pathsOverlap(repoRoot, directory) {
+		return "", errors.New("research scratch overlaps repository")
+	}
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return "", err
+	}
+	if os.PathSeparator != '\\' {
+		if err := os.Chmod(directory, 0700); err != nil {
+			return "", err
+		}
+	}
+	return directory, nil
 }
 
 func finishHostStartError(dir, id string, generation int64, token string, cancelled bool, contextErr, startErr error) (map[string]any, error) {
