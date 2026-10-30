@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,7 +11,43 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/maintenance/errcheck"
 )
+
+func TestUncheckedErrorSection(t *testing.T) {
+	result := errcheck.Result{Status: "ok"}
+	var want strings.Builder
+	for i := 1; i <= 41; i++ {
+		result.Findings = append(result.Findings, errcheck.Finding{File: "a.go", Line: i, Callee: "f.Close"})
+		fmt.Fprintf(&want, "a.go:%d f.Close\n", i)
+	}
+	path := filepath.Join(maintenanceScratch(t), "reports", "cleanup", "errcheck-run.txt")
+	section, version := uncheckedErrorSection(result, path)
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != want.String() {
+		t.Fatalf("incomplete findings file: %s, %v", data, err)
+	}
+	if !strings.Contains(section, "count=41") || !strings.Contains(version, "file="+path) || strings.Contains(section, "f.Close") || !strings.Contains(section, "evidence `errcheck(builtin)`") {
+		t.Fatalf("incorrect candidate summary: %s", section)
+	}
+	for _, status := range []string{"skipped:not-go", "failed:load/type-check"} {
+		section, _ := uncheckedErrorSection(errcheck.Result{Status: status}, path)
+		if !strings.Contains(section, status) || !strings.Contains(section, "(unavailable)") {
+			t.Fatalf("incorrect unavailable summary: %s", section)
+		}
+	}
+}
+
+func TestUncheckedErrorWriteFailure(t *testing.T) {
+	blocked := filepath.Join(maintenanceScratch(t), "blocked")
+	if err := os.WriteFile(blocked, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	section, version := uncheckedErrorSection(errcheck.Result{Status: "ok"}, filepath.Join(blocked, "errcheck.txt"))
+	if !strings.Contains(section, "failed:write") || !strings.Contains(version, "(unavailable)") {
+		t.Fatalf("write failure not recorded: %s, %s", section, version)
+	}
+}
 
 func TestReportPromptBytes(t *testing.T) {
 	repo := "<REPO>"

@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/fsretry"
+	"purser-hook/internal/maintenance/errcheck"
 	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
@@ -369,6 +371,10 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 		if strings.HasPrefix(versions[2], "vulture: unavailable") {
 			limitations = "Vulture unavailable; grep-based search only, which can miss indirect and dynamic use."
 		}
+		checked, _ := errcheck.Run(context.Background(), root)
+		section, version := uncheckedErrorSection(checked, filepath.Join(MaintenanceDirectory(state, root), "reports", "cleanup", "errcheck-"+timestamp+".txt"))
+		prompt += section
+		versions = append(versions, version)
 	}
 	result, runErr := r.Run(state, root, reportType, prompt)
 	if runErr != nil {
@@ -415,6 +421,31 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 	}
 	enforce.EmitMaintenanceReportObservation(state, root, "MAINTENANCE_REPORT_FINISHED", payload)
 	return path, nil
+}
+
+func uncheckedErrorSection(result errcheck.Result, path string) (string, string) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		result.Status = "failed:write"
+	} else {
+		path = absolute
+	}
+	if result.Status == "ok" {
+		var lines strings.Builder
+		for _, finding := range result.Findings {
+			fmt.Fprintf(&lines, "%s:%d %s\n", finding.File, finding.Line, finding.Callee)
+		}
+		if writeAtomic(path, []byte(lines.String())) != nil {
+			result.Status = "failed:write"
+		}
+	}
+	if result.Status != "ok" {
+		path += " (unavailable)"
+	}
+	version := fmt.Sprintf("errcheck(builtin): %s; count=%d; file=%s", result.Status, len(result.Findings), path)
+	return "\n" + version + "\n" +
+		"Order: non-test files first; within each group, state-changing callees first; ties by path then line.\n" +
+		"Verify the candidates in the file and include real unchecked errors as findings with evidence `errcheck(builtin)`.\n", version
 }
 
 func nullableConfidence(findings []map[string]any, counts map[string]int, key string) any {
