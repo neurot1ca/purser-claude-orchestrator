@@ -14,6 +14,7 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/fsretry"
+	"purser-hook/internal/jobs"
 	"purser-hook/internal/models"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/policy"
@@ -250,7 +251,10 @@ func activeUserJobs(state, root, exclude string) (bool, bool) {
 			id = ""
 		}
 		if id != exclude && (status == "RUNNING" || status == "QUEUED") {
-			return true, true
+			record, err := jobs.Decode(data)
+			if err != nil || !jobs.StaleHost(dir, record, time.Now()) {
+				return true, true
+			}
 		}
 	}
 	return false, true

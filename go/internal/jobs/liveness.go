@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 )
 
 const (
@@ -18,6 +19,51 @@ const (
 // LivenessActivity uses the bridge's persisted field names. checkpointAt is
 // deliberately process-local and is never written into the job record.
 type LivenessActivity map[string]any
+
+// StaleHost reports only old jobs with no host or a confirmed dead host.
+// Incomplete process, tree, or timestamp evidence keeps the job active.
+func StaleHost(dir string, job *Record, now time.Time) bool {
+	values := recordMap(job)
+	latest := 0.0
+	timestamps := []any{values["acceptedAt"], values["startedAt"]}
+	if raw, exists := values["liveness"]; exists {
+		live, ok := raw.(map[string]any)
+		if !ok {
+			return false
+		}
+		timestamps = append(timestamps, live["lastActivityAt"], live["processAliveAt"])
+	}
+	for _, value := range timestamps {
+		if value == nil {
+			continue
+		}
+		stamp, ok := livenessNumber(value)
+		if !ok || stamp <= 0 {
+			return false
+		}
+		latest = math.Max(latest, stamp)
+	}
+	if latest == 0 || float64(now.UnixNano())/1e9-latest <= (6*time.Hour).Seconds() {
+		return false
+	}
+	if _, exists := values["hostPid"]; exists {
+		pid, ok := recoveryInteger(job, "hostPid")
+		if !ok || pid < 0 || pid > math.MaxInt32 {
+			return false
+		}
+		if pid > 0 {
+			created, ok := recoveryInteger(job, "hostCreatedAt")
+			if !ok || created < 0 || recoveryProcessState(int(pid), uint64(created)) != "DEAD" {
+				return false
+			}
+		}
+	}
+	if _, exists := values["treeReceipt"]; exists {
+		stopped, err := recordedTreeStopped(dir, job)
+		return err == nil && stopped
+	}
+	return true
+}
 
 // RecordLivenessActivity measures the gap from the previous activity sample.
 func RecordLivenessActivity(activity LivenessActivity, now float64) {

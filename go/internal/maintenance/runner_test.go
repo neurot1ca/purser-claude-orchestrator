@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
+	"purser-hook/internal/jobs"
 	"purser-hook/internal/profile"
 )
 
@@ -165,6 +167,69 @@ func TestRunScopesActiveJobsToRepository(t *testing.T) {
 				}
 			} else if err != nil {
 				t.Fatalf("maintenance failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestActiveUserJobsIgnoresOrphanQueuedRecord(t *testing.T) {
+	state, root := t.TempDir(), t.TempDir()
+	dir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const id = "orphan"
+	data, _ := json.Marshal(map[string]any{"jobId": id, "repoRoot": root, "state": "QUEUED", "acceptedAt": time.Now().Add(-7 * time.Hour).Unix()})
+	if err := os.WriteFile(filepath.Join(dir, id+".json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	active, known := activeUserJobs(state, root, "")
+	if active || !known {
+		t.Fatalf("activeUserJobs = (%v, %v), want (false, true)", active, known)
+	}
+}
+
+func TestActiveUserJobsKeepsRecentOrLiveRecord(t *testing.T) {
+	if os.Getenv("PURSER_MAINTENANCE_LIVE_HOST") == "1" {
+		time.Sleep(30 * time.Second)
+		return
+	}
+	for _, tc := range []struct {
+		name string
+		job  map[string]any
+	}{
+		{"recent queued", map[string]any{"state": "QUEUED", "acceptedAt": time.Now().Unix()}},
+		{"live host", map[string]any{"state": "RUNNING", "acceptedAt": time.Now().Add(-7 * time.Hour).Unix()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state, root := t.TempDir(), t.TempDir()
+			dir := filepath.Join(state, "codex_exec_mcp", "jobs")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "live host" {
+				t.Setenv("PURSER_CODEX_TEST_PARENT_PID", strconv.Itoa(os.Getpid()))
+				env := append(os.Environ(), "PURSER_MAINTENANCE_LIVE_HOST=1")
+				pid, created, err := jobs.LaunchDetached([]string{os.Args[0], "-test.run=^TestActiveUserJobsKeepsRecentOrLiveRecord$"}, env, root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				process, err := os.FindProcess(pid)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer process.Release()
+				defer process.Kill()
+				tc.job["hostPid"], tc.job["hostCreatedAt"] = pid, created
+			}
+			tc.job["repoRoot"] = root
+			data, _ := json.Marshal(tc.job)
+			if err := os.WriteFile(filepath.Join(dir, "job.json"), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			active, known := activeUserJobs(state, root, "")
+			if !active || !known {
+				t.Fatalf("activeUserJobs = (%v, %v), want (true, true)", active, known)
 			}
 		})
 	}
