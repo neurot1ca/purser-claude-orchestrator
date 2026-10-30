@@ -360,14 +360,18 @@ func readHostParityRecord(t *testing.T, dir, id string) *Record {
 	path := filepath.Join(dir, id+".json")
 	until := time.Now().Add(hostTestWaitBudget(time.Second))
 	for time.Now().Before(until) {
-		record, err := Read(path)
+		data, err := readHostParityRecordBytes(path)
+		var record *Record
+		if err == nil {
+			record, err = Decode(data)
+		}
 		if err == nil {
 			return record
 		}
 		time.Sleep(time.Millisecond)
 	}
-	data, _ := os.ReadFile(path)
-	_, err := Read(path)
+	data, _ := readHostParityRecordBytes(path)
+	_, err := Decode(data)
 	t.Fatalf("read host parity job: %v; raw=%q", err, data)
 	return nil
 }
