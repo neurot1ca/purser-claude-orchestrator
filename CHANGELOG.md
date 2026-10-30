@@ -3,6 +3,13 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.215 — 2026-10-30
+
+- **Fixed:** background helpers and waiters run from a stable copy of the hook binary, so a running WSL or Windows session no longer locks the plugin folder during updates.
+- **Fixed:** job ETAs are measured per phase and rounded to the nearest minute, so estimates are no longer about twice the real duration.
+- **Fixed:** telemetry accepts every value Purser itself produces, so reviewer skips and run notes are recorded again, and health reports name the real error.
+- **Fixed:** Windows host-parity tests read records without blocking concurrent renames.
+
 ## 0.1.214 — 2026-10-30
 
 - **Fixed:** session notices name the user's language when Purser knows it and fall back to English otherwise, so headless sessions no longer guess a language.
