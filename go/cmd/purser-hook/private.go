@@ -20,6 +20,7 @@ import (
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/jobs"
 	"purser-hook/internal/obsidian"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/policy"
 )
 
@@ -352,7 +353,7 @@ func launchPrivate(root string, args ...string) (int, int64, error) {
 	if os.Getenv("PURSER_TEST_DISABLE_CHILD_LAUNCH") == "1" {
 		return 0, 0, errors.New("private child launch disabled by test")
 	}
-	executable, err := os.Executable()
+	executable, err := pluginroot.RuntimeExecutable(root)
 	if err != nil {
 		return 0, 0, err
 	}

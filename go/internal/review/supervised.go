@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/contextio"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 )
 
@@ -104,7 +106,7 @@ func runSupervised(ctx context.Context, args []string, cwd string, env []string,
 			return -1, err
 		}
 	}
-	executable, err := os.Executable()
+	executable, err := pluginroot.RuntimeExecutable(contextio.StateRoot())
 	if err != nil {
 		_ = outRead.Close()
 		_ = outWrite.Close()

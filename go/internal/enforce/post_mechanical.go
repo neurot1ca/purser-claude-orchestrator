@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 )
 
@@ -844,7 +845,7 @@ func startMechanicalShadow(root, projectKey, repository, prompt, report, served,
 		_ = os.Remove(lock)
 		return false, err
 	}
-	executable, err := os.Executable()
+	executable, err := pluginroot.RuntimeExecutable(root)
 	if err != nil {
 		_ = os.Remove(job)
 		_ = os.Remove(lock)

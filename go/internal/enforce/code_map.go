@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 )
 
@@ -58,7 +59,7 @@ func startCodeMapCompletion(repo, stateRoot string, start func([]string, []strin
 		return
 	}
 	_ = marker.Close()
-	executable, err := os.Executable()
+	executable, err := pluginroot.RuntimeExecutable(stateRoot)
 	if err == nil {
 		err = start([]string{executable, "code-map", "--repo", repo, "--budget-seconds", "60"}, os.Environ(), repo)
 	}

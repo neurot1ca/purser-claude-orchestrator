@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"purser-hook/internal/lease"
+	"purser-hook/internal/pluginroot"
 )
 
 func TestPostStartPythonWriteFixture(t *testing.T) {
@@ -136,6 +137,7 @@ func TestPostStartPythonWriteFixture(t *testing.T) {
 
 func TestPostStartWaiterUsesExecutablePath(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", root)
 	repo := filepath.Join(root, "repo")
 	if err := os.MkdirAll(filepath.Join(repo, ".claude", "hooks", "orchestrator"), 0700); err != nil {
 		t.Fatal(err)
@@ -169,7 +171,7 @@ func TestPostStartWaiterUsesExecutablePath(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &payload); err != nil {
 		t.Fatal(err)
 	}
-	executable, err := os.Executable()
+	executable, err := pluginroot.RuntimeExecutable(root)
 	if err != nil {
 		t.Fatal(err)
 	}

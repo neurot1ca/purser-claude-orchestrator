@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"purser-hook/internal/contextio"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 )
 
@@ -143,7 +145,7 @@ type supervisedCommand struct {
 }
 
 func startSupervisedCommand(ctx context.Context, cmd *exec.Cmd, receipt string) (*supervisedCommand, error) {
-	executable, err := os.Executable()
+	executable, err := pluginroot.RuntimeExecutable(contextio.StateRoot())
 	if err != nil {
 		return nil, err
 	}

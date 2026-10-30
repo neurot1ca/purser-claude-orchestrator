@@ -1,16 +1,18 @@
 package waiter
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"purser-hook/internal/pluginroot"
+	"purser-hook/internal/profile"
 )
 
 // Command returns the runnable command for the waiter of jobID.
 func Command(jobID string) string {
 	executable := "purser-hook"
-	if path, err := os.Executable(); err == nil {
+	if path, err := pluginroot.RuntimeExecutable(profile.StateRoot()); err == nil {
 		if path, err = filepath.Abs(path); err == nil {
 			if resolved, err := filepath.EvalSymlinks(path); err == nil {
 				executable = resolved
@@ -30,7 +32,7 @@ func Command(jobID string) string {
 // ValidationCommand returns a shell-ready command for the bounded apply-validation waiter.
 func ValidationCommand(stateRoot, repositoryKey, jobID string) string {
 	executable := "purser-hook"
-	if path, err := os.Executable(); err == nil {
+	if path, err := pluginroot.RuntimeExecutable(stateRoot); err == nil {
 		if path, err = filepath.Abs(path); err == nil {
 			if resolved, err := filepath.EvalSymlinks(path); err == nil {
 				executable = resolved

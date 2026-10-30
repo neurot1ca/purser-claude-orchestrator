@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 )
 
@@ -323,7 +324,7 @@ func TestStartMechanicalShadowLaunchesBundledCommand(t *testing.T) {
 	root := t.TempDir()
 	writeMechanicalInventory(t, root)
 	openMechanicalRace(t, root)
-	executable, err := os.Executable()
+	executable, err := pluginroot.RuntimeExecutable(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +343,7 @@ func TestStartMechanicalShadowLaunchesBundledCommand(t *testing.T) {
 	}
 	PostMechanicalLearning(map[string]any{}, root, "unused-plugin-root", "project", "session-1", mechanicalPending(), mechanicalBundle())
 	if len(launched) != 3 || launched[0] != executable || launched[1] != "mechanical-shadow" {
-		t.Fatalf("launch argv = %#v, want current executable mechanical-shadow <job>", launched)
+		t.Fatalf("launch argv = %#v, want runtime executable mechanical-shadow <job>", launched)
 	}
 	if launchedDir != filepath.Dir(launched[2]) {
 		t.Fatalf("launch cwd = %q, want job directory %q", launchedDir, filepath.Dir(launched[2]))

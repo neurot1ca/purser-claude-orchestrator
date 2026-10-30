@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"purser-hook/internal/enforce"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/retention"
 )
 
@@ -89,7 +90,7 @@ func DispatchWorktreeRetirement(stateRoot, jobID string) error {
 	if !claimed {
 		return nil
 	}
-	executable, err := os.Executable()
+	executable, err := pluginroot.RuntimeExecutable(root)
 	if err != nil {
 		releaseRetirementClaim(root, worktree)
 		return err

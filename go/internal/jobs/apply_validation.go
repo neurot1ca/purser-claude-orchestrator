@@ -21,6 +21,7 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/lease"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/waiter"
@@ -199,6 +200,7 @@ func enqueueAppliedValidation(stateRoot string, job map[string]any, value map[st
 		result = validationSummary(record)
 		return
 	}
+	executable = pluginroot.RuntimeCopy(stateRoot, executable)
 	env := setValidationChildEnv(os.Environ())
 	pid, identity, err := launchApplyValidation([]string{executable, "validate-apply", stateRoot, key, id}, env, repo)
 	if err != nil {

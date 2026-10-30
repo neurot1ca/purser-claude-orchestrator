@@ -19,6 +19,7 @@ import (
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/learning"
 	"purser-hook/internal/lease"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/retention"
 )
@@ -78,6 +79,9 @@ func RunCleanup(root string, launch func() (int, int64, error)) error {
 		}
 		if executable, err := os.Executable(); err == nil {
 			retention.PrunePluginCache(executable)
+		}
+		if executable, err := pluginroot.RuntimeExecutable(root); err == nil {
+			pluginroot.PruneRuntime(root, executable, time.Now())
 		}
 		return nil
 	})

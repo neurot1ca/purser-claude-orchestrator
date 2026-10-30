@@ -10,6 +10,7 @@ import (
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/maintenance"
+	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 )
 
@@ -44,7 +45,7 @@ func launchCatalogRefresh(repository string) {
 	if err != nil {
 		return
 	}
-	executable, err := os.Executable()
+	executable, err := pluginroot.RuntimeExecutable(stateRoot())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Purser: catalog refresh launch failed: %v\n", err)
 		return
@@ -90,7 +91,7 @@ func wakeMaintenanceReport(repository string) {
 	if json.Unmarshal(markerData, &marker) != nil || !marker.Enabled || marker.ProjectRoot != root {
 		return
 	}
-	executable, err := os.Executable()
+	executable, err := pluginroot.RuntimeExecutable(stateRoot())
 	if err != nil {
 		return
 	}
