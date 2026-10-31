@@ -24,6 +24,7 @@ import (
 	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
+	"purser-hook/internal/testcoverage"
 )
 
 const findingsStart = "```purser-findings-json"
@@ -63,39 +64,24 @@ func BuildReportPrompt(repository, reportType string, coverageTargetPct float64)
 			"```\n", repository), nil
 	case "test-gaps":
 		return fmt.Sprintf("Produce a test-gaps report for the repository at %s.\n"+
-			"This is a strictly read-only inspection. Do not edit files, create repository files,\n"+
-			"install tools, or run package managers. Detect languages from `git ls-files -co --exclude-standard`\n"+
-			"extensions, go.mod, package.json, Cargo.toml, pyproject.toml/setup.cfg, and shebangs.\n"+
-			"Use only locally resolved, already-installed tools; never\n"+
-			"download tools, dependencies, toolchains, or coverage providers (including npx\n"+
-			"fetches, `go run pkg@version`, or `cargo install`). Report only evidence-bound tests.\n"+
-			"For each candidate, give the target path:line and symbol, the untested behaviour,\n"+
-			"evidence from source, the exact command used to search existing tests and its result\n"+
-			"showing no test already covers that behaviour, and a high, medium, or low confidence\n"+
-			"level. Include a compact contract evidence section covering documented requirements,\n"+
-			"invariants, boundaries, and affected callers, cite each item to a source path:line,\n"+
-			"and write \"unknown\" where evidence is absent.\n"+
-			"Order findings from most to least important. Every finding must include severity (high,\n"+
-			"medium, or low), meaning its impact if left, separately from confidence.\n"+
-			"For each finding include why the missing test matters in one short sentence\n"+
-			"of at most 80 characters.\n"+
-			"Measure each language with existing local tools/data: Go existing coverprofile or\n"+
-			"`go test -cover` (statement coverage); TS/JS configured jest, vitest, or c8 coverage;\n"+
-			"Rust installed cargo llvm-cov or tarpaulin; Python existing data via `python -m\n"+
-			"coverage report`; others an existing configured command/artifact. Never fetch a tool,\n"+
-			"provider, or dependency. If unavailable, use search evidence and state its limits.\n"+
-			"Include a compact per-language scope table: language, file count, tool+version or search-only/\n"+
-			"not-scanned, command, limitation. State coverage per language and overall against a\n"+
-			"%g%% line-coverage target; order candidate tests by how much uncovered code they\n"+
-			"exercise. line_coverage_pct is the overall number or null if any detected language\n"+
-			"lacks a measurement.\n"+
+			"This is a test-writing task. Change test files only; do not edit production code,\n"+
+			"configuration, manifests, or dependencies. Use existing local tools only; never install\n"+
+			"or download tools, providers, dependencies, or toolchains.\n"+
+			"Rank gaps first by contract impact: safety, authority boundaries, persistence/recovery,\n"+
+			"and externally visible failure behaviour. Then weigh source/caller evidence strength and\n"+
+			"existing test coverage, then expected executable-line gain against cost. For each test,\n"+
+			"cite source and affected caller path:line evidence, describe the rejected behavior, give\n"+
+			"the exact existing-test search and result, and state a short ordering rationale.\n"+
+			"Continue in rank order while enough time remains to finish the next test plus verification\n"+
+			"and review; reserve finalization time. There is no fixed gap count.\n"+
+			"Coverage is measured by the host. Do not report worker-estimated percentages or claim\n"+
+			"readiness; status remains provisional/unknown until trusted host measurement, test-only\n"+
+			"checks, and executed review succeed. The coverage target is %g%%.\n"+
 			"If user-initiated work starts, it has priority: do not delay it, cancel it, or\n"+
 			"continue consuming resources once it needs the machine. End with one JSON object in\n"+
-			"this machine-readable block. Findings use the cleanup shape; line_coverage_pct must\n"+
-			"be the overall percentage or null:\n"+
+			"this machine-readable block. Findings use the cleanup shape and line_coverage_pct is null:\n"+
 			"```purser-findings-json\n"+
-			"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason this test matters\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"severity\":\"high|medium|low\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n"+
-			"```\n", repository, coverageTargetPct), nil
+			"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason this test matters\",\"evidence\":\"source and caller evidence; behavior; existing-test search and result; ordering rationale\",\"severity\":\"high|medium|low\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n```\n", repository, coverageTargetPct), nil
 	default:
 		return "", fmt.Errorf("unsupported maintenance report type: %s", reportType)
 	}
@@ -169,18 +155,7 @@ func ParseFindings(body string, reportTypes ...string) []map[string]any {
 }
 
 func LineCoverage(body string) any {
-	value, ok := findingsJSON(body)
-	if !ok {
-		return nil
-	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return nil
-	}
-	coverage := object["line_coverage_pct"]
-	if validCoverage(coverage) {
-		return coverage
-	}
+	// Worker-reported values are not trusted coverage evidence.
 	return nil
 }
 
@@ -285,6 +260,10 @@ func PersistReport(state, repository, reportType, timestamp, commit, body string
 		return "", err
 	}
 	notice := map[string]any{"report_type": reportType, "report_path": path, "findings": findings, "finding_count": nullableCount(findings), "line_coverage_pct": coverage, "coverage_target_pct": coverageTargetPct, "shown": false}
+	if reportType == "test-gaps" {
+		notice["status"] = "unknown"
+		notice["line_coverage_pct"] = nil
+	}
 	if err = writeJSONAtomic(strings.TrimSuffix(path, ".md")+".notice.json", notice); err != nil {
 		return "", err
 	}
@@ -364,7 +343,7 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 		commit = strings.TrimSpace(string(output))
 	}
 	versions := []string{"Runtime: " + checkreport.RuntimeDetail(maintenancePluginRoot()), gitVersion(root)}
-	limitations := "Coverage availability and result are reported by the worker."
+	limitations := "Coverage and readiness require trusted host evidence."
 	if reportType == "cleanup" {
 		versions = append(versions, vultureVersion())
 		limitations = "Vulture available; worker must still check entry points, hooks, and dynamic use."
@@ -376,7 +355,15 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 		prompt += section
 		versions = append(versions, version)
 	}
-	result, runErr := r.Run(state, root, reportType, prompt)
+	var result map[string]any
+	var runErr error
+	_, _, _, timeout := r.clock()
+	if reportType == "test-gaps" && !testcoverage.CanWrite(context.Background(), root, timeout) {
+		limitations = "Coverage unknown: unavailable tooling, unsupported suite, incomplete scope, or incompatible measurements; test writing skipped."
+		result = map[string]any{"content": limitations}
+	} else {
+		result, runErr = r.Run(state, root, reportType, prompt)
+	}
 	if runErr != nil {
 		recordReportFailure(state, root, reportType, timestamp, result, runErr, started, quotaBefore, r.CoderAgent)
 		return "", runErr
@@ -384,9 +371,6 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 	body := stringValue(result["content"], "")
 	findings := ParseFindings(body, reportType)
 	coverage := any(nil)
-	if reportType == "test-gaps" {
-		coverage = LineCoverage(body)
-	}
 	tokens := any("unknown")
 	if usage, ok := result["usage"].(map[string]any); ok && len(usage) > 0 {
 		tokens = usage

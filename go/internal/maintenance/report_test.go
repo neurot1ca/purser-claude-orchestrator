@@ -94,55 +94,24 @@ func TestReportPromptBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantTestGaps := "Produce a test-gaps report for the repository at <REPO>.\n" +
-		"This is a strictly read-only inspection. Do not edit files, create repository files,\n" +
-		"install tools, or run package managers. Detect languages from `git ls-files -co --exclude-standard`\n" +
-		"extensions, go.mod, package.json, Cargo.toml, pyproject.toml/setup.cfg, and shebangs.\n" +
-		"Use only locally resolved, already-installed tools; never\n" +
-		"download tools, dependencies, toolchains, or coverage providers (including npx\n" +
-		"fetches, `go run pkg@version`, or `cargo install`). Report only evidence-bound tests.\n" +
-		"For each candidate, give the target path:line and symbol, the untested behaviour,\n" +
-		"evidence from source, the exact command used to search existing tests and its result\n" +
-		"showing no test already covers that behaviour, and a high, medium, or low confidence\n" +
-		"level. Include a compact contract evidence section covering documented requirements,\n" +
-		"invariants, boundaries, and affected callers, cite each item to a source path:line,\n" +
-		"and write \"unknown\" where evidence is absent.\n" +
-		"Order findings from most to least important. Every finding must include severity (high,\n" +
-		"medium, or low), meaning its impact if left, separately from confidence.\n" +
-		"For each finding include why the missing test matters in one short sentence\n" +
-		"of at most 80 characters.\n" +
-		"Measure each language with existing local tools/data: Go existing coverprofile or\n" +
-		"`go test -cover` (statement coverage); TS/JS configured jest, vitest, or c8 coverage;\n" +
-		"Rust installed cargo llvm-cov or tarpaulin; Python existing data via `python -m\n" +
-		"coverage report`; others an existing configured command/artifact. Never fetch a tool,\n" +
-		"provider, or dependency. If unavailable, use search evidence and state its limits.\n" +
-		"Include a compact per-language scope table: language, file count, tool+version or search-only/\n" +
-		"not-scanned, command, limitation. State coverage per language and overall against a\n" +
-		"90% line-coverage target; order candidate tests by how much uncovered code they\n" +
-		"exercise. line_coverage_pct is the overall number or null if any detected language\n" +
-		"lacks a measurement.\n" +
-		"If user-initiated work starts, it has priority: do not delay it, cancel it, or\n" +
-		"continue consuming resources once it needs the machine. End with one JSON object in\n" +
-		"this machine-readable block. Findings use the cleanup shape; line_coverage_pct must\n" +
-		"be the overall percentage or null:\n```purser-findings-json\n" +
-		"{\"findings\":[{\"path_line\":\"relative/path.py:12\",\"symbol\":\"name\",\"why\":\"short reason this test matters\",\"evidence\":\"source evidence; untested behaviour; test search command and no-match result\",\"severity\":\"high|medium|low\",\"confidence\":\"high|medium|low\"}],\"line_coverage_pct\":null}\n```\n"
-	if testGaps != wantTestGaps {
-		t.Fatalf("test-gaps prompt mismatch\n got: %q\nwant: %q", testGaps, wantTestGaps)
+	for _, required := range []string{"Change test files only", "safety, authority boundaries, persistence/recovery", "ordering rationale", "There is no fixed gap count", "Coverage is measured by the host", "line_coverage_pct is null"} {
+		if !strings.Contains(testGaps, required) {
+			t.Errorf("test-gaps prompt missing %q", required)
+		}
+	}
+	if strings.Contains(testGaps, "strictly read-only") || strings.Contains(testGaps, "worker-estimated percentages") == false {
+		t.Fatalf("test-gaps prompt retained read-only or worker-owned coverage: %s", testGaps)
 	}
 }
 
 func TestReportPromptsRequireNoDownloadsAndLanguageScope(t *testing.T) {
-	for _, reportType := range []string{"cleanup", "test-gaps"} {
-		prompt, err := BuildReportPrompt("<REPO>", reportType, 90)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(prompt, "never\ndownload tools, dependencies") {
-			t.Errorf("%s prompt lacks the no-download rule", reportType)
-		}
-		if !strings.Contains(prompt, "per-language scope table") {
-			t.Errorf("%s prompt lacks the language scope table instruction", reportType)
-		}
+	cleanup, _ := BuildReportPrompt("<REPO>", "cleanup", 90)
+	if !strings.Contains(cleanup, "never\ndownload tools, dependencies") || !strings.Contains(cleanup, "per-language scope table") {
+		t.Fatal("cleanup prompt contract changed")
+	}
+	testGaps, _ := BuildReportPrompt("<REPO>", "test-gaps", 90)
+	if !strings.Contains(testGaps, "Change test files only") || !strings.Contains(testGaps, "line_coverage_pct is null") {
+		t.Fatal("test-gaps writing/coverage contract missing")
 	}
 }
 
@@ -152,7 +121,7 @@ func TestFindingsParsingOracle(t *testing.T) {
 		count      int
 		coverage   any
 	}{
-		{"well-formed", "```purser-findings-json\n{\"findings\":[{\"path_line\":\"a.py:1\",\"symbol\":\"a\",\"evidence\":\"e\",\"confidence\":\"low\"},{\"path_line\":\"b.py:2\",\"symbol\":\"b\",\"evidence\":\"e\",\"confidence\":\"high\"}],\"line_coverage_pct\":73.5}\n```", 2, json.Number("73.5")},
+		{"worker-coverage-ignored", "```purser-findings-json\n{\"findings\":[{\"path_line\":\"a.py:1\",\"symbol\":\"a\",\"evidence\":\"e\",\"confidence\":\"low\"},{\"path_line\":\"b.py:2\",\"symbol\":\"b\",\"evidence\":\"e\",\"confidence\":\"high\"}],\"line_coverage_pct\":73.5}\n```", 2, nil},
 		{"empty", "```purser-findings-json\n[]\n```", 0, nil},
 		{"malformed", "```purser-findings-json\n{bad}\n```", -1, nil},
 		{"partial-coverage", "```purser-findings-json\n{\"findings\":[{\"path_line\":\"a.py:1\",\"symbol\":\"a\",\"evidence\":\"e\",\"confidence\":\"high\"}]}\n```", -1, nil},
@@ -234,6 +203,7 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 			if err := os.MkdirAll(repo, 0700); err != nil {
 				t.Fatal(err)
 			}
+			writeCoverageSuite(t, repo)
 			if !failed {
 				profileDir := filepath.Join(repo, ".orchestrator")
 				if err := os.MkdirAll(profileDir, 0700); err != nil {
@@ -280,7 +250,7 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 			if fake.started["prompt"] != prompt {
 				t.Fatal("runner prompt differs from builder")
 			}
-			if !strings.Contains(prompt, "80% line-coverage target") {
+			if !strings.Contains(prompt, "coverage target is 80%") {
 				t.Fatalf("override missing from prompt: %s", prompt)
 			}
 			content, _ := os.ReadFile(path)
@@ -292,7 +262,7 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			notice, _ := os.ReadFile(strings.TrimSuffix(path, ".md") + ".notice.json")
-			if !strings.Contains(string(notice), `"line_coverage_pct":80`) || !strings.Contains(string(notice), `"coverage_target_pct":80`) {
+			if !strings.Contains(string(notice), `"line_coverage_pct":null`) || !strings.Contains(string(notice), `"coverage_target_pct":80`) {
 				t.Fatalf("notice: %s", notice)
 			}
 			events, _ := filepath.Glob(filepath.Join(state, "telemetry", "events", "*", "session_unknown.jsonl"))
@@ -305,10 +275,77 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 				t.Fatalf("completion telemetry: %s", lines)
 			}
 			payload := event["payload"].(map[string]any)
-			if payload["findings_high_count"] != float64(0) || payload["line_coverage_pct"] != float64(80) || payload["quota_change_active_window_pct"] != nil {
+			if payload["findings_high_count"] != float64(0) || payload["line_coverage_pct"] != nil || payload["quota_change_active_window_pct"] != nil {
 				t.Fatalf("completion telemetry payload: %#v", payload)
 			}
 		})
+	}
+}
+
+func TestTestGapWritingRefusedWithoutCompleteCoverage(t *testing.T) {
+	for _, name := range []string{"missing-go-tool", "missing-python-suite", "missing-js-tool", "incomplete-mixed-scope"} {
+		t.Run(name, func(t *testing.T) {
+			root := maintenanceScratch(t)
+			repo, state := filepath.Join(root, "repo"), filepath.Join(root, "state")
+			if err := os.MkdirAll(repo, 0700); err != nil {
+				t.Fatal(err)
+			}
+			files := map[string]string{}
+			switch name {
+			case "missing-go-tool":
+				writeCoverageSuite(t, repo)
+				t.Setenv("PATH", "")
+			case "missing-python-suite":
+				files["app.py"] = "def choose():\n    return 1\n"
+				files["coverage.json"] = `{"files":{"app.py":{"executed_lines":[2],"missing_lines":[]}}}`
+			case "missing-js-tool":
+				files["app.js"] = "export const choose = () => 1;\n"
+				files["package.json"] = `{"scripts":{"test":"c8 node test.js"}}`
+				t.Setenv("PATH", "")
+			case "incomplete-mixed-scope":
+				writeCoverageSuite(t, repo)
+				files["app.py"] = "def choose():\n    return 1\n"
+			}
+			for path, content := range files {
+				if err := os.WriteFile(filepath.Join(repo, path), []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fake := &fakeJobs{results: []map[string]any{{"state": "SUCCEEDED"}}}
+			runner := Runner{Jobs: fake, CoderAgent: "codex", CoderModel: "fixture"}
+			path, err := RunAndPersistReport(runner, state, repo, "test-gaps")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fake.started != nil {
+				t.Fatal("test-writing worker started without complete host coverage")
+			}
+			data, err := os.ReadFile(strings.TrimSuffix(path, ".md") + ".notice.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var notice map[string]any
+			if err := json.Unmarshal(data, &notice); err != nil {
+				t.Fatal(err)
+			}
+			if notice["status"] != "unknown" || notice["line_coverage_pct"] != nil || notice["findings"] != nil {
+				t.Fatalf("unavailable coverage did not stay unknown: %s", data)
+			}
+		})
+	}
+}
+
+func writeCoverageSuite(t *testing.T, root string) {
+	t.Helper()
+	for name, content := range map[string]string{
+		"go.mod":        "module coveragefixture\n\ngo 1.20\n",
+		"go.work":       "go 1.20\n\nuse .\n",
+		"shape.go":      "package shape\n\nfunc Choose(ok bool) int {\n if ok { return 1 }; return 0\n}\n",
+		"shape_test.go": "package shape\nimport \"testing\"\nfunc TestChoose(t *testing.T) { if Choose(true) != 1 { t.Fatal(\"unexpected choice\") } }\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

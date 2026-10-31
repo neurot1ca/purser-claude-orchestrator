@@ -1,0 +1,4 @@
+mode: set
+coveragefixture/shape.go:4.2,4.8 1 1
+coveragefixture/shape.go:5.3,6.1 1 1
+coveragefixture/shape.go:7.2,7.10 1 0

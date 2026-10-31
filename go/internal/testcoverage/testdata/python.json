@@ -1,0 +1,12 @@
+{
+  "meta": {"format": 3, "version": "7.6.1", "branch_coverage": false},
+  "files": {
+    "coveragefixture/shape.py": {
+      "executed_lines": [4, 5, 6],
+      "missing_lines": [7],
+      "excluded_lines": [],
+      "summary": {"covered_lines": 3, "num_statements": 4, "missing_lines": 1, "excluded_lines": 0, "percent_covered": 75.0}
+    }
+  },
+  "totals": {"covered_lines": 3, "num_statements": 4, "missing_lines": 1, "excluded_lines": 0, "percent_covered": 75.0}
+}
