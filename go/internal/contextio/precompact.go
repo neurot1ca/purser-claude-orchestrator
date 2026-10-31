@@ -37,6 +37,8 @@ func PreCompact(event map[string]any) {
 	if start < 0 || end < 0 || start >= end {
 		return
 	}
+	content = updateNarrativeMarker(content, time.Now().UTC().Format("2006-01-02"), false)
+	start, end = strings.Index(content, stateStart), strings.Index(content, stateEnd)
 	records := readTranscriptRecords(stringValue(event["transcript_path"]))
 	if stringValue(event["transcript_path"]) == "" {
 		if raw, ok := event["transcript_records"].([]any); ok {
@@ -51,7 +53,6 @@ func PreCompact(event map[string]any) {
 	start += len(stateStart)
 	content = content[:start] + "\n" + body + "\n" + content[end:]
 	content = replaceRecentTurns(content, formatRecentTurns(records))
-	content = updateNarrativeMarker(content, time.Now().UTC().Format("2006-01-02"), false)
 	_ = writeHandoffAtomically(path, []byte(content))
 }
 

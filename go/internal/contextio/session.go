@@ -763,8 +763,7 @@ func restoreHandoff(source, path, content, transcriptPath string) string {
 		footer := "Full file: " + path
 		return handoffHeader + "\n" + instruction + recentStart + "\n" + recent + "\n" + recentEnd + "\n" + footer
 	}
-	today := time.Now().UTC().Format("2006-01-02")
-	content, narrativeDate, narrativeStale := narrativeRestoreStatus(content, info.ModTime().UTC().Format("2006-01-02"), today)
+	content, narrativeDate, narrativeStale := narrativeRestoreStatus(content, time.Now().UTC().Format("2006-01-02"))
 	markedContent := content
 	content, meaningful := cleanHandoff(content)
 	if !meaningful {
@@ -980,6 +979,10 @@ func cleanHandoff(content string) (string, bool) {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "<!-- PURSER:NARRATIVE:") {
+			lines[i] = ""
+			continue
+		}
 		if match := handoffLanguage.FindStringSubmatch(trimmed); len(match) == 2 && strings.TrimSpace(match[1]) == "<the language the user writes in>" {
 			lines[i] = ""
 		}

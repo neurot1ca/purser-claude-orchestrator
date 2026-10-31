@@ -496,6 +496,7 @@ func updateAdvisorHandoff(repository string, records []map[string]any, context i
 		body = trimPythonWhitespace(string(runes[:1486]) + "\n... truncated")
 	}
 	text := string(content)
+	text = updateNarrativeMarker(text, time.Now().UTC().Format("2006-01-02"), false)
 	start, end := strings.Index(text, stateStart), strings.Index(text, stateEnd)
 	if start >= 0 && end > start {
 		start += len(stateStart)
@@ -504,7 +505,6 @@ func updateAdvisorHandoff(repository string, records []map[string]any, context i
 		text = strings.TrimRightFunc(text, isPythonWhitespace) + "\n" + stateStart + "\n" + body + "\n" + stateEnd + "\n"
 	}
 	text = replaceRecentTurns(text, formatRecentTurns(records))
-	text = updateNarrativeMarker(text, time.Now().UTC().Format("2006-01-02"), false)
 	return writeHandoffAtomically(path, []byte(text))
 }
 
@@ -608,7 +608,7 @@ func narrativeHash(content string) string {
 func updateNarrativeMarker(content, date string, restored bool) string {
 	const prefix = "<!-- PURSER:NARRATIVE:"
 	hash := narrativeHash(content)
-	oldHash, oldDate, oldRestored := "", date, ""
+	oldHash, oldDate, oldRestored := "", "unknown", ""
 	if start := strings.Index(content, prefix); start >= 0 {
 		if end := strings.Index(content[start:], " -->"); end >= 0 {
 			fields := strings.Split(content[start+len(prefix):start+end], ":")
@@ -618,7 +618,7 @@ func updateNarrativeMarker(content, date string, restored bool) string {
 			content = content[:start] + content[start+end+4:]
 		}
 	}
-	if oldHash == "" || oldHash != hash {
+	if oldHash != "" && oldHash != hash {
 		oldDate = date
 	}
 	if restored {
@@ -629,23 +629,23 @@ func updateNarrativeMarker(content, date string, restored bool) string {
 		i += len(stateEnd)
 		return content[:i] + "\n" + marker + content[i:]
 	}
-	return strings.TrimRight(content, "\n") + "\n" + stateStart + "\n" + marker + "\n" + stateEnd + "\n"
+	return strings.TrimRight(content, "\n") + "\n" + stateStart + "\n" + stateEnd + "\n" + marker + "\n"
 }
 
-func narrativeRestoreStatus(content, fileDate, today string) (string, string, bool) {
+func narrativeRestoreStatus(content, today string) (string, string, bool) {
 	const prefix = "<!-- PURSER:NARRATIVE:"
 	hash := narrativeHash(content)
 	start := strings.Index(content, prefix)
 	if start < 0 {
-		return updateNarrativeMarker(content, fileDate, true), fileDate, false
+		return updateNarrativeMarker(content, "unknown", true), "unknown", false
 	}
 	end := strings.Index(content[start:], " -->")
 	if end < 0 {
-		return updateNarrativeMarker(content, fileDate, true), fileDate, false
+		return updateNarrativeMarker(content, "unknown", true), "unknown", false
 	}
 	fields := strings.Split(content[start+len(prefix):start+end], ":")
 	if len(fields) != 3 || fields[0] == "" {
-		return updateNarrativeMarker(content, fileDate, true), fileDate, false
+		return updateNarrativeMarker(content, "unknown", true), "unknown", false
 	}
 	date := fields[1]
 	if fields[0] != hash {
