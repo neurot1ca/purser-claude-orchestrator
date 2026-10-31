@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.219 — 2026-10-31
+
+- **Added:** the test-gaps maintenance report now writes tests toward `coverage_target_pct` in an isolated worktree, measures coverage on the host (Go, Python, JS), requires an executed review, and keeps one ready test patch per project; saying "add tests" applies it, and it completes only after the validated patch is committed alone.
+- **Fixed:** job labels longer than 80 runes, including already-suffixed plan labels, are capped instead of invalidating the session record and breaking thread replies.
+
 ## 0.1.218 — 2026-10-30
 
 - **Added:** the cleanup report's built-in Go pre-scan also finds ineffective assignments and unused unexported code, using the same single package load.
