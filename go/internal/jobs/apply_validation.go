@@ -115,6 +115,7 @@ type applyValidation struct {
 	PID            int            `json:"pid,omitempty"`
 	Identity       int64          `json:"identity,omitempty"`
 	TreeReceipt    string         `json:"tree_receipt,omitempty"`
+	Maintenance    bool           `json:"maintenance_test_job,omitempty"`
 	carriedRecords map[string]string
 	testsRan       bool
 }
@@ -188,7 +189,7 @@ func enqueueAppliedValidation(stateRoot string, job map[string]any, value map[st
 		result = validationSummary(prior)
 		return
 	}
-	record := applyValidation{JobID: id, TaskID: stringValue(job["taskId"]), Route: stringValue(job["route"]), Model: stringValue(job["model"]), Repository: repo, Revision: revision, Snapshot: snapshot, Paths: paths,
+	record := applyValidation{JobID: id, TaskID: stringValue(job["taskId"]), Route: stringValue(job["route"]), Model: stringValue(job["model"]), Repository: repo, Revision: revision, Snapshot: snapshot, Paths: paths, Maintenance: job["maintenance_test_job"] == true,
 		Status: "pending", Counts: map[string]int{}, FailedTests: []string{}, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	if err = writeApplyValidation(path, record); err != nil {
 		result["reason"] = err.Error()
@@ -719,7 +720,7 @@ func RunApplyValidation(stateRoot, key, id string) (resultErr error) {
 		}
 	}()
 	for _, module := range modules {
-		env := moduleValidationEnvironment(stateRoot, module)
+		env := moduleValidationEnvironment(stateRoot, module, record.Maintenance)
 		if len(packages) > 0 {
 			pkgs := packagesForModule(packages, goRoot, module)
 			if len(pkgs) > 0 {
@@ -736,7 +737,7 @@ func RunApplyValidation(stateRoot, key, id string) (resultErr error) {
 	}
 	if len(packages) > 0 {
 		for _, module := range modules {
-			env := moduleValidationEnvironment(stateRoot, module)
+			env := moduleValidationEnvironment(stateRoot, module, record.Maintenance)
 			pkgs := packagesForModule(packages, goRoot, module)
 			args := append([]string{"test", "-p", "2", "-json"}, pkgs...)
 			record.Commands = appendValidationCommand(record.Commands, "go "+strings.Join(args, " "))
@@ -1414,8 +1415,13 @@ func validationEnvironment(root string) []string {
 	return out
 }
 
-func moduleValidationEnvironment(root, module string) []string {
+func moduleValidationEnvironment(root, module string, maintenance ...bool) []string {
 	env := validationEnvironment(root)
+	if len(maintenance) > 0 && maintenance[0] {
+		env = replaceValidationEnv(env, "GOTOOLCHAIN", "local")
+		env = replaceValidationEnv(env, "GOPROXY", "off")
+		env = replaceValidationEnv(env, "GOSUMDB", "off")
+	}
 	if _, err := os.Stat(filepath.Join(module, "go.mod")); errors.Is(err, os.ErrNotExist) {
 		for i, entry := range env {
 			if strings.HasPrefix(strings.ToUpper(entry), "GO111MODULE=") {

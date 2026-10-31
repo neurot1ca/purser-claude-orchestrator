@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -15,12 +17,12 @@ import (
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
+	"purser-hook/internal/proc"
 )
 
 // Apply applies a succeeded worktree job to its repository. stateRoot is the
 // Purser state directory that contains codex_exec_mcp/jobs.
 func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[string]any {
-	RecoverApplyValidations(stateRoot)
 	var opt ApplyOptions
 	if len(options) != 0 {
 		opt = options[0]
@@ -47,6 +49,9 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	job := readJob(dir, id)
 	if job == nil {
 		return result(map[string]any{"state": "FAILED", "errorCode": "JOB_NOT_FOUND", "message": "Job record is unavailable"})
+	}
+	if !maintenanceTestJob(job) {
+		RecoverApplyValidations(stateRoot)
 	}
 	var jobID, state, worktree, repo, snapshot string
 	job.Get("jobId", &jobID)
@@ -91,6 +96,14 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	job.Get("worktreePath", &worktree)
 	job.Get("repoRoot", &repo)
 	job.Get("snapshot", &snapshot)
+	if maintenanceTestJob(job) && applyState != "applied" {
+		if code, message := verifyMaintenanceApply(stateRoot, root, job, worktree, snapshot, args); code != "" {
+			return result(map[string]any{"state": "FAILED", "errorCode": code, "message": message})
+		}
+	}
+	if maintenanceTestJob(job) && applyState == "applied" {
+		RecoverApplyValidations(stateRoot)
+	}
 	if acceptOnly {
 		sessionID, _ := args["sessionId"].(string)
 		revision, _ := args["revision"].(string)
@@ -140,7 +153,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 			}
 			sessionID, _ := args["sessionId"].(string)
 			acceptance = map[string]any{"revision": current, "sessionId": sessionID, "acceptedAt": time.Now().UTC().Format(time.RFC3339Nano)}
-			if err := job.Set("acceptance", acceptance); err != nil || Write(filepath.Join(dir, jobID+".json"), job) != nil {
+			if err := job.Set("acceptance", acceptance); err != nil || (!maintenanceTestJob(job) && Write(filepath.Join(dir, jobID+".json"), job) != nil) {
 				return result(map[string]any{"applied": false, "reason": "main Claude has not accepted this revision"})
 			}
 		}
@@ -222,7 +235,12 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 			return result(map[string]any{"applied": false, "errorCode": "REVIEW_STALE_REPREPARE_REQUIRED", "message": "Checkout changed in the reviewed job paths. Call codex_result to re-prepare and review the diff before applying.", "paths": drift})
 		}
 	}
-	outcome := ledger.ApplyJobPatch(root, patch)
+	var outcome map[string]any
+	if maintenanceTestJob(job) {
+		outcome = applyMaintenancePatch(root, patch)
+	} else {
+		outcome = ledger.ApplyJobPatch(root, patch)
+	}
 	applied, _ := outcome["applied"].(bool)
 	value := map[string]any{"applied": applied}
 	if applied {
@@ -232,9 +250,20 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		value["applicable"] = outcome["applicable"]
 		value["worktreePath"] = worktree
 	}
+	if !applied && maintenanceTestJob(job) {
+		return result(map[string]any{"state": "FAILED", "errorCode": "MAINTENANCE_PROPOSAL_CONFLICT", "message": "The maintenance proposal conflicts with the clean baseline and was not applied."})
+	}
 	_ = job.Set("applyState", map[bool]string{true: "applied", false: "conflict"}[applied])
 	_ = job.Set("applyResult", value)
 	if applied {
+		if maintenanceTestJob(job) {
+			if revision, e := changedPathsDigest(worktree, snapshot); e == nil {
+				_ = job.Set("appliedRevision", revision)
+			}
+			if acceptance, ok := recordMap(job)["acceptance"].(map[string]any); !ok || acceptance["revision"] != args["revision"] {
+				_ = job.Set("acceptance", map[string]any{"revision": args["revision"], "sessionId": args["sessionId"], "acceptedAt": time.Now().UTC().Format(time.RFC3339Nano)})
+			}
+		}
 		_ = job.Set("appliedAt", float64(time.Now().UnixNano())/1e9)
 		if task, _ := recordMap(job)["taskId"].(string); task != "" {
 			_ = job.Set("decisionRecorded", true)
@@ -260,8 +289,140 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	return result(value)
 }
 
+func maintenanceTestJob(job *Record) bool {
+	var maintenance bool
+	return job != nil && job.Get("maintenance_test_job", &maintenance) && maintenance
+}
+
+func verifyMaintenanceApply(stateRoot, root string, job *Record, worktree, snapshot string, args map[string]any) (string, string) {
+	proposalPath := filepath.Join(stateRoot, "projects", contextio.ProjectKey(root), "maintenance", "reports", "test-gaps", "ready.json")
+	data, err := os.ReadFile(proposalPath)
+	if err != nil {
+		return "MAINTENANCE_PROPOSAL_STALE", "The ready maintenance proposal is missing or unavailable."
+	}
+	var proposal map[string]any
+	if json.Unmarshal(data, &proposal) != nil || proposal["status"] != "ready" {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "The ready maintenance proposal is invalid."
+	}
+	var baseline, source, recordedID string
+	job.Get("maintenance_identity_source", &source)
+	job.Get("maintenance_job_id", &recordedID)
+	if source != "host" || recordedID != stringValue(recordMap(job)["jobId"]) {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "The maintenance job identity is not host recorded."
+	}
+	baseline, _ = proposal["baseline_head"].(string)
+	if baseline == "" || proposal["job_id"] != recordMap(job)["jobId"] || !sameApplyProjectPath(root, stringValue(proposal["project_root"])) {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "The ready proposal does not belong to this maintenance job and project."
+	}
+	var hostRun MaintenanceTestRun
+	if !job.Get("maintenanceTests", &hostRun) || hostRun.JobID != stringValue(recordMap(job)["jobId"]) || hostRun.BaselineHead != baseline || hostRun.BaselineSnapshot != stringValue(proposal["baseline_snapshot"]) {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "Host maintenance evidence does not match the ready proposal."
+	}
+	expires, err := time.Parse(time.RFC3339Nano, stringValue(proposal["expires_at"]))
+	if err != nil || !time.Now().Before(expires) {
+		return "MAINTENANCE_PROPOSAL_STALE", "The maintenance proposal has expired."
+	}
+	baselineState := ledger.CaptureBaseline(root, nil, 0)
+	entries, clean := baselineState["status_entries"].([]map[string]string)
+	if baselineState["status"] != "OK" || baselineState["head"] != baseline || !clean || len(entries) != 0 {
+		return "MAINTENANCE_PROPOSAL_STALE", "The checkout no longer matches the clean proposal baseline."
+	}
+	if stringValue(proposal["baseline_snapshot"]) == "" || snapshot != stringValue(proposal["baseline_snapshot"]) {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "The maintenance job baseline does not match its proposal."
+	}
+	var reviewedSnapshot string
+	job.Get("reviewedSnapshot", &reviewedSnapshot)
+	if reviewedSnapshot == "" || reviewedSnapshot != snapshot {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "The maintenance patch has no matching executed review."
+	}
+	patch, err := ledger.JobPatch(worktree, snapshot)
+	if err != nil {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "The reviewed maintenance patch is unavailable."
+	}
+	digest, err := changedPathsDigest(worktree, snapshot)
+	revision, _ := args["revision"].(string)
+	var acceptance map[string]any
+	job.Get("acceptance", &acceptance)
+	if err != nil || digest == "" || digest != stringValue(proposal["changed_paths_sha256"]) || revision != digest || acceptance != nil && acceptance["revision"] != digest {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "The maintenance patch no longer matches its reviewed revision."
+	}
+	reviewPath := stringValue(proposal["review_artifact"])
+	if filepath.Dir(reviewPath) != filepath.Join(stateRoot, "bundle_artifacts") {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "The maintenance review artifact path is invalid."
+	}
+	review, err := os.ReadFile(reviewPath)
+	if err != nil {
+		return "MAINTENANCE_PROPOSAL_STALE", "The maintenance review artifact is missing."
+	}
+	reviewHash := sha256.Sum256(review)
+	var reviewRecord map[string]any
+	if hex.EncodeToString(reviewHash[:]) != stringValue(proposal["review_artifact_sha256"]) || json.Unmarshal(review, &reviewRecord) != nil || reviewRecord["changed_paths_sha256"] != digest || hostRun.Revision != digest {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "The reviewed artifact does not match the maintenance patch."
+	}
+	if resolved, _ := args["resolved"].(bool); resolved {
+		return "MAINTENANCE_PROPOSAL_CONFLICT", "Maintenance proposals cannot use conflict resolution or replay."
+	}
+	paths, err := ledger.JobPatchPaths(root, patch)
+	proposed, ok := proposal["changed_test_paths"].([]any)
+	if err != nil || !ok || !sameStringPaths(paths, proposed) {
+		return "MAINTENANCE_PROPOSAL_TAMPERED", "The maintenance patch paths no longer match the proposal."
+	}
+	return "", ""
+}
+
+func sameApplyProjectPath(a, b string) bool {
+	normalize := func(path string) string {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return ""
+		}
+		if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+			absolute = resolved
+		}
+		return filepath.Clean(absolute)
+	}
+	a, b = normalize(a), normalize(b)
+	if a == "" || b == "" {
+		return false
+	}
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+func sameStringPaths(paths []string, values []any) bool {
+	if len(paths) != len(values) {
+		return false
+	}
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		seen[filepath.ToSlash(path)] = true
+	}
+	for _, value := range values {
+		path, ok := value.(string)
+		if !ok || !seen[filepath.ToSlash(path)] {
+			return false
+		}
+		delete(seen, filepath.ToSlash(path))
+	}
+	return len(seen) == 0
+}
+
 func changedPathsDigest(worktree, snapshot string) (string, error) {
 	return ledger.JobChangedPathsSHA256(worktree, snapshot)
+}
+
+func applyMaintenancePatch(root, patch string) map[string]any {
+	for _, args := range [][]string{{"apply", "--check", "--binary", "-"}, {"apply", "--binary", "-"}} {
+		command := proc.Hide(exec.Command("git", append([]string{"-C", root, "-c", "core.longpaths=true"}, args...)...))
+		proc.ConfigureNoWindow(command)
+		command.Stdin = strings.NewReader(patch)
+		if _, err := command.Output(); err != nil {
+			return map[string]any{"applied": false, "conflicts": []string{}, "applicable": []string{}}
+		}
+	}
+	return map[string]any{"applied": true, "conflicts": []string{}}
 }
 
 func persistApplied(stateRoot, dir, jobID string, job *Record, value map[string]any, args map[string]any, opt ApplyOptions, applyReason string) map[string]any {

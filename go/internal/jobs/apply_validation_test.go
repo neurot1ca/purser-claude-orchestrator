@@ -17,6 +17,22 @@ import (
 	"purser-hook/internal/contextio"
 )
 
+func TestMaintenanceValidationDisablesDownloads(t *testing.T) {
+	env := moduleValidationEnvironment(t.TempDir(), t.TempDir(), true)
+	for _, want := range []string{"GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off"} {
+		found := false
+		for _, value := range env {
+			if value == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("maintenance validation environment lacks %s", want)
+		}
+	}
+}
+
 func TestWaitApplyValidationReportsTerminalClasses(t *testing.T) {
 	for _, tc := range []struct {
 		name, status, reason, failing string
