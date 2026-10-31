@@ -20,11 +20,11 @@ import (
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/fsretry"
+	"purser-hook/internal/jobs"
 	"purser-hook/internal/maintenance/errcheck"
 	"purser-hook/internal/pluginroot"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
-	"purser-hook/internal/testcoverage"
 )
 
 const findingsStart = "```purser-findings-json"
@@ -357,14 +357,10 @@ func RunAndPersistReport(r Runner, state, repository, reportType string) (string
 	}
 	var result map[string]any
 	var runErr error
-	_, _, _, timeout := r.clock()
-	if reportType == "test-gaps" && !testcoverage.CanWrite(context.Background(), root, timeout) {
+	result, runErr = r.Run(state, root, reportType, prompt)
+	if reportType == "test-gaps" && errors.Is(runErr, jobs.ErrCoverageUnknown) {
 		limitations = "Coverage unknown: unavailable tooling, unsupported suite, incomplete scope, or incompatible measurements; test writing skipped."
-		result = map[string]any{"content": limitations}
-	} else {
-		result, runErr = r.Run(state, root, reportType, prompt)
-	}
-	if runErr != nil {
+	} else if runErr != nil {
 		recordReportFailure(state, root, reportType, timestamp, result, runErr, started, quotaBefore, r.CoderAgent)
 		return "", runErr
 	}

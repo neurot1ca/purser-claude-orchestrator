@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,8 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"purser-hook/internal/ledger"
 	"purser-hook/internal/policy"
+	"purser-hook/internal/proc"
 	"purser-hook/internal/retention"
+	"purser-hook/internal/testcoverage"
 )
 
 const hostTestID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -26,6 +30,21 @@ func TestHostFakeWorker(t *testing.T) {
 	}
 	output := os.Args[len(os.Args)-1]
 	mode := os.Getenv("PURSER_HOST_FAKE_MODE")
+	if mode == "maintenance" {
+		argument, want := "false", "0"
+		if os.Getenv("PURSER_HOST_MAINTENANCE_NO_GAIN") == "1" {
+			argument, want = "true", "1"
+		}
+		code := fmt.Sprintf("package shape\nimport \"testing\"\nfunc TestGenerated(t *testing.T) { if Choose(%s)!=%s { t.Fatal(\"wrong choice\") } }\n", argument, want)
+		path := "generated_test.go"
+		if os.Getenv("PURSER_HOST_MAINTENANCE_NO_NEW") == "1" {
+			path = "shape_test.go"
+			code = "package shape\nimport \"testing\"\nfunc TestPositive(t *testing.T) { if Choose(true)!=1 || Choose(false)!=0 { t.Fatal(\"wrong choice\") } }\n"
+		}
+		if err := os.WriteFile(path, []byte(code), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if mode == "leaf" {
 		time.Sleep(time.Hour)
 		os.Exit(0)
@@ -118,6 +137,136 @@ func TestHostFakeWorker(t *testing.T) {
 		os.Exit(7)
 	}
 	os.Exit(0)
+}
+
+func TestHostMaintenanceMeasuresIsolatedImprovement(t *testing.T) {
+	for _, mode := range []string{"improvement", "no-improvement", "no-new-tests", "unsupported"} {
+		t.Run(mode, func(t *testing.T) {
+			base := jobsScratchDir(t, "maintenance-host-")
+			repo, state := filepath.Join(base, "repo"), filepath.Join(base, "state")
+			if err := os.MkdirAll(repo, 0700); err != nil {
+				t.Fatal(err)
+			}
+			git := func(args ...string) string {
+				t.Helper()
+				out, err := proc.Hide(exec.Command("git", append([]string{"-c", "core.longpaths=true", "-C", repo}, args...)...)).CombinedOutput()
+				if err != nil {
+					t.Fatalf("git %v: %v %s", args, err, out)
+				}
+				return strings.TrimSpace(string(out))
+			}
+			git("init", "-q")
+			git("config", "core.autocrlf", "false")
+			git("config", "core.longpaths", "true")
+			write(t, filepath.Join(repo, strings.Repeat("r", 85), strings.Repeat("p", 85), "unchanged.txt"), "long path baseline")
+			for name, body := range map[string]string{"go.mod": "module maintenancefixture\n\ngo 1.20\n", "go.work": "go 1.20\n\nuse .\n",
+				"shape.go":      "package shape\nfunc Choose(ok bool) int {\n if ok {\n  return 1\n }\n return 0\n}\n",
+				"shape_test.go": "package shape\nimport \"testing\"\nfunc TestPositive(t *testing.T) { if Choose(true)!=1 { t.Fatal(\"wrong choice\") } }\n"} {
+				write(t, filepath.Join(repo, name), body)
+			}
+			if mode == "unsupported" {
+				write(t, filepath.Join(repo, "app.py"), "def uncovered():\n    return 1\n")
+			}
+			git("add", "-A")
+			git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "baseline")
+			head := git("rev-parse", "HEAD")
+			snapshot, err := ledger.CheckoutSnapshot(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			indexBefore, err := os.ReadFile(filepath.Join(repo, ".git", "index"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceBefore, err := os.ReadFile(filepath.Join(repo, "shape.go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+			t.Setenv("PURSER_HOST_FAKE_MODE", "maintenance")
+			if mode == "no-improvement" {
+				t.Setenv("PURSER_HOST_MAINTENANCE_NO_GAIN", "1")
+			} else {
+				t.Setenv("PURSER_HOST_MAINTENANCE_NO_GAIN", "")
+			}
+			if mode == "no-new-tests" {
+				t.Setenv("PURSER_HOST_MAINTENANCE_NO_NEW", "1")
+			} else {
+				t.Setenv("PURSER_HOST_MAINTENANCE_NO_NEW", "")
+			}
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var id string
+			_, _, err = Start(state, map[string]any{"call": "00000000-0000-4000-8000-000000000001", "cwd": repo, "worktree": true, "sandbox": "workspace-write", "jobPhase": "implementation", "prompt": "Write behavior tests toward coverage_target_pct 90", "timeoutSeconds": 120}, StartOptions{Validation: StartValidationOptions{Agent: "codex", FixedAgent: true}, Launch: func(jobID string, generation int64, token string) error {
+				id = jobID
+				markers := filepath.Join(state, "maintenance", "jobs")
+				if err := os.MkdirAll(markers, 0700); err != nil {
+					return err
+				}
+				writeHostTestJSON(t, filepath.Join(markers, id+".json"), MaintenanceTestRun{JobID: id, BaselineHead: head, BaselineSnapshot: snapshot, Target: 90})
+				_, err := RunHostGeneration(filepath.Join(state, "codex_exec_mcp", "jobs"), id, generation, token, HostOptions{StateRoot: state, HostContained: true, WorkerCommand: func(args LaunchArgs) ([]string, error) {
+					return []string{executable, "-test.run=^TestHostFakeWorker$", "--", args.OutputPath}, nil
+				}})
+				return err
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, err := Read(filepath.Join(state, "codex_exec_mcp", "jobs", id+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var status, code string
+			var run MaintenanceTestRun
+			job.Get("state", &status)
+			job.Get("errorCode", &code)
+			job.Get("maintenanceTests", &run)
+			if mode == "unsupported" {
+				var worktree string
+				job.Get("worktreePath", &worktree)
+				if status != "FAILED" || code != "COVERAGE_UNKNOWN" || run.Before.Status != "unknown" {
+					t.Fatalf("unsupported scope was admitted: %s %s %+v", status, code, run)
+				}
+				if _, err := os.Stat(filepath.Join(worktree, "generated_test.go")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("worker ran on unknown coverage: %v", err)
+				}
+			} else if mode != "improvement" {
+				if status != "FAILED" || code != "MAINTENANCE_PATCH_REJECTED" {
+					t.Fatalf("non-improving job: %s %s", status, code)
+				}
+			} else if status != "SUCCEEDED" || run.NewTests != 1 || run.After.Counts.Covered <= run.Before.Counts.Covered || run.Revision == "" {
+				t.Fatalf("host evidence: %s %+v", status, run)
+			}
+			if mode == "improvement" {
+				for _, proof := range []struct {
+					path     string
+					evidence testcoverage.Evidence
+				}{{run.BeforeCoverage, run.Before}, {run.AfterCoverage, run.After}} {
+					raw, err := os.ReadFile(proof.path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					counts, err := testcoverage.ParseGoCover(raw, repo)
+					if err != nil || counts != proof.evidence.Counts {
+						t.Fatalf("host coverage artifact differs from evidence: %+v %v", counts, err)
+					}
+				}
+			}
+			indexAfter, err := os.ReadFile(filepath.Join(repo, ".git", "index"))
+			if err != nil || !bytes.Equal(indexBefore, indexAfter) {
+				t.Fatalf("checkout index changed: %v", err)
+			}
+			sourceAfter, err := os.ReadFile(filepath.Join(repo, "shape.go"))
+			if err != nil || !bytes.Equal(sourceBefore, sourceAfter) {
+				t.Fatalf("checkout source changed: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(repo, "generated_test.go")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("test leaked into checkout: %v", err)
+			}
+		})
+	}
 }
 
 func TestHostPassesOpenCodeReadOnlyPolicyAndCapturesFinalReport(t *testing.T) {

@@ -422,7 +422,7 @@
       "want_result_state": "",
       "want_cancel_calls": 1,
       "want_slot_retained": true,
-      "want_active_removed": true,
+      "want_active_removed": false,
       "want_marker_job_id": true,
       "result_calls": 1,
       "cancel_calls": 1,

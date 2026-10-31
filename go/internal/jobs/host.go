@@ -1,10 +1,12 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -15,10 +17,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"purser-hook/internal/contextio"
 	"purser-hook/internal/ledger"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
 	"purser-hook/internal/retention"
+	"purser-hook/internal/testcoverage"
 )
 
 const hostUnavailableCode = "GO_HOST_EXECUTION_UNAVAILABLE"
@@ -225,6 +229,26 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 	}
 	var childEnv []string
+	stateRoot := opt.StateRoot
+	if stateRoot == "" {
+		stateRoot = filepath.Dir(filepath.Dir(dir))
+	}
+	var maintenanceRun *MaintenanceTestRun
+	marker, markerErr := os.ReadFile(filepath.Join(stateRoot, "maintenance", "jobs", jobID+".json"))
+	if markerErr == nil {
+		maintenanceRun = &MaintenanceTestRun{}
+		if json.Unmarshal(marker, maintenanceRun) != nil || maintenanceRun.JobID != jobID {
+			return finishHostError(path, jobID, generation, token, "MAINTENANCE_INVALID", "Invalid maintenance host reservation")
+		}
+		for key, value := range map[string]any{"maintenance_test_job": true, "maintenance_identity_source": "host", "maintenance_job_id": jobID} {
+			_ = job.Set(key, value)
+		}
+		if err = Write(path, job); err != nil {
+			return nil, err
+		}
+	} else if !errors.Is(markerErr, os.ErrNotExist) {
+		return nil, markerErr
+	}
 	if !research && (worktreePath != "" || argsMap["worktree"] == true) {
 		stateRoot := opt.StateRoot
 		if stateRoot == "" {
@@ -289,8 +313,10 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			if err != nil {
 				return nil, err
 			}
-			setup := profile.LoadProfile(repoRoot).Worktree
-			setupResult := ledger.RunWorktreeSetup(worktreePath, setup)
+			setupResult := ledger.WorktreeSetupResult{}
+			if maintenanceRun == nil {
+				setupResult = ledger.RunWorktreeSetup(worktreePath, profile.LoadProfile(repoRoot).Worktree)
+			}
 			if setupResult.Failed() {
 				if err = job.Set("worktreePath", worktreePath); err != nil {
 					return nil, err
@@ -309,7 +335,9 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 					return nil, err
 				}
 			}
-			resumePartialAttempt(dir, job, worktreePath, &prompt)
+			if maintenanceRun == nil {
+				resumePartialAttempt(dir, job, worktreePath, &prompt)
+			}
 			if err = Write(path, job); err != nil {
 				return nil, err
 			}
@@ -459,6 +487,11 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	}
 	if err != nil {
 		return nil, err
+	}
+	if maintenanceRun != nil {
+		if err = prepareMaintenanceTests(ctx, path, worktreePath, maintenanceRun); err != nil {
+			return finishHostStartError(dir, jobID, generation, token, cancelled.Load(), ctx.Err(), err)
+		}
 	}
 	var result EventResult
 	var failureEvidence map[string]any
@@ -705,6 +738,18 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 		err = finishJob(dir, jobID, "FAILED", code, nil, message, finished, hostFinishOptions(generation, token))
 	default:
+		if maintenanceRun != nil {
+			if verifyErr := verifyMaintenanceTests(ctx, path, worktreePath, maintenanceRun); verifyErr != nil {
+				status, code := "FAILED", "MAINTENANCE_PATCH_REJECTED"
+				if cancelled.Load() {
+					status, code = "CANCELLED", "CANCELLED"
+				} else if ctx.Err() != nil {
+					status, code = "TIMED_OUT", "DEADLINE_EXCEEDED"
+				}
+				err = finishJob(dir, jobID, status, code, nil, verifyErr.Error(), float64(time.Now().UnixNano())/1e9, hostFinishOptions(generation, token))
+				break
+			}
+		}
 		content := result.Final
 		if data, readErr := os.ReadFile(args.OutputPath); readErr == nil {
 			content = string(data)
@@ -725,6 +770,167 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		return nil, err
 	}
 	return map[string]any{"status": "ok"}, nil
+}
+
+// MaintenanceTestRun is host evidence; workers cannot write its durable record.
+type MaintenanceTestRun struct {
+	JobID, BaselineHead, BaselineSnapshot string
+	Target                                float64
+	Before, After                         testcoverage.Evidence
+	KnownTests, AddedTests, ExecutedTests []string
+	Revision, BeforeOutput, AfterOutput   string
+	BeforeCoverage, AfterCoverage         string
+	NewTests                              int
+}
+
+func prepareMaintenanceTests(ctx context.Context, path, worktree string, run *MaintenanceTestRun) error {
+	job, err := Read(path)
+	if err != nil {
+		return err
+	}
+	var head, snapshot string
+	job.Get("head", &head)
+	job.Get("snapshot", &snapshot)
+	if worktree == "" || head != run.BaselineHead || snapshot != run.BaselineSnapshot {
+		return errors.New("maintenance worktree baseline moved")
+	}
+	deadline, _ := ctx.Deadline()
+	run.Before = testcoverage.MeasureProject(ctx, worktree, time.Until(deadline))
+	if err = job.Set("maintenanceTests", run); err != nil {
+		return err
+	}
+	if err = Write(path, job); err != nil {
+		return err
+	}
+	if run.Before.Status != "measured" {
+		return ErrCoverageUnknown
+	}
+	if run.Target <= 0 {
+		run.Target = 90
+	}
+	if 100*float64(run.Before.Counts.Covered)/float64(run.Before.Counts.Executable) >= run.Target {
+		return errors.New("maintenance coverage target already reached")
+	}
+	var repository string
+	job.Get("repoRoot", &repository)
+	artifacts := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(path))), "projects", contextio.ProjectKey(repository), "maintenance", "reports", "test-gaps", "artifacts", run.JobID)
+	if err = os.MkdirAll(artifacts, 0700); err != nil {
+		return err
+	}
+	run.BeforeCoverage = filepath.Join(artifacts, "before.coverprofile")
+	if err = atomicWrite(run.BeforeCoverage, []byte(run.Before.Raw)); err != nil {
+		return err
+	}
+	run.Before.Raw = ""
+	run.BeforeOutput = filepath.Join(artifacts, "before-tests.jsonl")
+	run.KnownTests, err = maintenanceGoTests(ctx, worktree, run.Before.Scope, run.BeforeOutput, true)
+	if err != nil {
+		return err
+	}
+	delta := ledger.ComputeJobDelta(worktree, snapshot)
+	if delta["status"] != "OK" || delta["changed_file_count"] != 0 {
+		return errors.New("baseline measurement changed the worktree")
+	}
+	return nil
+}
+
+func verifyMaintenanceTests(ctx context.Context, path, worktree string, run *MaintenanceTestRun) error {
+	delta := ledger.ComputeJobDelta(worktree, run.BaselineSnapshot)
+	identity := MaintenanceTestIdentity{JobID: run.JobID, RecordedID: run.JobID, RecordedBy: "host"}
+	if err := ValidateMaintenanceTestDelta(worktree, delta, identity); err != nil {
+		return err
+	}
+	if delta["current_head"] != run.BaselineHead {
+		return errors.New("maintenance worker changed HEAD")
+	}
+	revision, err := ledger.JobChangedPathsSHA256(worktree, run.BaselineSnapshot)
+	if err != nil {
+		return err
+	}
+	deadline, _ := ctx.Deadline()
+	run.After = testcoverage.MeasureProject(ctx, worktree, time.Until(deadline))
+	run.AfterCoverage = filepath.Join(filepath.Dir(run.BeforeOutput), "after.coverprofile")
+	if err = atomicWrite(run.AfterCoverage, []byte(run.After.Raw)); err != nil {
+		return err
+	}
+	run.After.Raw = ""
+	if !testcoverage.Compare(run.Before, run.After) {
+		return errors.New("maintenance patch has no measured coverage improvement")
+	}
+	run.AfterOutput = filepath.Join(filepath.Dir(run.BeforeOutput), "after-tests.jsonl")
+	run.ExecutedTests, err = maintenanceGoTests(ctx, worktree, run.After.Scope, run.AfterOutput, false)
+	if err != nil {
+		return err
+	}
+	known := map[string]bool{}
+	for _, name := range run.KnownTests {
+		known[name] = true
+	}
+	for _, name := range run.ExecutedTests {
+		if !known[name] {
+			run.AddedTests = append(run.AddedTests, name)
+		}
+	}
+	run.NewTests = CountExecutedMaintenanceTests(run.AddedTests, run.ExecutedTests)
+	if run.NewTests == 0 {
+		return errors.New("maintenance patch executed no new tests")
+	}
+	current, err := ledger.JobChangedPathsSHA256(worktree, run.BaselineSnapshot)
+	if err != nil || current != revision || ctx.Err() != nil {
+		return errors.New("maintenance patch changed or deadline expired during verification")
+	}
+	run.Revision = revision
+	job, err := Read(path)
+	if err != nil {
+		return err
+	}
+	if err = job.Set("maintenanceTests", run); err != nil {
+		return err
+	}
+	return Write(path, job)
+}
+
+func maintenanceGoTests(ctx context.Context, worktree, scope, outputPath string, list bool) ([]string, error) {
+	module := strings.SplitN(scope, "\n", 2)[0]
+	args := []string{"test", "-json", "-mod=readonly", "-count=1"}
+	if list {
+		args = append(args, "-list=^Test")
+	}
+	command := proc.Hide(exec.CommandContext(ctx, "go", append(args, "./...")...))
+	command.Dir = filepath.Join(worktree, filepath.FromSlash(module))
+	command.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off")
+	proc.ConfigureProcessTreeKill(command)
+	output, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	if err = atomicWrite(outputPath, output); err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	seen := map[string]bool{}
+	var names []string
+	for {
+		var event struct{ Action, Package, Test, Output string }
+		if err = decoder.Decode(&event); err == io.EOF {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+		name := event.Test
+		if list && event.Action == "output" {
+			name = strings.TrimSpace(event.Output)
+		}
+		if (!list && event.Action != "pass") || !strings.HasPrefix(name, "Test") || strings.ContainsAny(name, "/ \t\r\n") || event.Package == "" {
+			continue
+		}
+		identity := event.Package + "/" + name
+		if !seen[identity] {
+			names = append(names, identity)
+			seen[identity] = true
+		}
+	}
+	return names, nil
 }
 
 func configureCodexGoCache(args *LaunchArgs, childEnv *[]string, stateRoot, jobTempDir string, writableRoots []any, research bool, protectedRoot string) error {
@@ -915,10 +1121,14 @@ func finishHostStartError(dir, id string, generation int64, token string, cancel
 		}
 		return map[string]any{"status": "ok"}, nil
 	default:
-		if err := finishJob(dir, id, "FAILED", "CODEX_FAILED", nil, startErr.Error(), now, hostFinishOptions(generation, token)); err != nil {
+		code := "CODEX_FAILED"
+		if errors.Is(startErr, ErrCoverageUnknown) {
+			code = "COVERAGE_UNKNOWN"
+		}
+		if err := finishJob(dir, id, "FAILED", code, nil, startErr.Error(), now, hostFinishOptions(generation, token)); err != nil {
 			return nil, err
 		}
-		return map[string]any{"status": "error", "errorCode": "CODEX_FAILED", "message": startErr.Error()}, nil
+		return map[string]any{"status": "error", "errorCode": code, "message": startErr.Error()}, nil
 	}
 }
 

@@ -2,28 +2,239 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"purser-hook/internal/contextio"
+	"purser-hook/internal/jobs"
+	"purser-hook/internal/lease"
 	"purser-hook/internal/maintenance"
+	"purser-hook/internal/pluginroot"
+	"purser-hook/internal/proc"
 )
 
 type maintenanceJobs struct{}
 
-func (maintenanceJobs) Start(_ string, args map[string]any) (map[string]any, error) {
-	return dispatchOperation(context.Background(), "codex_start", args, stateRoot())
+var maintenanceStartDispatch = dispatchOperation
+var maintenanceStartHook = maintenanceHook
+
+func (maintenanceJobs) Start(ctx context.Context, state string, args map[string]any) (result map[string]any, err error) {
+	if args["worktree"] != true {
+		return dispatchOperation(ctx, "codex_start", args, state)
+	}
+	root, _ := args["cwd"].(string)
+	id, _ := args["call"].(string)
+	event := map[string]any{"session_id": "maintenance-" + contextio.ProjectKey(root), "tool_use_id": id, "cwd": root,
+		"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start", "tool_input": args}
+	scope := []string{}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" {
+			continue
+		}
+		if entry.IsDir() {
+			scope = append(scope, name)
+		} else if strings.HasSuffix(name, ".go") {
+			scope = append(scope, strings.TrimSuffix(strings.TrimSuffix(name, ".go"), "_test")+"_test.go")
+		}
+	}
+	if len(scope) == 0 || strings.ContainsAny(strings.Join(scope, ""), "|,\r\n") {
+		return nil, errors.New("maintenance test scope unavailable")
+	}
+	sort.Strings(scope)
+	scope = slices.Compact(scope)
+	args["prompt"] = fmt.Sprintf("ORCH|task=maintenance-%s|phase=implementation|route=subtle|scope=%s\nTASK_CONTRACT: {\"objective\":\"Add behavior tests for ranked coverage gaps\",\"criteria\":\"Test-only patch; host coverage improvement; executed new tests; clean independent review\"}\n%s", id, strings.Join(scope, ","), args["prompt"])
+	keyBytes := sha256.Sum256([]byte(event["session_id"].(string) + "\x00" + id))
+	key := hex.EncodeToString(keyBytes[:])
+	jobID := ""
+	dispatched := false
+	defer func() {
+		if err != nil {
+			if jobID != "" {
+				result = map[string]any{"structuredContent": map[string]any{"jobId": jobID}}
+				if !cancelMaintenanceAdmission(state, jobID, dispatched) {
+					err = errors.Join(err, maintenance.ErrTestPatchTerminationUnconfirmed)
+				}
+			}
+			if !errors.Is(err, maintenance.ErrTestPatchTerminationUnconfirmed) {
+				_ = lease.New(filepath.Join(state, "projects", contextio.ProjectKey(root))).Release(key, float64(time.Now().UnixNano())/1e9)
+			}
+		}
+	}()
+	pre, err := maintenanceStartHook(ctx, state, event)
+	if err != nil {
+		return nil, err
+	}
+	hook, _ := pre["hookSpecificOutput"].(map[string]any)
+	effective, _ := hook["updatedInput"].(map[string]any)
+	if hook["permissionDecision"] == "deny" || effective == nil || effective["worktree"] != true {
+		return nil, errors.New("maintenance admission denied or enforcement input unavailable")
+	}
+	call, _ := effective["call"].(string)
+	jobHash := sha256.Sum256([]byte(call))
+	jobID = hex.EncodeToString(jobHash[:])
+	run := jobs.MaintenanceTestRun{JobID: jobID}
+	run.BaselineHead, _ = args["maintenanceBaselineHead"].(string)
+	run.BaselineSnapshot, _ = args["maintenanceBaselineSnapshot"].(string)
+	run.Target, _ = args["coverage_target_pct"].(float64)
+	if err = maintenance.ReserveTestJob(state, key, run); err != nil {
+		return nil, err
+	}
+	deadlineText, _ := args["maintenanceDeadlineAt"].(string)
+	deadline, err := time.Parse(time.RFC3339Nano, deadlineText)
+	if err != nil || time.Until(deadline) <= 0 {
+		return nil, errors.New("maintenance admission exhausted deadline")
+	}
+	effective["timeoutSeconds"] = time.Until(deadline).Seconds()
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	dispatched = true
+	result, err = maintenanceStartDispatch(ctx, "codex_start", effective, state)
+	if err != nil {
+		return nil, err
+	}
+	event["hook_event_name"], event["tool_input"], event["tool_response"] = "PostToolUse", effective, result
+	if _, err = maintenanceStartHook(ctx, state, event); err != nil {
+		return nil, err
+	}
+	if _, err = os.Stat(filepath.Join(state, "async_jobs", jobID+".json")); err != nil {
+		return nil, err
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return result, nil
 }
-func (maintenanceJobs) Result(_, id string) map[string]any {
-	value, _ := dispatchOperation(context.Background(), "codex_result", map[string]any{"jobId": id}, stateRoot())
+
+func cancelMaintenanceAdmission(state, id string, dispatched bool) bool {
+	deadline := time.Now().Add(3 * time.Second)
+	done := make(chan bool, 1)
+	go func() {
+		for {
+			value := jobs.Cancel(state, map[string]any{"jobId": id})
+			result, _ := value["structuredContent"].(map[string]any)
+			code, status := result["errorCode"], result["state"]
+			if code == "JOB_NOT_FOUND" && !dispatched {
+				if _, err := os.Stat(filepath.Join(state, "codex_exec_mcp", "jobs", id+".json")); errors.Is(err, os.ErrNotExist) {
+					done <- true
+					return
+				}
+			}
+			if code != "JOB_NOT_FOUND" && code != "JOB_UPDATE_FAILED" && code != "PROCESS_UNCONFIRMED" {
+				switch status {
+				case "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "SUPERSEDED":
+					done <- true
+					return
+				}
+			}
+			if !time.Now().Before(deadline) {
+				done <- false
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case confirmed := <-done:
+		return confirmed
+	case <-timer.C:
+		return false
+	}
+}
+func (maintenanceJobs) Result(state, id string) map[string]any {
+	value, _ := dispatchOperation(context.Background(), "codex_result", map[string]any{"jobId": id}, state)
 	return value
 }
-func (maintenanceJobs) Cancel(_, id string) map[string]any {
-	value, _ := dispatchOperation(context.Background(), "codex_cancel", map[string]any{"jobId": id}, stateRoot())
+func (maintenanceJobs) Cancel(state, id string) map[string]any {
+	value, _ := dispatchOperation(context.Background(), "codex_cancel", map[string]any{"jobId": id}, state)
 	return value
+}
+
+// Finalize supervises the normal Post hook, including all reviewer descendants.
+func (maintenanceJobs) Finalize(ctx context.Context, state, id string, result map[string]any) error {
+	index, err := jobs.Read(filepath.Join(state, "async_jobs", id+".json"))
+	if err != nil {
+		return err
+	}
+	var session string
+	index.Get("session_id", &session)
+	event := map[string]any{"hook_event_name": "PostToolUse", "session_id": session, "tool_use_id": "maintenance-result-" + id,
+		"tool_name": "mcp__codex-main__codex_result", "tool_input": map[string]any{"jobId": id}, "tool_response": map[string]any{"structuredContent": result}}
+	_, err = maintenanceHook(ctx, state, event)
+	return err
+}
+
+func maintenanceHook(ctx context.Context, state string, event map[string]any) (map[string]any, error) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(state, "maintenance", "jobs")
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	input, err := os.CreateTemp(dir, ".finalize-input-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(input.Name())
+	defer input.Close()
+	if _, err = input.Write(data); err != nil {
+		return nil, err
+	}
+	if _, err = input.Seek(0, 0); err != nil {
+		return nil, err
+	}
+	output, err := os.CreateTemp(dir, ".finalize-output-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(output.Name())
+	defer output.Close()
+	executable, err := pluginroot.RuntimeExecutable(state)
+	if err != nil {
+		return nil, err
+	}
+	supervised, err := proc.StartSupervised(ctx, executable, []string{"supervisor"}, proc.Launch{Args: []string{executable, "enforce"},
+		Env: append(os.Environ(), "PURSER_STATE_DIR="+state), Dir: dir, HideWindow: true, Stdin: input, Stdout: output})
+	if err != nil {
+		return nil, err
+	}
+	<-supervised.Done()
+	finished := supervised.Result()
+	if !finished.Confirmed {
+		return nil, errors.Join(maintenance.ErrTestPatchTerminationUnconfirmed, finished.Err)
+	}
+	if finished.RootExit != 0 || ctx.Err() != nil {
+		return nil, errors.Join(errors.New("maintenance enforcement failed or cancelled"), finished.Err, ctx.Err())
+	}
+	if _, err = output.Seek(0, 0); err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err = json.NewDecoder(output).Decode(&response); err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 func maintenanceMain(args []string) int {

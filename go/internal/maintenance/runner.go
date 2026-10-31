@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -15,9 +16,11 @@ import (
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/fsretry"
 	"purser-hook/internal/jobs"
+	"purser-hook/internal/lease"
 	"purser-hook/internal/models"
 	"purser-hook/internal/obsidian"
 	"purser-hook/internal/policy"
+	"purser-hook/internal/profile"
 )
 
 const (
@@ -28,7 +31,7 @@ const (
 // JobOperations is the small boundary around the Go MCP host's jobs operations.
 // Implementations call the existing jobs start/result/cancel operations.
 type JobOperations interface {
-	Start(state string, args map[string]any) (map[string]any, error)
+	Start(context.Context, string, map[string]any) (map[string]any, error)
 	Result(state, jobID string) map[string]any
 	Cancel(state, jobID string) map[string]any
 }
@@ -44,9 +47,9 @@ type Runner struct {
 	JobTimeout   time.Duration
 }
 
-// Run starts a read-only maintenance job and returns its raw terminal result.
-// Prompt construction, result parsing, persistence, and telemetry belong to the
-// caller so the lifecycle can be shared by both maintenance report types.
+// Run starts a maintenance job and returns its raw terminal result. Test-gap
+// jobs write only in a private implementation worktree; report parsing and
+// persistence belong to the caller.
 func (r Runner) Run(state, repository, reportType, prompt string) (map[string]any, error) {
 	if r.Jobs == nil {
 		return nil, errors.New("maintenance job operations are required")
@@ -54,10 +57,11 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 	if reportType != "cleanup" && reportType != "test-gaps" {
 		return nil, fmt.Errorf("unsupported maintenance report type: %s", reportType)
 	}
+	now, sleep, poll, timeout := r.clock()
+	deadline := now().Add(timeout)
 	if err := r.resolveCoder(repository); err != nil {
 		return nil, err
 	}
-	now, sleep, poll, timeout := r.clock()
 	root, err := filepath.Abs(repository)
 	if err != nil {
 		return nil, err
@@ -66,19 +70,36 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 	if err != nil {
 		return nil, err
 	}
+	if relative, e := filepath.Rel(root, state); e == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil, errors.New("maintenance state must be outside the user checkout")
+	}
+	var baseline maintenanceBaseline
+	readyPath := filepath.Join(MaintenanceDirectory(state, root), "reports", "test-gaps", "ready.json")
+	if reportType == "test-gaps" {
+		baseline, err = captureMaintenanceBaseline(root)
+		if err != nil {
+			return nil, errors.Join(err, removeTestProposal(readyPath))
+		}
+	}
 	maintenanceDir := filepath.Join(state, "projects", contextio.ProjectKey(root), "maintenance")
 	activePath := filepath.Join(maintenanceDir, reportType+"-active.json")
 	if err := os.MkdirAll(maintenanceDir, 0700); err != nil {
 		return nil, err
+	}
+	if !now().Before(deadline) {
+		return nil, errors.New("maintenance deadline expired before job start")
 	}
 	releaseSlot, err := contextio.AcquireMaintenanceSlot(state)
 	if err != nil {
 		return nil, err
 	}
 	retainSlot := false
+	retainedJob := ""
 	defer func() {
 		if !retainSlot {
 			releaseSlot()
+		} else {
+			_ = replaceActive(filepath.Join(state, "maintenance", "active.json"), map[string]any{"state": "TERMINATION_UNCONFIRMED", "job_id": retainedJob, "project_root": root})
 		}
 	}()
 	startedAt := now().UTC().Format("20060102T150405.000000Z")
@@ -86,21 +107,103 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 	if err := contextio.CreateOrRecoverMaintenanceActive(activePath, state, active, now()); err != nil {
 		return nil, err
 	}
-	defer func() { _ = contextio.ClearMaintenanceActive(activePath) }()
+	defer func() {
+		if retainSlot {
+			active["state"], active["job_id"] = "TERMINATION_UNCONFIRMED", retainedJob
+			_ = replaceActive(activePath, active)
+		} else {
+			_ = contextio.ClearMaintenanceActive(activePath)
+		}
+	}()
 	if userJobs, known := activeUserJobs(state, root, ""); !known || userJobs {
+		if reportType == "test-gaps" {
+			_ = removeTestProposal(readyPath)
+		}
 		return nil, errors.New("active or unknown user job state; maintenance skipped")
+	}
+	if reportType == "test-gaps" {
+		if data, e := os.ReadFile(readyPath); e == nil {
+			var prior map[string]any
+			if json.Unmarshal(data, &prior) == nil {
+				id := stringValue(prior["job_id"], "")
+				expires, e := time.Parse(time.RFC3339Nano, stringValue(prior["expires_at"], ""))
+				if current, checkErr := testPatchEvidence(state, root, id, baseline, true); checkErr == nil && e == nil && now().Before(expires) && prior["status"] == "ready" && prior["changed_paths_sha256"] == current["changed_paths_sha256"] && prior["review_artifact_sha256"] == current["review_artifact_sha256"] {
+					return map[string]any{"jobId": id, "state": "SUCCEEDED", "proposal_path": readyPath}, nil
+				}
+			}
+		} else if !errors.Is(e, os.ErrNotExist) {
+			return nil, e
+		}
+		if err := removeTestProposal(readyPath); err != nil {
+			return nil, err
+		}
 	}
 	call, err := randomID()
 	if err != nil {
 		return nil, err
 	}
-	started, err := r.Jobs.Start(state, map[string]any{
+	remaining := deadline.Sub(now())
+	if remaining <= 0 {
+		return nil, errors.New("maintenance deadline expired before job start")
+	}
+	startArgs := map[string]any{
 		"call": call, "mode": "new", "prompt": prompt, "cwd": root,
 		"sandbox": "read-only", "jobPhase": "operation", "agent": r.CoderAgent,
 		"jobModel": r.CoderModel, "jobEffort": r.CoderEffort,
-		"timeoutSeconds": int(timeout.Seconds()),
-	})
+		"timeoutSeconds": remaining.Seconds(),
+	}
+	if reportType == "test-gaps" {
+		startArgs["sandbox"], startArgs["jobPhase"], startArgs["worktree"] = "workspace-write", "implementation", true
+		target := profile.LoadProfile(root).CoverageTargetPct
+		if target <= 0 {
+			target = 90
+		}
+		startArgs["coverage_target_pct"], startArgs["maintenanceBaselineHead"], startArgs["maintenanceBaselineSnapshot"], startArgs["maintenanceDeadlineAt"] = target, baseline.head, baseline.snapshot, deadline.UTC().Format(time.RFC3339Nano)
+		startArgs["prompt"] = fmt.Sprintf("%s\nResolved coverage_target_pct: %g%%. Host measurements alone determine improvement and readiness. Do not commit, push, or apply changes.", prompt, target)
+	}
+	startCtx, startCancel := context.WithTimeout(context.Background(), deadline.Sub(now()))
+	defer startCancel()
+	starting := make(chan struct{})
+	admissionStopped := make(chan error, 1)
+	if reportType == "test-gaps" {
+		go func() {
+			ticker := time.NewTicker(poll)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-starting:
+					return
+				case <-startCtx.Done():
+					admissionStopped <- startCtx.Err()
+					return
+				case <-ticker.C:
+					if user, known := activeUserJobs(state, root, ""); !known || user {
+						startCancel()
+						admissionStopped <- fmt.Errorf("maintenance yielded to a user %s job during admission", coderLabel(r.CoderAgent))
+						return
+					}
+				}
+			}
+		}()
+	}
+	started, err := r.Jobs.Start(startCtx, state, startArgs)
+	close(starting)
+	select {
+	case stopped := <-admissionStopped:
+		err = errors.Join(err, stopped)
+	default:
+	}
 	if err != nil {
+		if errors.Is(err, ErrTestPatchTerminationUnconfirmed) {
+			retainSlot = true
+		}
+		if id := stringValue(structured(started)["jobId"], ""); id != "" {
+			retainedJob = id
+			retainSlot = retainSlot || !terminal(structured(r.Jobs.Cancel(state, id))["state"], false)
+			if !retainSlot {
+				_ = lease.ReleaseJobScopeLease(state, id)
+			}
+		}
 		return nil, err
 	}
 	started = structured(started)
@@ -108,21 +211,37 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 	if !ok || jobID == "" {
 		return nil, errors.New(stringValue(started["message"], "durable "+coderLabel(r.CoderAgent)+" job could not be started"))
 	}
+	if reportType == "test-gaps" {
+		defer func() {
+			if !retainSlot {
+				_ = lease.ReleaseJobScopeLease(state, jobID)
+			}
+		}()
+	}
+	retainedJob = jobID
 	active["job_id"] = jobID
 	if err := replaceActive(activePath, active); err != nil {
+		retainSlot = !terminal(structured(r.Jobs.Cancel(state, jobID))["state"], false)
 		return nil, err
 	}
 	for {
-		if userJobs, known := activeUserJobs(state, root, jobID); known && userJobs {
-			cancelled := structured(r.Jobs.Cancel(state, jobID))["state"] == "CANCELLED"
+		if !now().Before(deadline) {
+			cancelled := terminal(structured(r.Jobs.Cancel(state, jobID))["state"], false)
 			if !cancelled {
-				cancelDeadline := now().Add(timeout)
-				for now().Before(cancelDeadline) {
+				retainSlot = true
+				return nil, errors.New("maintenance deadline expired; cancellation was unconfirmed and global slot retained")
+			}
+			return nil, errors.New("maintenance deadline expired")
+		}
+		if userJobs, known := activeUserJobs(state, root, jobID); !known || userJobs {
+			cancelled := terminal(structured(r.Jobs.Cancel(state, jobID))["state"], false)
+			if !cancelled {
+				for now().Before(deadline) {
 					result := structured(r.Jobs.Result(state, jobID))
 					if terminal(result["state"], false) {
-						return nil, fmt.Errorf("maintenance yielded to a user %s job", coderLabel(r.CoderAgent))
+						return nil, errors.New("maintenance yielded or stopped because user job state became unknown")
 					}
-					sleep(minDuration(poll, cancelDeadline.Sub(now())))
+					sleep(minDuration(poll, deadline.Sub(now())))
 				}
 				retainSlot = true
 				return nil, errors.New("maintenance cancellation was unconfirmed; global slot retained by job timeout")
@@ -135,15 +254,56 @@ func (r Runner) Run(state, repository, reportType, prompt string) (map[string]an
 			if result["jobId"] == nil {
 				result["jobId"] = jobID
 			}
+			if reportType == "test-gaps" {
+				ctx, cancel := context.WithTimeout(context.Background(), deadline.Sub(now()))
+				defer cancel()
+				done := make(chan error, 1)
+				go func() { done <- r.finishTestPatch(ctx, state, root, jobID, readyPath, baseline, result) }()
+				for {
+					select {
+					case err := <-done:
+						if errors.Is(err, ErrTestPatchTerminationUnconfirmed) {
+							retainSlot = true
+						}
+						if err != nil {
+							_ = removeTestProposal(readyPath)
+							return result, err
+						}
+						result["proposal_path"] = readyPath
+						return result, nil
+					case <-time.After(minDuration(poll, deadline.Sub(now()))):
+						user, known := activeUserJobs(state, root, jobID)
+						if !now().Before(deadline) || !known || user {
+							cancel()
+							select {
+							case err := <-done:
+								retainSlot = errors.Is(err, ErrTestPatchTerminationUnconfirmed)
+							case <-time.After(5 * time.Second):
+								retainSlot = true
+							}
+							if !retainSlot {
+								_ = r.Jobs.Cancel(state, jobID)
+							}
+							return nil, errors.Join(errors.New("maintenance finalization preempted or deadline expired"), removeTestProposal(readyPath))
+						}
+					}
+				}
+			}
 			return result, nil
 		}
 		if terminal(status, true) {
+			if status == "UNKNOWN_OR_IN_PROGRESS" {
+				retainSlot = true
+			}
 			if result["jobId"] == nil {
 				result["jobId"] = jobID
 			}
+			if reportType == "test-gaps" && status == "FAILED" && result["errorCode"] == "COVERAGE_UNKNOWN" {
+				return result, fmt.Errorf("%w: %s", jobs.ErrCoverageUnknown, stringValue(result["message"], ""))
+			}
 			return result, fmt.Errorf("%s job %s: %s %s", coderLabel(r.CoderAgent), status, stringValue(result["errorCode"], ""), stringValue(result["message"], ""))
 		}
-		sleep(poll)
+		sleep(minDuration(poll, deadline.Sub(now())))
 	}
 }
 
@@ -251,6 +411,13 @@ func activeUserJobs(state, root, exclude string) (bool, bool) {
 			id = ""
 		}
 		if id != exclude && (status == "RUNNING" || status == "QUEUED") {
+			// This host-owned reservation precedes launch and makes admission observable.
+			if marker, e := os.ReadFile(filepath.Join(state, "maintenance", "jobs", id+".json")); e == nil {
+				var run jobs.MaintenanceTestRun
+				if json.Unmarshal(marker, &run) == nil && run.JobID == id && run.BaselineHead != "" {
+					continue
+				}
+			}
 			record, err := jobs.Decode(data)
 			if err != nil || !jobs.StaleHost(dir, record, time.Now()) {
 				return true, true

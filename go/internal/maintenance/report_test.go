@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -213,11 +214,16 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			commitMaintenanceFixture(t, repo)
 			result := map[string]any{"state": "SUCCEEDED", "content": "Body.\n```purser-findings-json\n{\"findings\":[{\"path_line\":\"a.py:1\",\"symbol\":\"f\",\"evidence\":\"source\",\"confidence\":\"low\"}],\"line_coverage_pct\":80}\n```", "usage": map[string]any{"total_tokens": 21}}
 			if failed {
 				result = map[string]any{"state": "FAILED", "errorCode": "CODEX_FAILED", "message": "worker failed"}
 			}
 			fake := &fakeJobs{jobID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", results: []map[string]any{result}}
+			if !failed {
+				fake.onStart = func(state string) { stageMaintenancePatch(t, state, repo, fake) }
+				fake.finalize = reviewMaintenancePatch
+			}
 			runner := Runner{Jobs: fake, Sleep: func(_ time.Duration) {}}
 			path, err := RunAndPersistReport(runner, state, repo, "test-gaps")
 			key := filepath.Join(state, "projects", contextProjectKey(repo), "maintenance", "reports", "test-gaps")
@@ -247,7 +253,7 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			prompt, _ := BuildReportPrompt(repo, "test-gaps", 80)
-			if fake.started["prompt"] != prompt {
+			if !strings.HasPrefix(fake.started["prompt"].(string), prompt) {
 				t.Fatal("runner prompt differs from builder")
 			}
 			if !strings.Contains(prompt, "coverage target is 80%") {
@@ -264,6 +270,18 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 			notice, _ := os.ReadFile(strings.TrimSuffix(path, ".md") + ".notice.json")
 			if !strings.Contains(string(notice), `"line_coverage_pct":null`) || !strings.Contains(string(notice), `"coverage_target_pct":80`) {
 				t.Fatalf("notice: %s", notice)
+			}
+			ready, err := os.ReadFile(filepath.Join(key, "ready.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var proposal map[string]any
+			if json.Unmarshal(ready, &proposal) != nil {
+				t.Fatal("invalid ready evidence")
+			}
+			after := proposal["after"].(map[string]any)["Counts"].(map[string]any)
+			if after["Covered"] != float64(3) || after["Executable"] != float64(4) || proposal["new_test_count"] != float64(1) {
+				t.Fatalf("worker percentage replaced host evidence: %s", ready)
 			}
 			events, _ := filepath.Glob(filepath.Join(state, "telemetry", "events", "*", "session_unknown.jsonl"))
 			if len(events) != 1 {
@@ -282,56 +300,27 @@ func TestRunAndPersistReportSuccessAndFailure(t *testing.T) {
 	}
 }
 
-func TestTestGapWritingRefusedWithoutCompleteCoverage(t *testing.T) {
-	for _, name := range []string{"missing-go-tool", "missing-python-suite", "missing-js-tool", "incomplete-mixed-scope"} {
-		t.Run(name, func(t *testing.T) {
-			root := maintenanceScratch(t)
-			repo, state := filepath.Join(root, "repo"), filepath.Join(root, "state")
-			if err := os.MkdirAll(repo, 0700); err != nil {
-				t.Fatal(err)
-			}
-			files := map[string]string{}
-			switch name {
-			case "missing-go-tool":
-				writeCoverageSuite(t, repo)
-				t.Setenv("PATH", "")
-			case "missing-python-suite":
-				files["app.py"] = "def choose():\n    return 1\n"
-				files["coverage.json"] = `{"files":{"app.py":{"executed_lines":[2],"missing_lines":[]}}}`
-			case "missing-js-tool":
-				files["app.js"] = "export const choose = () => 1;\n"
-				files["package.json"] = `{"scripts":{"test":"c8 node test.js"}}`
-				t.Setenv("PATH", "")
-			case "incomplete-mixed-scope":
-				writeCoverageSuite(t, repo)
-				files["app.py"] = "def choose():\n    return 1\n"
-			}
-			for path, content := range files {
-				if err := os.WriteFile(filepath.Join(repo, path), []byte(content), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			fake := &fakeJobs{results: []map[string]any{{"state": "SUCCEEDED"}}}
-			runner := Runner{Jobs: fake, CoderAgent: "codex", CoderModel: "fixture"}
-			path, err := RunAndPersistReport(runner, state, repo, "test-gaps")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if fake.started != nil {
-				t.Fatal("test-writing worker started without complete host coverage")
-			}
-			data, err := os.ReadFile(strings.TrimSuffix(path, ".md") + ".notice.json")
-			if err != nil {
-				t.Fatal(err)
-			}
-			var notice map[string]any
-			if err := json.Unmarshal(data, &notice); err != nil {
-				t.Fatal(err)
-			}
-			if notice["status"] != "unknown" || notice["line_coverage_pct"] != nil || notice["findings"] != nil {
-				t.Fatalf("unavailable coverage did not stay unknown: %s", data)
-			}
-		})
+func TestTestGapCoverageUnknownPersistsLimitations(t *testing.T) {
+	repo, state := maintenancePatchRepo(t), maintenanceScratch(t)
+	fake := &fakeJobs{results: []map[string]any{{"state": "FAILED", "errorCode": "COVERAGE_UNKNOWN", "message": "maintenance baseline coverage is unknown"}}}
+	runner := Runner{Jobs: fake, CoderAgent: "codex", CoderModel: "fixture"}
+	path, err := RunAndPersistReport(runner, state, repo, "test-gaps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(body), "Coverage unknown: unavailable tooling, unsupported suite, incomplete scope, or incompatible measurements; test writing skipped.") {
+		t.Fatalf("missing coverage limitations: %s, error=%v", body, err)
+	}
+	reports := filepath.Join(MaintenanceDirectory(state, repo), "reports", "test-gaps")
+	if failures, err := filepath.Glob(filepath.Join(reports, "failures", "*.json")); err != nil || len(failures) != 0 {
+		t.Fatalf("coverage unknown recorded a failure: %v, error=%v", failures, err)
+	}
+	if _, err := os.Stat(filepath.Join(reports, "last-run.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(MaintenanceDirectory(state, repo), "reports", "test-gaps", "ready.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("host coverage failure left a ready proposal: %v", err)
 	}
 }
 

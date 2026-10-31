@@ -36,6 +36,7 @@ type Evidence struct {
 	Flags     string
 	Counts    Counts
 	Status    string
+	Raw       string `json:"-"`
 }
 
 func Unknown(ecosystem, scope, flags string) Evidence {
@@ -321,6 +322,7 @@ func RunGo(ctx context.Context, root string, packages []string, timeout time.Dur
 		return result
 	}
 	result.Counts, result.Status = counts, "measured"
+	result.Raw = string(data)
 	return result
 }
 
@@ -338,15 +340,16 @@ func Compare(before, after Evidence) bool {
 func CanWrite(ctx context.Context, root string, timeout time.Duration) bool {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	before := measureProject(ctx, root, timeout)
+	before := MeasureProject(ctx, root, timeout)
 	if before.Status != "measured" {
 		return false
 	}
-	after := measureProject(ctx, root, timeout)
+	after := MeasureProject(ctx, root, timeout)
 	return compatible(before, after) && before.Counts == after.Counts
 }
 
-func measureProject(ctx context.Context, root string, timeout time.Duration) Evidence {
+// MeasureProject measures every production ecosystem, returning unknown for incomplete scope.
+func MeasureProject(ctx context.Context, root string, timeout time.Duration) Evidence {
 	result := Unknown("go", "", GoFlags)
 	var files, modules []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {

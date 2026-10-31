@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -13,6 +14,8 @@ import (
 
 	"purser-hook/internal/proc"
 )
+
+var ErrCoverageUnknown = errors.New("maintenance baseline coverage is unknown")
 
 // MaintenanceTestIdentity is populated from the host's durable job record.
 type MaintenanceTestIdentity struct {
