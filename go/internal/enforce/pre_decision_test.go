@@ -63,6 +63,20 @@ func TestDispatchSandboxOtherResearchAgentsStayReadOnly(t *testing.T) {
 	}
 }
 
+func TestResearchReroutesAgyToCodex(t *testing.T) {
+	config := map[string]any{"coder_agent": "agy", "routes": map[string]any{"research": "research-config"}}
+	researchConfig, agent := researchCoderConfig(config)
+	if agent != "codex" || researchConfig["coder_agent"] != "codex" {
+		t.Fatalf("research agy fallback = %q / %#v, want codex", agent, researchConfig)
+	}
+	if config["coder_agent"] != "agy" || stringValue(mapValue(researchConfig["routes"])["research"]) != "research-config" {
+		t.Fatalf("research fallback mutated unrelated config: original=%#v adjusted=%#v", config, researchConfig)
+	}
+	if _, agent := researchCoderConfig(map[string]any{"coder_agent": "claude"}); agent != "claude" {
+		t.Fatalf("research changed configured non-agy coder to %q", agent)
+	}
+}
+
 func TestDispatchSandboxNonOperationResearchStaysReadOnly(t *testing.T) {
 	for _, phase := range []string{"plan", "implementation", ""} {
 		if sandbox, approval, restricted := dispatchSandbox(phase, "research", "codex"); !restricted || sandbox != "read-only" || approval != "never" {
@@ -161,6 +175,30 @@ func TestPreReplyUsesRecordedEffortBeforeCompatibility(t *testing.T) {
 	}
 	if decision := mapValue(got["hookSpecificOutput"])["permissionDecision"]; decision == "deny" {
 		t.Fatalf("reply was denied before recorded effort restoration: %#v", got)
+	}
+}
+
+func TestPreDeniesAgyResearchReply(t *testing.T) {
+	root, repo, state := setupRecordedReply(t, "gpt-6-luna", "high", "gemini-test", "high")
+	for key, value := range map[string]string{"HOME": root, "USERPROFILE": root, "PURSER_STATE_DIR": state, "CODEX_HOME": root, "CLAUDE_PLUGIN_ROOT": root} {
+		t.Setenv(key, value)
+	}
+	project := filepath.Join(state, "projects", projectKey(&repo))
+	record := ledger.FindByThreadID(project, "thread-p63")
+	live := mapValue(record["live_thread"])
+	live["agent"], live["route"], live["phase"] = "agy", "research", "operation"
+	if saved := ledger.Save(project, record); saved.Status != ledger.OK {
+		t.Fatalf("update recorded research thread: %#v", saved)
+	}
+	got, err := Pre(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start",
+		"tool_input": map[string]any{"mode": "reply", "threadId": "thread-p63", "prompt": "Continue research."},
+		"cwd":        repo, "session_id": "agy-research-reply", "tool_use_id": "agy-research-reply"}, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := mapValue(got["hookSpecificOutput"])
+	if hook["permissionDecision"] != "deny" || hook["updatedInput"] != nil || hook["permissionDecisionReason"] != "Start a fresh research job; existing agy research threads cannot be resumed." {
+		t.Fatalf("agy research reply was not denied with a fresh-job instruction: %#v", got)
 	}
 }
 

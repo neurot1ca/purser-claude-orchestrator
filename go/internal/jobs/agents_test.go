@@ -83,8 +83,28 @@ func TestAgentCommandPythonParity(t *testing.T) {
 }
 
 func TestOpenCodeReadOnlyEnvironmentKeepsReportStream(t *testing.T) {
+	configHome, userProfile, appData, cwd := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("USERPROFILE", userProfile)
+	t.Setenv("APPDATA", appData)
+	for path, content := range map[string]string{
+		filepath.Join(configHome, "opencode", "opencode.jsonc"):            `{"mcp":{"global-server":{"type":"local"},},}`,
+		filepath.Join(userProfile, ".config", "opencode", "opencode.json"): `{"mcp":{"servers":{"type":"remote"}}}`,
+		filepath.Join(appData, "opencode", "opencode.json"):                `{"mcp":{"roaming":{"type":"local"}}}`,
+		filepath.Join(cwd, "opencode.jsonc"): `{
+			// Project MCP is disabled even with JSONC comments.
+			"mcp": {"project-server": {"type": "local"},},
+		}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	input := AgentCommandInput{Agent: "opencode", Prefix: []string{"opencode"}, Tool: "codex", Model: "google/gemini-test",
-		ConfigArgs: []string{`model_reasoning_effort="high"`}, Sandbox: stringPointer("read-only"), Prompt: "plan"}
+		ConfigArgs: []string{`model_reasoning_effort="high"`}, Sandbox: stringPointer("read-only"), Prompt: "plan", CWD: cwd}
 	command, err := BuildAgentCommand(input)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +123,8 @@ func TestOpenCodeReadOnlyEnvironmentKeepsReportStream(t *testing.T) {
 		t.Fatalf("read-only OpenCode environment = %#v", environment)
 	}
 	var config struct {
-		Permission map[string]string `json:"permission"`
+		Permission map[string]string         `json:"permission"`
+		MCP        map[string]map[string]any `json:"mcp"`
 		Agent      map[string]struct {
 			Permission map[string]string `json:"permission"`
 		} `json:"agent"`
@@ -116,11 +137,37 @@ func TestOpenCodeReadOnlyEnvironmentKeepsReportStream(t *testing.T) {
 			t.Errorf("permission %q is not denied in global and named agent config: %#v", permission, config)
 		}
 	}
+	for _, name := range []string{"global-server", "servers", "roaming", "project-server"} {
+		if enabled, ok := config.MCP[name]["enabled"].(bool); !ok || enabled {
+			t.Errorf("MCP server %q is not disabled: %#v", name, config.MCP)
+		}
+	}
+	if config.Permission["*_*"] != "deny" || config.Agent[openCodeReadOnlyAgent].Permission["*_*"] != "deny" {
+		t.Fatalf("MCP wildcard permission is not denied globally and for the read-only agent: %#v", config)
+	}
 	stream := NewEventStream("opencode")
 	stream.Write([]byte("{\"type\":\"text\",\"part\":{\"text\":\"plan report\"}}\n{\"type\":\"step_finish\",\"part\":{\"reason\":\"stop\"}}\n"))
 	result := stream.Result(false, 0, "")
 	if result.Status != "success" || result.Final != "plan report" {
 		t.Fatalf("read-only report stream result = %#v", result)
+	}
+}
+
+func TestOpenCodeMCPDisabledWithCommentAfterTrailingComma(t *testing.T) {
+	for name, content := range map[string]string{
+		"line":  "{\"mcp\": {\"a\": {}, // note\n}}",
+		"block": `{"mcp": {"a": {}, /* note */ }}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cwd := t.TempDir()
+			if err := os.WriteFile(filepath.Join(cwd, "opencode.jsonc"), []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			server, _ := openCodeDisabledMCPServers(cwd)["a"].(map[string]any)
+			if enabled, ok := server["enabled"].(bool); !ok || enabled {
+				t.Fatalf("MCP server is not disabled: %#v", server)
+			}
+		})
 	}
 }
 

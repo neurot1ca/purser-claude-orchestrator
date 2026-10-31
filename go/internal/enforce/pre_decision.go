@@ -160,6 +160,10 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		}
 	}
 	research := *parsed.Route == "research"
+	if research && reply && stringValue(live["agent"]) == "agy" {
+		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "permissionDecision": "deny",
+			"permissionDecisionReason": "Start a fresh research job; existing agy research threads cannot be resumed."}}, nil
+	}
 	gearUp := false
 	if root != nil && !reply && !research && config["coder_agent"] == "codex" {
 		gearUp, err = contextio.Gear(defaultPreStateRoot(runtimeRoot), projectKey(root))
@@ -170,7 +174,8 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	var route policy.RouteResolution
 	if research {
 		effort := stringValue(mapValue(input["config"])["model_reasoning_effort"])
-		route = resolveResearch(config, effort, pointerValue(parsed.Basis))
+		researchConfig, _ := researchCoderConfig(config)
+		route = resolveResearch(researchConfig, effort, pointerValue(parsed.Basis))
 	} else {
 		route = policy.ResolveRoute(*parsed.Route, config, gearUp)
 	}
@@ -299,7 +304,8 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	quota, _ := contextio.LatestQuota(quotaHome, time.Now().UTC())
 	selection := SelectCoder(*parsed.Route, *route.Model, *route.Effort, reason(parsed), !reply, reply, config, input, live, active, preOpenCodeCandidates(runtimeRoot), gearUp)
 	if research {
-		selection = CoderSelection{Agent: stringValue(config["coder_agent"]), Model: *route.Model, Effort: *route.Effort, ModelSource: "route", Reason: reason(parsed), Code: "VALID"}
+		_, agent := researchCoderConfig(config)
+		selection = CoderSelection{Agent: agent, Model: *route.Model, Effort: *route.Effort, ModelSource: "route", Reason: reason(parsed), Code: "VALID"}
 		if reply {
 			selection.Agent, selection.Model, selection.Effort = stringValue(live["agent"]), stringValue(live["model"]), stringValue(live["effort"])
 			if selection.Agent == "" {
@@ -597,6 +603,19 @@ func dispatchSandbox(phase, route, agent string) (sandbox, approval string, rest
 		return "read-only", "never", true
 	}
 	return "", "", false
+}
+
+func researchCoderConfig(config map[string]any) (map[string]any, string) {
+	agent := stringValue(config["coder_agent"])
+	if agent != "agy" {
+		return config, agent
+	}
+	researchConfig := make(map[string]any, len(config))
+	for key, value := range config {
+		researchConfig[key] = value
+	}
+	researchConfig["coder_agent"] = "codex"
+	return researchConfig, "codex"
 }
 
 func failedTaskReplyDenial() map[string]any {

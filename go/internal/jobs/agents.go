@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -114,12 +115,148 @@ func AgentCommandEnvironment(in AgentCommandInput) []string {
 	if in.Agent != "opencode" || in.Sandbox == nil || *in.Sandbox != "read-only" {
 		return nil
 	}
-	permissions := map[string]string{"edit": "deny", "write": "deny", "bash": "deny", "webfetch": "deny", "task": "deny", "external_directory": "deny"}
+	permissions := map[string]string{"edit": "deny", "write": "deny", "bash": "deny", "webfetch": "deny", "task": "deny", "external_directory": "deny", "*_*": "deny", "opencode_list_mcp_resources": "deny", "opencode_read_mcp_resource": "deny"}
 	config, _ := json.Marshal(map[string]any{
+		"mcp":        openCodeDisabledMCPServers(in.CWD),
 		"permission": permissions,
 		"agent":      map[string]any{openCodeReadOnlyAgent: map[string]any{"mode": "primary", "permission": permissions}},
 	})
 	return []string{"OPENCODE_CONFIG_CONTENT=" + string(config)}
+}
+
+func openCodeDisabledMCPServers(cwd string) map[string]any {
+	dirs := []string{}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		dirs = append(dirs, filepath.Join(xdg, "opencode"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		dirs = append(dirs, filepath.Join(home, ".config", "opencode"))
+	}
+	for _, env := range []string{"USERPROFILE", "APPDATA"} {
+		if value := os.Getenv(env); value != "" {
+			if env == "USERPROFILE" {
+				dirs = append(dirs, filepath.Join(value, ".config", "opencode"))
+			}
+			if env == "APPDATA" {
+				dirs = append(dirs, filepath.Join(value, "opencode"))
+			}
+		}
+	}
+	var paths []string
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+			path := filepath.Join(dir, name)
+			if !seen[path] {
+				seen[path] = true
+				paths = append(paths, path)
+			}
+		}
+	}
+	if cwd != "" {
+		for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
+			for _, base := range []string{dir, filepath.Join(dir, ".opencode")} {
+				for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+					path := filepath.Join(base, name)
+					if !seen[path] {
+						seen[path] = true
+						paths = append(paths, path)
+					}
+				}
+			}
+			if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil || filepath.Dir(dir) == dir {
+				break
+			}
+		}
+	}
+	servers := map[string]any{}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var config map[string]any
+		if json.Unmarshal(stripOpenCodeJSONC(data), &config) != nil {
+			continue
+		}
+		mcp, _ := config["mcp"].(map[string]any)
+		for name := range mcp {
+			servers[name] = map[string]any{"enabled": false}
+		}
+	}
+	return servers
+}
+
+func stripOpenCodeJSONC(data []byte) []byte {
+	var out strings.Builder
+	out.Grow(len(data))
+	inString, escaped, lineComment, blockComment := false, false, false, false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if lineComment {
+			if c == '\n' {
+				lineComment = false
+				out.WriteByte(c)
+			}
+			continue
+		}
+		if blockComment {
+			if c == '*' && i+1 < len(data) && data[i+1] == '/' {
+				blockComment = false
+				i++
+			}
+			continue
+		}
+		if inString {
+			out.WriteByte(c)
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			out.WriteByte(c)
+		} else if c == '/' && i+1 < len(data) && data[i+1] == '/' {
+			lineComment = true
+			i++
+		} else if c == '/' && i+1 < len(data) && data[i+1] == '*' {
+			blockComment = true
+			i++
+		} else {
+			out.WriteByte(c)
+		}
+	}
+	data = []byte(out.String())
+	clean := data[:0]
+	inString, escaped = false, false
+	for i, c := range data {
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+		} else if c == '"' {
+			inString = true
+		} else if c == ',' {
+			j := i + 1
+			for j < len(data) && (data[j] == ' ' || data[j] == '\t' || data[j] == '\r' || data[j] == '\n') {
+				j++
+			}
+			if j < len(data) && (data[j] == '}' || data[j] == ']') {
+				continue
+			}
+		}
+		clean = append(clean, c)
+	}
+	return clean
 }
 
 // BuildAgentCommand maps the OpenCode and Antigravity bridge options to argv.
