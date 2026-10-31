@@ -68,6 +68,28 @@ func TestWaitApplyValidationReportsTerminalClasses(t *testing.T) {
 	}
 }
 
+func TestStaleApplyValidationKeepsPriorOutcome(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"main.go"})
+	record.Status, record.Reason = "failed", "go test failed"
+	path := validationRecordPath(root, validationRepositoryKey(repo), record.JobID)
+	if err := writeApplyValidation(path, record); err != nil {
+		t.Fatal(err)
+	}
+
+	markApplyValidationStale(root, path, &record, "later apply changed checkout")
+	got, err := readApplyValidation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "stale" || got.PriorStatus != "failed" || got.PriorReason != "go test failed" {
+		t.Fatalf("stale record = status %q prior status %q prior reason %q", got.Status, got.PriorStatus, got.PriorReason)
+	}
+	summary := validationSummary(got)
+	if summary["prior_status"] != "failed" || summary["prior_reason"] != "go test failed" {
+		t.Fatalf("summary prior status = %v, prior reason = %v", summary["prior_status"], summary["prior_reason"])
+	}
+}
+
 func TestWaitApplyValidationRunningReturnsStillWaiting(t *testing.T) {
 	t.Setenv("PURSER_WAIT_MAX_SECONDS", "1")
 	root := t.TempDir()

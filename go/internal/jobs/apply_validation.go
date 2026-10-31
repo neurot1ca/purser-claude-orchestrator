@@ -102,6 +102,8 @@ type applyValidation struct {
 	Packages       []string       `json:"packages,omitempty"`
 	Status         string         `json:"status"`
 	Reason         string         `json:"reason,omitempty"`
+	PriorStatus    string         `json:"prior_status,omitempty"`
+	PriorReason    string         `json:"prior_reason,omitempty"`
 	PluginStatus   string         `json:"plugin_test_status,omitempty"`
 	PluginReason   string         `json:"plugin_test_reason,omitempty"`
 	Commands       []string       `json:"commands,omitempty"`
@@ -297,6 +299,9 @@ func markApplyValidationStale(stateRoot, path string, record *applyValidation, r
 	}
 	current, err := readApplyValidation(path)
 	if err == nil && current.Status != "pending" && current.Status != "running" && current.Status != "unconfirmed" && current.Status != "stale" {
+		if current.PriorStatus == "" {
+			current.PriorStatus, current.PriorReason = current.Status, current.Reason
+		}
 		current.Status, current.Reason = "stale", reason
 		if writeApplyValidationUnlocked(path, current) == nil {
 			*record = current
@@ -350,6 +355,12 @@ func MaintenanceApplyValidation(stateRoot, repository, jobID string) (string, st
 
 func validationSummary(r applyValidation) map[string]any {
 	value := map[string]any{"status": r.Status, "counts": r.Counts, "failing_tests": boundedValidationIdentifiers(r.FailedTests), "reason": r.Reason, "packages": boundedValidationIdentifiers(r.Packages)}
+	if r.PriorStatus != "" {
+		value["prior_status"] = r.PriorStatus
+	}
+	if r.PriorReason != "" {
+		value["prior_reason"] = r.PriorReason
+	}
 	if r.Lint != "" {
 		value["lint"] = r.Lint
 	}
