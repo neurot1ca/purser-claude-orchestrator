@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,7 +49,14 @@ func queueMaintenanceNotice(statePath, repository, key, session string) {
 				notice["report_type"] = "cleanup"
 			}
 		}
-		if findings, ok := notice["findings"].([]any); ok {
+		if notice["report_type"] == "test-gaps" {
+			proposal, ok := readyTestProposal(filepath.Join(directory, "reports", "test-gaps", "ready.json"), repository)
+			if !ok {
+				continue
+			}
+			notice["test_proposal"] = proposal
+		}
+		if findings, ok := notice["findings"].([]any); ok && notice["report_type"] != "test-gaps" {
 			staleCount, verified := dropStaleMaintenanceFindings(repository, notice)
 			if verified {
 				if staleCount == 0 {
@@ -107,6 +115,28 @@ func queueMaintenanceNotice(statePath, repository, key, session string) {
 		_ = writeAdvisorState(statePath, state)
 		return
 	}
+}
+
+func readyTestProposal(path, repository string) (map[string]any, bool) {
+	proposal, ok := readSmallObject(path)
+	if !ok || proposal["status"] != "ready" || str(proposal["baseline_head"]) == "" {
+		return nil, false
+	}
+	before, beforeOK := proposalCoverage(proposal["before"])
+	after, afterOK := proposalCoverage(proposal["after"])
+	count, countOK := exactInteger(proposal["new_test_count"])
+	if !beforeOK || !afterOK || after <= before || !countOK || count < 1 {
+		return nil, false
+	}
+	expires, err := time.Parse(time.RFC3339Nano, str(proposal["expires_at"]))
+	if err != nil || !time.Now().Before(expires) {
+		return nil, false
+	}
+	head, err := gitOutput(repository, "rev-parse", "--verify", "HEAD")
+	if err != nil || strings.TrimSpace(string(head)) != str(proposal["baseline_head"]) {
+		return nil, false
+	}
+	return proposal, true
 }
 
 func dropStaleMaintenanceFindings(repository string, notice map[string]any) (int, bool) {
@@ -363,16 +393,36 @@ func formatMaintenanceNotice(notice map[string]any) string {
 	count, countOK := exactInteger(notice["finding_count"])
 	findings, findingsOK := notice["findings"].([]any)
 	if notice["report_type"] == "test-gaps" {
+		lines := []string{}
+		if proposal, ok := notice["test_proposal"].(map[string]any); ok {
+			before, beforeOK := proposalCoveragePct(proposal["before"])
+			after, afterOK := proposalCoveragePct(proposal["after"])
+			count, countOK := exactInteger(proposal["new_test_count"])
+			if beforeOK && afterOK && after > before && countOK && count > 0 {
+				if coverage, ok := proposalCoverage(proposal["before"]); ok {
+					target, validTarget := maintenanceFloat(proposal["coverage_target_pct"])
+					if !validTarget || math.IsNaN(target) || math.IsInf(target, 0) || target <= 0 || target > 100 {
+						target = 90
+					}
+					if coverage >= target {
+						lines = append(lines, fmt.Sprintf("> ⚓ **Purser: your code is now %d%% covered by tests! 🚀** You have reached a top-tier quality bar. Purser found the gaps for you in the background while you focused on your work. Type /purser:optimize for the last few steps.", int(math.Floor(coverage+0.5))))
+					}
+				}
+				lines = append(lines, fmt.Sprintf("Coverage would rise from %d%% to %d%% with %d new tests, ready in the background. Just say \"add tests\" to apply them as one commit.", int(math.Floor(before+0.5)), int(math.Floor(after+0.5)), count))
+				return strings.Join(lines, "\n")
+			}
+			return ""
+		}
 		countText := fmt.Sprint(count)
 		if !countOK {
 			countText = "an unknown number of"
 		}
-		lines := []string{}
-		target, validTarget := notice["coverage_target_pct"].(float64)
+		lines = []string{}
+		target, validTarget := maintenanceFloat(notice["coverage_target_pct"])
 		if !validTarget || math.IsNaN(target) || math.IsInf(target, 0) || target <= 0 || target > 100 {
 			target = 90
 		}
-		if coverage, ok := notice["line_coverage_pct"].(float64); ok && !math.IsNaN(coverage) && !math.IsInf(coverage, 0) && coverage >= target {
+		if coverage, ok := maintenanceFloat(notice["line_coverage_pct"]); ok && !math.IsNaN(coverage) && !math.IsInf(coverage, 0) && coverage >= target {
 			lines = append(lines, fmt.Sprintf("> ⚓ **Purser: your code is now %d%% covered by tests! 🚀** You have reached a top-tier quality bar. Purser found the gaps for you in the background while you focused on your work. Type /purser:optimize for the last few steps.", int(math.Floor(coverage+0.5))))
 		}
 		lines = append(lines, "> ⚓ **Purser checked your tests in the background while you worked: the report lists "+countText+" missing tests.**")
@@ -413,6 +463,54 @@ func formatMaintenanceNotice(notice map[string]any) string {
 	}
 	lines = append(lines, "> *Say \"turn off maintenance\" to stop these reports, or run one any time with /purser:optimize.*")
 	return strings.Join(lines, "\n")
+}
+
+func proposalCoveragePct(raw any) (float64, bool) {
+	coverage, ok := proposalCoverage(raw)
+	if !ok {
+		return 0, false
+	}
+	return float64(int(math.Floor(coverage + 0.5))), true
+}
+
+func proposalCoverage(raw any) (float64, bool) {
+	evidence, ok := raw.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	counts, ok := evidence["Counts"].(map[string]any)
+	if !ok {
+		counts, ok = evidence["counts"].(map[string]any)
+	}
+	if !ok {
+		return 0, false
+	}
+	covered, coveredOK := exactInteger(counts["Covered"])
+	if !coveredOK {
+		covered, coveredOK = exactInteger(counts["covered"])
+	}
+	executable, executableOK := exactInteger(counts["Executable"])
+	if !executableOK {
+		executable, executableOK = exactInteger(counts["executable"])
+	}
+	if !coveredOK || !executableOK || covered < 0 || executable <= 0 || covered > executable {
+		return 0, false
+	}
+	return float64(covered) * 100 / float64(executable), true
+}
+
+func maintenanceFloat(value any) (float64, bool) {
+	switch number := value.(type) {
+	case float64:
+		return number, true
+	case json.Number:
+		parsed, err := strconv.ParseFloat(number.String(), 64)
+		return parsed, err == nil
+	case int:
+		return float64(number), true
+	default:
+		return 0, false
+	}
 }
 
 func rankMaintenanceFindings(findings []any, limit int) []map[string]any {
@@ -601,5 +699,13 @@ func promptMaintenanceGuidance(pending map[string]any) string {
 	if pending["report_type"] == nil || pending["report_type"] == "cleanup" {
 		instruction += "If they answer `clean up` or its equivalent in the user's language (including `temizle`), dispatch one ordinary Codex implementation job routed as subtle. Re-verify every listed item against current HEAD and remove exactly the still-unused listed items; skip each item that is no longer unused and explain why. After successful cleanup, run `" + cli + " mark-done --repo \"<repository-root>\" --report \"" + noticeFile + "\"` and include one `--acted \"<path_line>\"` argument per item actually removed, copying each `path_line` exactly from the report. Do not invent items or edit unlisted code. Any `temizle` cleanup must land as ONE separate commit containing only that cleanup; a single `git revert` must undo it.\n"
 	}
+	if pending["report_type"] == "test-gaps" {
+		instruction += maintenanceApplyInstruction(cli, noticeFile)
+	}
 	return instruction + text
+}
+
+func maintenanceApplyInstruction(cli, noticeFile string) string {
+	proposalFile := filepath.Join(filepath.Dir(noticeFile), "ready.json")
+	return "If the user says `add tests`, `testleri ekle`, or an equivalent explicit request, read `job_id` from the ready proposal at `" + proposalFile + "` and adopt that existing reviewed job with `codex_result` and `adopt=true`; do not start a replacement writing job or ask for confirmation again. Apply that job with `codex_apply`, wait for terminal host validation to pass, create one separate commit containing exactly this test patch, then run `" + cli + " mark-done --repo \"<repository-root>\" --report \"" + noticeFile + "\"`. Unknown, stale, skipped required validation, or failed validation means stop without marking it done.\n"
 }

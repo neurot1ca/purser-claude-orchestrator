@@ -468,6 +468,9 @@ func maintenanceGuidance(p map[string]any) string {
 			"skip each item that is no longer unused and explain why. After successful cleanup, run `" + cli + ` mark-done --repo "<repository-root>" --report "` + noticeFile + `"` + "` and include one `--acted \"<path_line>\"` argument per item actually removed, copying each `path_line` exactly from the report. Do not invent items or edit unlisted code. " +
 			"Any `temizle` cleanup must land as ONE separate commit containing only that cleanup; a single `git revert` must undo it.\n"
 	}
+	if p["report_type"] == "test-gaps" {
+		instruction += maintenanceApplyInstruction(cli, noticeFile)
+	}
 	return instruction + str(p["text"])
 }
 

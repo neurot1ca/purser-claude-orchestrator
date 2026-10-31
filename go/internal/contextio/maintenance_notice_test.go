@@ -3,11 +3,13 @@ package contextio
 import "purser-hook/internal/testutil"
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMaintenanceNoticeDropsResolvedFindings(t *testing.T) {
@@ -249,6 +251,93 @@ func TestMaintenanceNoticeCoverageTargetAndFindingOrder(t *testing.T) {
 		if first < 0 || second < 0 || first > second {
 			t.Fatalf("%s notice order mismatch for %q before %q: %s", test.reportType, test.first, test.second, text)
 		}
+	}
+}
+
+func TestReadyTestProposalRendersFrozenNoticeAndUsesActualTarget(t *testing.T) {
+	proposal := map[string]any{
+		"status": "ready", "baseline_head": strings.Repeat("a", 40), "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
+		"coverage_target_pct": float64(80), "new_test_count": float64(3),
+		"before": map[string]any{"Counts": map[string]any{"Covered": float64(3), "Executable": float64(4)}},
+		"after":  map[string]any{"Counts": map[string]any{"Covered": float64(9), "Executable": float64(10)}},
+	}
+	text := formatMaintenanceNotice(map[string]any{"report_type": "test-gaps", "test_proposal": proposal})
+	if want := `Coverage would rise from 75% to 90% with 3 new tests, ready in the background. Just say "add tests" to apply them as one commit.`; text != want {
+		t.Fatalf("ready notice = %q, want exact frozen sentence %q", text, want)
+	}
+	if got := formatMaintenanceNotice(map[string]any{"report_type": "test-gaps", "test_proposal": proposal}); strings.Contains(got, "code is now") {
+		t.Fatalf("proposed after-coverage triggered congratulations: %s", got)
+	}
+	proposal["before"] = map[string]any{"Counts": map[string]any{"Covered": float64(8), "Executable": float64(10)}}
+	got := formatMaintenanceNotice(map[string]any{"report_type": "test-gaps", "test_proposal": proposal})
+	if !strings.Contains(got, "code is now 80%") {
+		t.Fatalf("actual before-coverage did not retain target congratulations: %s", got)
+	}
+}
+
+func TestReadyTestProposalSuppressesStaleAndExpired(t *testing.T) {
+	repo := maintenanceNoticeGitRepo(t)
+	maintenanceNoticeWrite(t, repo, "source.txt", "baseline")
+	maintenanceNoticeCommit(t, repo, "baseline")
+	head := maintenanceNoticeHead(t, repo)
+	path := filepath.Join(t.TempDir(), "ready.json")
+	proposal := map[string]any{
+		"status": "ready", "baseline_head": head, "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
+		"new_test_count": float64(1),
+		"before":         map[string]any{"Counts": map[string]any{"Covered": float64(1), "Executable": float64(2)}},
+		"after":          map[string]any{"Counts": map[string]any{"Covered": float64(2), "Executable": float64(2)}},
+	}
+	write := func() {
+		t.Helper()
+		data, err := json.Marshal(proposal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	if _, ok := readyTestProposal(path, repo); !ok {
+		t.Fatal("fresh proposal was suppressed")
+	}
+	proposal["baseline_head"] = strings.Repeat("b", 40)
+	write()
+	if _, ok := readyTestProposal(path, repo); ok {
+		t.Fatal("stale proposal was advertised")
+	}
+	proposal["baseline_head"] = head
+	proposal["expires_at"] = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+	write()
+	if _, ok := readyTestProposal(path, repo); ok {
+		t.Fatal("expired proposal was advertised")
+	}
+}
+
+func TestMaintenanceApplyGuidanceParityAndOrdinaryGuidance(t *testing.T) {
+	cli, report := `"`+maintenanceCommandPath()+`" maintenance`, `C:\state\ready.json`
+	want := maintenanceApplyInstruction(cli, report)
+	prompt := promptMaintenanceGuidance(map[string]any{"report_type": "test-gaps", "notice_file": report, "text": "ready"})
+	stop := maintenanceGuidance(map[string]any{"report_type": "test-gaps", "notice_file": report, "text": "ready"})
+	for _, guidance := range []string{prompt, stop} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("apply guidance differs from shared instruction: %s", guidance)
+		}
+		for _, required := range []string{"add tests", "testleri ekle", "adopt=true", "codex_apply", "terminal host validation", "one separate commit", "mark-done"} {
+			if !strings.Contains(guidance, required) {
+				t.Fatalf("apply guidance missing %q: %s", required, guidance)
+			}
+		}
+		if strings.Contains(guidance, "dispatch one ordinary Codex implementation job") || strings.Contains(guidance, "Would you like") || strings.Contains(guidance, "Please confirm") {
+			t.Fatalf("apply guidance starts a replacement job or asks again: %s", guidance)
+		}
+		if !strings.Contains(guidance, "do not start a replacement writing job or ask for confirmation again") {
+			t.Fatalf("apply guidance does not prohibit replacement jobs and repeated confirmation: %s", guidance)
+		}
+	}
+	cleanup := promptMaintenanceGuidance(map[string]any{"report_type": "cleanup", "notice_file": report, "text": "ordinary"})
+	if !strings.Contains(cleanup, "clean up") || strings.Contains(cleanup, "codex_apply") {
+		t.Fatalf("ordinary cleanup guidance changed: %s", cleanup)
 	}
 }
 
