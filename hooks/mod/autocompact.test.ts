@@ -4,18 +4,25 @@ import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, resetAutoCompactF
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
 const normalized = (path: string) => path.replace(/\\/g, '/').replace(/(^|:)[A-Za-z]:(?=\/)/g, '$1')
 
-function engine(on, tokens: number, env: Record<string, string> = {}, failures = 0, setting: string | null = '{"enabled": true}') {
+function engine(on, tokens: number, env: Record<string, string> = {}, failures = 0, setting: string | null = '{"enabled": true}', persistWrites = false) {
   resetAutoCompactForTests()
   const calls = { compacts: 0 }
   const reads: string[] = []
   const logs: string[] = []
+  const files = new Map<string, string>()
+  let sessionId = 'session-1'
   const clock = mock.clock(on)
   mock.env(on, { OS: 'Linux', HOME: '/home', ...env })
   on('fs.read', async (_$, e) => {
+    if (/auto-compact.log$/.test(e.path)) {
+      return { value: files.get(e.path) ?? '' }
+    }
     if (setting === null || !/auto-compact.json$/.test(e.path)) throw new Error('ENOENT')
     reads.push(e.path)
     return { value: setting }
   })
+  if (persistWrites) on('fs.write', async (_$, e) => { files.set(e.path, e.text); return { value: undefined } })
+  on('session.id', () => ({ value: sessionId }))
   on('turn.complete', async () => ({ text: 'ok' }))
   on('prompt.submit', async (_$, e) => ({ text: e.text, origin: e.origin }))
   on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
@@ -25,7 +32,7 @@ function engine(on, tokens: number, env: Record<string, string> = {}, failures =
     if (calls.compacts <= failures) throw new Error('a turn is running')
     return { messages: [{ role: 'user', text: 'compacted', toolUses: [] }] }
   })
-  return { calls, clock, logs, reads }
+  return { calls, clock, logs, reads, files, setSessionId: (id: string) => { sessionId = id } }
 }
 
 test('reads the threshold override and the off switch', () => {
@@ -68,6 +75,7 @@ test('does not arm the idle timer below 100K tokens', async ($, on) => {
 test('a prompt before the cache timer fires prevents compaction', async ($, on) => {
   const { calls, clock } = engine(on, 130_000)
   await $.turn.complete(TURN)
+  await clock.advance(60_000)
   await $.prompt.submit({ text: 'continue', asUser: true })
   await clock.advance(270_000)
   expect(calls.compacts).toBe(0)
@@ -96,6 +104,16 @@ test('a one hour cache write arms the idle timer with the long TTL', async ($, o
   await clock.advance(1_000)
   expect(calls.compacts).toBe(1)
   await clock.advance(3_600_000)
+  expect(calls.compacts).toBe(1)
+})
+
+test('short chained timers reach the one hour cache deadline', async ($, on) => {
+  const { calls, clock } = engine(on, 130_000)
+  await $.turn.complete({ ...TURN, usage: { model: 'test', input_tokens: 0, output_tokens: 0, cache_creation: { ephemeral_1h_input_tokens: 1, ephemeral_5m_input_tokens: 0 } } })
+  for (let minute = 0; minute < 54; minute++) await clock.advance(60_000)
+  expect(calls.compacts).toBe(0)
+  await clock.advance(60_000)
+  await clock.advance(1_000)
   expect(calls.compacts).toBe(1)
 })
 
@@ -250,17 +268,30 @@ test('a later completed turn can compact after turn-running refusals', async ($,
 })
 
 test('writes each main turn decision to the auto-compact log', async ($, on) => {
-  const { clock } = engine(on, 260_000, { USERPROFILE: 'C:/home', OS: 'Windows_NT' })
-  const writes: Record<string, string> = {}
-  on('fs.write', async (_$, e) => {
-    writes[e.path] = e.text
-    return { value: undefined }
-  })
+  const { clock, files } = engine(on, 260_000, { USERPROFILE: 'C:/home', OS: 'Windows_NT' }, 0, '{"enabled": true}', true)
   await $.turn.complete(TURN)
   await clock.advance(1_000)
-  const log = Object.entries(writes).find(([path]) => path.endsWith('auto-compact.log'))?.[1]
+  const log = [...files.entries()].find(([path]) => path.endsWith('auto-compact.log'))?.[1]
   expect(log).toContain('260000 tokens, threshold 250000, compacting')
   expect(log).toContain('at 260000 tokens')
+})
+
+test('trace history survives a module reset and keeps events from two sessions', async ($, on) => {
+  const { clock, files, setSessionId } = engine(on, 260_000, {}, 0, '{"enabled": true}', true)
+  setSessionId('s1')
+  await $.turn.complete(TURN)
+  await clock.advance(1_000)
+  const log = () => [...files.entries()].find(([path]) => path.endsWith('auto-compact.log'))?.[1]
+  const firstHistory = log()!
+  expect(firstHistory).toContain('[s1]')
+
+  resetAutoCompactForTests()
+  setSessionId('s2')
+  await $.turn.complete({ ...TURN, turnId: 't2' })
+  const history = log()!
+  expect(history).toContain('[s1]')
+  expect(history).toContain('[s2]')
+  expect(history.split('\n').filter(Boolean).length).toBeGreaterThan(firstHistory.split('\n').filter(Boolean).length)
 })
 
 test('recognises the SDK-host refusal that needs a /compact prompt', () => {

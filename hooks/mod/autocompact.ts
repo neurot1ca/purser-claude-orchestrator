@@ -23,10 +23,10 @@ const LONG_CACHE_MARGIN_MS = 5 * 60_000
 const IDLE_COMPACT_MIN_TOKENS = 100_000
 const LONG_GAP_MS = 5 * 60_000
 
-const LOG_LINES = 40
+const LOG_LINES = 200
+const LOAD_TRACE_TAG = Math.random().toString(36).slice(2, 8)
 
 let inFlight = false
-let lines: string[] = []
 // The size the last main-conversation compaction left, from its own result:
 // usage() cannot report it right after a /compact command.
 let compactedTokens: number | undefined
@@ -43,7 +43,6 @@ let pendingWake: string | undefined
 export function resetAutoCompactForTests() {
   idleTimer?.cancel()
   inFlight = false
-  lines = []
   compactedTokens = undefined
   cacheTtlMs = DEFAULT_CACHE_TTL_MS
   previousTurnEnd = undefined
@@ -70,15 +69,20 @@ export function thresholdFrom(value: string | undefined): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : DEFAULT_THRESHOLD
 }
 
-// The only durable trace: the last LOG_LINES decisions in the state root's auto-compact.log
-// (fs.write replaces the file), because $.ui.log shows nothing when a hook runs late.
+// Keep a bounded, durable trace because $.ui.log shows nothing when a hook runs late.
 async function trace($, text: string) {
   try {
     const stamp = new Date(await $.clock.now()).toISOString()
-    lines = [...lines, `${stamp} ${text}`].slice(-LOG_LINES)
     const root = await runtimeStateRoot($)
     if (root) {
-      await $.fs.write(`${root.replace(/[\\/]+$/, '')}/auto-compact.log`, `${lines.join('\n')}\n`)
+      const path = `${root.replace(/[\\/]+$/, '')}/auto-compact.log`
+      let session = LOAD_TRACE_TAG
+      try { session = String(await $.session.id()).slice(0, 8) || LOAD_TRACE_TAG } catch { /* use the per-load tag */ }
+      let history = ''
+      try { history = await $.fs.read(path) } catch { /* first trace */ }
+      const lines = history.split(/\r?\n/).filter(Boolean)
+      lines.push(`${stamp} [${session}] ${text}`)
+      await $.fs.write(path, `${lines.slice(-LOG_LINES).join('\n')}\n`)
     }
   } catch { /* logging must not affect the turn */ }
 }
@@ -163,7 +167,7 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
       if (needsCompactPrompt(error)) {
         $.command.run({ command: 'compact' }).then(
           async () => {
-            await log($, `ran /compact at ${tokens} tokens`)
+            await log($, `/compact command resolved at ${tokens} tokens (idle: ${idle})`)
             await resume($, tokens)
           },
           (runError) => log($, `/compact failed at ${tokens} tokens: ${String(runError)}`),
@@ -206,7 +210,14 @@ export function registerAutoCompact(on) {
     if (e.isAborted || inFlight) return result
     try {
       const threshold = thresholdFrom(await $.env.get('PURSER_AUTO_COMPACT_TOKENS'))
-      if (threshold === undefined || !(await optedIn($))) return result
+      if (threshold === undefined) {
+        await trace($, `turn ${e.turnId}: skipped because auto-compact is disabled`)
+        return result
+      }
+      if (!(await optedIn($))) {
+        await trace($, `turn ${e.turnId}: skipped because auto-compact is not opted in`)
+        return result
+      }
       const tokens = (await $.session.usage()).context.tokens
       const cacheReads = e.usage?.cache_read_input_tokens ?? 0
       const cacheCreation = e.usage?.cache_creation
@@ -223,21 +234,37 @@ export function registerAutoCompact(on) {
           const ttl = cacheTtlMs
           const margin = ttl === LONG_CACHE_TTL_MS ? LONG_CACHE_MARGIN_MS : CACHE_MARGIN_MS
           const generation = ++idleGeneration
+          const dueAt = previousTurnEnd! + Math.max(0, ttl - margin)
           idleTimerTokens = tokens
           await trace($, `idle timer armed at ${tokens} tokens, TTL ${ttl}ms`)
-          idleTimer = $.clock.after(Math.max(0, ttl - margin), async () => {
-            if (generation !== idleGeneration) return
-            idleTimer = undefined
-            await trace($, `idle timer fired at ${tokens} tokens, TTL ${ttl}ms`)
-            if (!idle || inFlight) {
+          const checkIdle = async () => {
+            const delay = Math.min(60_000, Math.max(0, dueAt - await $.clock.now()))
+            idleTimer = $.clock.after(delay, async () => {
+              if (generation !== idleGeneration) return
+              idleTimer = undefined
+              const checkedAt = await $.clock.now()
+              if (checkedAt < dueAt) {
+                if (idle) await checkIdle()
+                else {
+                  idleTimerTokens = undefined
+                  await trace($, `idle check skipped at ${tokens} tokens: session not idle`)
+                }
+                return
+              }
+              await trace($, `idle timer fired at ${tokens} tokens, TTL ${ttl}ms`)
+              if (!idle || inFlight) {
+                idleTimerTokens = undefined
+                await trace($, `idle timer skipped at ${tokens} tokens: ${!idle ? 'session not idle' : 'compaction already in flight'}`)
+                return
+              }
               idleTimerTokens = undefined
-              await trace($, `idle timer dropped at ${tokens} tokens, TTL ${ttl}ms (session not idle)`)
-              return
-            }
-            idleTimerTokens = undefined
-            inFlight = true
-            compactWhenIdle($, tokens)
-          })
+              inFlight = true
+              compactWhenIdle($, tokens)
+            })
+          }
+          await checkIdle()
+        } else if (idle && tokens !== undefined) {
+          await trace($, `turn ${e.turnId}: idle compaction skipped below ${IDLE_COMPACT_MIN_TOKENS} tokens`)
         }
         return result
       }
