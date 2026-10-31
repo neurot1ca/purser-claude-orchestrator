@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.222 — 2026-10-31
+
+- **Fixed:** "add tests" and other report actions no longer reject a valid report as belonging to another project when the state folder path goes through a symlink (macOS) or a Windows short name.
+
 ## 0.1.221 — 2026-10-31
 
 - **Fixed:** the handoff narrative marker survives state rewrites, is dated from the last narrative change, and no longer appears in restored context, so a stale narrative is flagged reliably.
