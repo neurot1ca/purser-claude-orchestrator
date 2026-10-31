@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.220 — 2026-10-31
+
+- **Fixed:** idle auto-compaction checks every minute against the wall clock instead of relying on one long timer, and its trace in `auto-compact.log` survives reloads and is tagged by session.
+- **Fixed:** with auto-compact on, Claude is asked to refresh the handoff narrative before the threshold is reached, and a narrative unchanged since the last restore comes back flagged as stale.
+
 ## 0.1.219 — 2026-10-31
 
 - **Added:** the test-gaps maintenance report now writes tests toward `coverage_target_pct` in an isolated worktree, measures coverage on the host (Go, Python, JS), requires an executed review, and keeps one ready test patch per project; saying "add tests" applies it, and it completes only after the validated patch is committed alone.
