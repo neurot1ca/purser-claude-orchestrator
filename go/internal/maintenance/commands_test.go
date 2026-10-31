@@ -108,6 +108,17 @@ func TestMarkDoneTestGapsRecoversPersistedCompletion(t *testing.T) {
 	}
 }
 
+func TestMarkDoneTestGapsAcceptsSymlinkedStatePath(t *testing.T) {
+	repo, state, noticePath, _ := testGapCompletionFixture(t, "passed", "correct")
+	stateAlias := filepath.Join(t.TempDir(), "state")
+	if err := os.Symlink(state, stateAlias); err != nil {
+		t.Skipf("directory symlinks are unavailable: %v", err)
+	}
+	if _, err := Control(stateAlias, "mark-done", repo, "", noticePath, nil); err != nil {
+		t.Fatalf("mark-done through symlinked state path: %v", err)
+	}
+}
+
 func testGapCompletionFixture(t *testing.T, validation, commitKind string) (repo, state, noticePath, readyPath string) {
 	t.Helper()
 	repo, state = t.TempDir(), t.TempDir()

@@ -138,7 +138,7 @@ func Control(state, command, repository, decision, report string, acted []string
 		reportType := filepath.Base(filepath.Dir(path))
 		expected := filepath.Join(dir, "reports", reportType)
 		expected, _ = filepath.Abs(expected)
-		if (reportType != "cleanup" && reportType != "test-gaps") || filepath.Clean(filepath.Dir(path)) != filepath.Clean(expected) || !strings.HasSuffix(filepath.Base(path), ".notice.json") {
+		if (reportType != "cleanup" && reportType != "test-gaps") || !sameProjectPath(filepath.Dir(path), expected) || !strings.HasSuffix(filepath.Base(path), ".notice.json") {
 			return "", errors.New("report notice must belong to this project")
 		}
 		data, err := os.ReadFile(path)
