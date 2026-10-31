@@ -14,6 +14,16 @@ import (
 func schedulePostReview(repoRoot string, pending map[string]any, bundle map[string]any, resolved postProfile, configured []profile.Check, gateConfig map[string]any, checkDeadline time.Duration, reviewerAvailable, routeKnown bool) {
 	delta, _ := bundle["delta"].(map[string]any)
 	phase := stringValue(pending["phase"])
+	maintenance := pending["maintenance_test_job"] != nil
+	maintenanceValid := pending["maintenance_test_job"] == true && pending["maintenance_identity_source"] == "host" &&
+		stringValue(pending["maintenance_job_id"]) != "" && stringValue(pending["maintenance_job_id"]) == stringValue(pending["job_id"])
+	if maintenance && !maintenanceValid {
+		bundle["reviewer1_result"] = nil
+		bundle["reviewer1_skipped_reason"] = "MAINTENANCE_IDENTITY_INVALID"
+		bundle["claude_review_mode"] = review.Full
+		bundle["findings"] = appendPostFinding(bundle["findings"], "MAINTENANCE_IDENTITY_INVALID", "Maintenance test job identity was not recorded by the host.")
+		return
+	}
 	if phase == "operation" {
 		bundle["reviewer1_result"] = nil
 		bundle["reviewer1_skipped_reason"] = review.PhaseOperation
@@ -90,6 +100,13 @@ func schedulePostReview(repoRoot string, pending map[string]any, bundle map[stri
 	}
 	if phase == "plan" {
 		gate = review.GateDecision{Reason: review.PhasePlan}
+	}
+	if maintenance && phase != "plan" && (files > 0 || lines > 0) {
+		if len(paths) == 0 {
+			gate = review.GateDecision{Reason: "MAINTENANCE_DELTA_INVALID"}
+		} else {
+			gate = review.GateDecision{Run: true, Reason: "MAINTENANCE_REVIEW_REQUIRED"}
+		}
 	}
 	if resolved.Reviewer == "none" {
 		gate = review.GateDecision{Reason: "REVIEWER_DISABLED"}

@@ -42,6 +42,9 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 		}
 		job := readBoardJSON(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json"))
 		if job != nil && job["jobId"] == id && job["call"] == index["call"] {
+			if job["maintenance_test_job"] == true || index["maintenance_test_job"] == true {
+				continue
+			}
 			if label, _ := job["label"].(string); job["state"] == "QUEUED" && strings.TrimSpace(label) == "" {
 				label, _ = job["taskId"].(string)
 				if strings.TrimSpace(label) == "" {
