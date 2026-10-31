@@ -206,12 +206,19 @@ func setupRecordedReply(t *testing.T, routeModel, routeEffort, recordedModel, re
 }
 
 func TestPlanMilestoneLabel(t *testing.T) {
+	suffix := " [ci-go-plan-5/5]"
+	longTurkish := strings.Repeat("ğ", 90)
+	alreadySuffixed := strings.Repeat("ş", 90) + suffix
 	for _, test := range []struct {
 		name, taskID, label, want string
 	}{
 		{name: "plan milestone", taskID: "ci-go-plan-m5of5", label: "CI green on 3 OSes", want: "CI green on 3 OSes [ci-go-plan-5/5]"},
 		{name: "non-plan", taskID: "ci-go", label: "CI green on 3 OSes", want: "CI green on 3 OSes"},
 		{name: "already suffixed", taskID: "ci-go-plan-m5of5", label: "CI green on 3 OSes [ci-go-plan-5/5]", want: "CI green on 3 OSes [ci-go-plan-5/5]"},
+		{name: "already suffixed long Turkish", taskID: "ci-go-plan-m5of5", label: alreadySuffixed, want: strings.Repeat("ş", 80-utf8.RuneCountInString(suffix)) + suffix},
+		{name: "unsuffixed long plan", taskID: "ci-go-plan-m5of5", label: longTurkish, want: strings.Repeat("ğ", 80-utf8.RuneCountInString(suffix)) + suffix},
+		{name: "long non-plan", taskID: "ci-go", label: "  " + longTurkish + "  ", want: strings.Repeat("ğ", 80)},
+		{name: "short unchanged", taskID: "ci-go", label: "kısa", want: "kısa"},
 		{name: "empty", taskID: "ci-go-plan-m5of5", label: "", want: ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -219,25 +226,6 @@ func TestPlanMilestoneLabel(t *testing.T) {
 				t.Fatalf("planMilestoneLabel(%q, %q) = %q, want %q", test.taskID, test.label, got, test.want)
 			}
 		})
-	}
-}
-
-func TestPlanMilestoneLabelClipsLongLabel(t *testing.T) {
-	taskID := "ci-go-plan-m5of5"
-	suffix := " [ci-go-plan-5/5]"
-	label := strings.Repeat("界", 80)
-	got, ok := planMilestoneLabel(taskID, label).(string)
-	if !ok {
-		t.Fatalf("planMilestoneLabel returned %T, want string", planMilestoneLabel(taskID, label))
-	}
-	if !strings.HasSuffix(got, suffix) {
-		t.Fatalf("planMilestoneLabel result %q does not end with %q", got, suffix)
-	}
-	if gotRunes := utf8.RuneCountInString(got); gotRunes != 80 {
-		t.Fatalf("planMilestoneLabel result has %d runes, want 80", gotRunes)
-	}
-	if want := strings.Repeat("界", 80-utf8.RuneCountInString(suffix)) + suffix; got != want {
-		t.Fatalf("planMilestoneLabel result = %q, want %q", got, want)
 	}
 }
 

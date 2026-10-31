@@ -960,23 +960,35 @@ func inputLabel(event map[string]any) any {
 
 func planMilestoneLabel(taskID string, label any) any {
 	text, ok := label.(string)
-	if !ok || text == "" {
+	if !ok {
 		return label
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return text
 	}
 	match := planMilestoneTaskID.FindStringSubmatch(taskID)
 	if len(match) != 4 {
-		return label
+		runes := []rune(text)
+		if len(runes) > 80 {
+			text = strings.TrimRightFunc(string(runes[:80]), unicode.IsSpace)
+		}
+		return text
 	}
 	suffix := fmt.Sprintf(" [%s-%s/%s]", match[1], match[2], match[3])
+	suffixRunes := []rune(suffix)
 	if strings.HasSuffix(text, suffix) {
-		return label
+		text = strings.TrimSuffix(text, suffix)
 	}
 	textRunes := []rune(text)
-	suffixRunes := []rune(suffix)
-	if len(textRunes)+len(suffixRunes) > 80 {
-		text = strings.TrimRightFunc(string(textRunes[:80-len(suffixRunes)]), unicode.IsSpace)
+	maxPrefixRunes := 80 - len(suffixRunes)
+	if maxPrefixRunes < 0 {
+		maxPrefixRunes = 0
 	}
-	return text + suffix
+	if len(textRunes) > maxPrefixRunes {
+		text = string(textRunes[:maxPrefixRunes])
+	}
+	return strings.TrimRightFunc(text, unicode.IsSpace) + suffix
 }
 
 func stringSliceAny(values []string) []any {
