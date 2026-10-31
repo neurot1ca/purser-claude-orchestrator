@@ -395,8 +395,8 @@ func formatMaintenanceNotice(notice map[string]any) string {
 	if notice["report_type"] == "test-gaps" {
 		lines := []string{}
 		if proposal, ok := notice["test_proposal"].(map[string]any); ok {
-			before, beforeOK := proposalCoveragePct(proposal["before"])
-			after, afterOK := proposalCoveragePct(proposal["after"])
+			before, beforeOK := proposalCoverage(proposal["before"])
+			after, afterOK := proposalCoverage(proposal["after"])
 			count, countOK := exactInteger(proposal["new_test_count"])
 			if beforeOK && afterOK && after > before && countOK && count > 0 {
 				if coverage, ok := proposalCoverage(proposal["before"]); ok {
@@ -408,7 +408,13 @@ func formatMaintenanceNotice(notice map[string]any) string {
 						lines = append(lines, fmt.Sprintf("> ⚓ **Purser: your code is now %d%% covered by tests! 🚀** You have reached a top-tier quality bar. Purser found the gaps for you in the background while you focused on your work. Type /purser:optimize for the last few steps.", int(math.Floor(coverage+0.5))))
 					}
 				}
-				lines = append(lines, fmt.Sprintf("Coverage would rise from %d%% to %d%% with %d new tests, ready in the background. Just say \"add tests\" to apply them as one commit.", int(math.Floor(before+0.5)), int(math.Floor(after+0.5)), count))
+				beforePct := int(math.Floor(before + 0.5))
+				afterPct := int(math.Floor(after + 0.5))
+				beforeText, afterText := fmt.Sprintf("%d%%", beforePct), fmt.Sprintf("%d%%", afterPct)
+				if beforePct == afterPct {
+					beforeText, afterText = fmt.Sprintf("%.1f%%", before), fmt.Sprintf("%.1f%%", after)
+				}
+				lines = append(lines, fmt.Sprintf("Coverage would rise from %s to %s with %d new tests, ready in the background. Just say \"add tests\" to apply them as one commit.", beforeText, afterText, count))
 				return strings.Join(lines, "\n")
 			}
 			return ""
@@ -463,14 +469,6 @@ func formatMaintenanceNotice(notice map[string]any) string {
 	}
 	lines = append(lines, "> *Say \"turn off maintenance\" to stop these reports, or run one any time with /purser:optimize.*")
 	return strings.Join(lines, "\n")
-}
-
-func proposalCoveragePct(raw any) (float64, bool) {
-	coverage, ok := proposalCoverage(raw)
-	if !ok {
-		return 0, false
-	}
-	return float64(int(math.Floor(coverage + 0.5))), true
 }
 
 func proposalCoverage(raw any) (float64, bool) {

@@ -275,6 +275,32 @@ func TestReadyTestProposalRendersFrozenNoticeAndUsesActualTarget(t *testing.T) {
 	}
 }
 
+func TestReadyTestProposalCoverageDisplayPrecision(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		before     int
+		after      int
+		wantBefore string
+		wantAfter  string
+	}{
+		{name: "small improvement", before: 801, after: 804, wantBefore: "80.1%", wantAfter: "80.4%"},
+		{name: "different whole percentages", before: 802, after: 850, wantBefore: "80%", wantAfter: "85%"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proposal := map[string]any{
+				"status": "ready", "new_test_count": float64(2),
+				"before": map[string]any{"Counts": map[string]any{"Covered": float64(tc.before), "Executable": float64(1000)}},
+				"after":  map[string]any{"Counts": map[string]any{"Covered": float64(tc.after), "Executable": float64(1000)}},
+			}
+			got := formatMaintenanceNotice(map[string]any{"report_type": "test-gaps", "test_proposal": proposal})
+			want := "Coverage would rise from " + tc.wantBefore + " to " + tc.wantAfter + " with 2 new tests, ready in the background. Just say \"add tests\" to apply them as one commit."
+			if got != want {
+				t.Fatalf("ready notice = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestReadyTestProposalSuppressesStaleAndExpired(t *testing.T) {
 	repo := maintenanceNoticeGitRepo(t)
 	maintenanceNoticeWrite(t, repo, "source.txt", "baseline")
