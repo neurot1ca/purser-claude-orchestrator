@@ -38,10 +38,20 @@ func PreCompact(event map[string]any) {
 		return
 	}
 	records := readTranscriptRecords(stringValue(event["transcript_path"]))
+	if stringValue(event["transcript_path"]) == "" {
+		if raw, ok := event["transcript_records"].([]any); ok {
+			for _, item := range raw {
+				if record, ok := item.(map[string]any); ok {
+					records = append(records, record)
+				}
+			}
+		}
+	}
 	body := compactionMechanicalState(repository, records)
 	start += len(stateStart)
 	content = content[:start] + "\n" + body + "\n" + content[end:]
 	content = replaceRecentTurns(content, formatRecentTurns(records))
+	content = updateNarrativeMarker(content, time.Now().UTC().Format("2006-01-02"), false)
 	_ = writeHandoffAtomically(path, []byte(content))
 }
 

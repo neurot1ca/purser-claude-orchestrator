@@ -2,6 +2,7 @@ package contextio
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 )
 
 const postCompactContextTokens = 75000
+const autoCompactAdviceHeadroom = 30000
 
 var advisorTask = regexp.MustCompile(`^ORCH\|task=([^|\s]+)\|`)
 
@@ -86,6 +88,11 @@ func compactionAdvice(event map[string]any, repository, statePath, session strin
 		}
 	}()
 	settings := compactionSettings()
+	if autoCompactModActive() {
+		if threshold, ok := autoCompactThreshold(); ok {
+			settings.threshold = min(settings.threshold, max(1, threshold-autoCompactAdviceHeadroom))
+		}
+	}
 	records := readTranscriptRecords(stringValue(event["transcript_path"]))
 	context := transcriptUsageContext(records)
 	state := readAdvisorState(statePath, session)
@@ -497,6 +504,7 @@ func updateAdvisorHandoff(repository string, records []map[string]any, context i
 		text = strings.TrimRightFunc(text, isPythonWhitespace) + "\n" + stateStart + "\n" + body + "\n" + stateEnd + "\n"
 	}
 	text = replaceRecentTurns(text, formatRecentTurns(records))
+	text = updateNarrativeMarker(text, time.Now().UTC().Format("2006-01-02"), false)
 	return writeHandoffAtomically(path, []byte(text))
 }
 
@@ -556,4 +564,93 @@ func stringSlice(value any) []string {
 		}
 	}
 	return result
+}
+
+func autoCompactThreshold() (int, bool) {
+	raw := os.Getenv("PURSER_AUTO_COMPACT_TOKENS")
+	if raw == "0" || strings.ToLower(raw) == "off" {
+		return 0, false
+	}
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 250000, true
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n <= 0 {
+		return 250000, true
+	}
+	return n, true
+}
+
+func narrativeHash(content string) string {
+	var narrative strings.Builder
+	section := ""
+	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "<!-- PURSER:NARRATIVE:") {
+			continue
+		}
+		if trimmed == stateStart || trimmed == recentStart {
+			section = ""
+			continue
+		}
+		if strings.HasPrefix(trimmed, "## ") {
+			section = trimmed
+		}
+		if section == "## Goal" || section == "## State" || section == "## Decisions" || section == "## Next" || section == "## Open risks" || section == "## Files to load" {
+			narrative.WriteString(line)
+			narrative.WriteByte('\n')
+		}
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(narrative.String())))
+}
+
+func updateNarrativeMarker(content, date string, restored bool) string {
+	const prefix = "<!-- PURSER:NARRATIVE:"
+	hash := narrativeHash(content)
+	oldHash, oldDate, oldRestored := "", date, ""
+	if start := strings.Index(content, prefix); start >= 0 {
+		if end := strings.Index(content[start:], " -->"); end >= 0 {
+			fields := strings.Split(content[start+len(prefix):start+end], ":")
+			if len(fields) == 3 {
+				oldHash, oldDate, oldRestored = fields[0], fields[1], fields[2]
+			}
+			content = content[:start] + content[start+end+4:]
+		}
+	}
+	if oldHash == "" || oldHash != hash {
+		oldDate = date
+	}
+	if restored {
+		oldRestored = hash
+	}
+	marker := prefix + hash + ":" + oldDate + ":" + oldRestored + " -->"
+	if i := strings.Index(content, stateEnd); i >= 0 {
+		i += len(stateEnd)
+		return content[:i] + "\n" + marker + content[i:]
+	}
+	return strings.TrimRight(content, "\n") + "\n" + stateStart + "\n" + marker + "\n" + stateEnd + "\n"
+}
+
+func narrativeRestoreStatus(content, fileDate, today string) (string, string, bool) {
+	const prefix = "<!-- PURSER:NARRATIVE:"
+	hash := narrativeHash(content)
+	start := strings.Index(content, prefix)
+	if start < 0 {
+		return updateNarrativeMarker(content, fileDate, true), fileDate, false
+	}
+	end := strings.Index(content[start:], " -->")
+	if end < 0 {
+		return updateNarrativeMarker(content, fileDate, true), fileDate, false
+	}
+	fields := strings.Split(content[start+len(prefix):start+end], ":")
+	if len(fields) != 3 || fields[0] == "" {
+		return updateNarrativeMarker(content, fileDate, true), fileDate, false
+	}
+	date := fields[1]
+	if fields[0] != hash {
+		date = today
+	}
+	stale := fields[0] == hash && fields[2] == hash
+	return updateNarrativeMarker(content, date, true), date, stale
 }

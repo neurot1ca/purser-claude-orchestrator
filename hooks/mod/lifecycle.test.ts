@@ -30,7 +30,7 @@ test('classic lifecycle events send full hook input and map Go results', async (
   const start = await $.classic.SessionStart({ session_id: 's1', cwd: '/repo', source: 'compact' })
   await $.classic.SessionStart({ session_id: 's1', cwd: '/repo', source: 'clear' })
   await $.classic.SessionStart({ session_id: 's1', cwd: '/repo', source: 'resume' })
-  const compact = await $.classic.PreCompact({ session_id: 's1', cwd: '/repo', trigger: 'manual', custom_instructions: null })
+  const compact = await $.classic.PreCompact({ session_id: 's1', cwd: '/repo', transcript_path: '/repo/session.jsonl', trigger: 'manual', custom_instructions: null })
   const stop = await $.classic.Stop({ session_id: 's1', cwd: '/repo', stop_hook_active: false, last_assistant_message: 'Done.' })
 
   expect(prompt.additionalContext).toEqual(['prior prompt', 'prompt context'])
@@ -45,6 +45,7 @@ test('classic lifecycle events send full hook input and map Go results', async (
     { session_id: 's1', transcript_path: '', cwd: '/repo', source: 'resume', hook_event_name: 'SessionStart' },
   ])
   expect(sent[4].trigger).toBe('manual')
+  expect(sent[4].transcript_path).toBe('/repo/session.jsonl')
   expect(sent[5].last_assistant_message).toBe('Done.')
   expect(paths.every(path => path.replace(/\\/g, '/').endsWith('/bin/purser-hook-windows-amd64.exe'))).toBe(true)
 })
@@ -70,6 +71,31 @@ test('each lifecycle event passes through Go failures and logs once per session'
   expect(await $.classic.PreCompact({ session_id: 's2', trigger: 'auto', custom_instructions: null })).toEqual({})
   expect(await $.classic.Stop({ session_id: 's2', stop_hook_active: false })).toEqual({})
   expect(logs.length).toBe(1)
+})
+
+test('manual PreCompact without a transcript path forwards the live session', async ($, on) => {
+  const sent: Record<string, any>[] = []
+  on('env.get', (_$, e) => ({ value: e.name === 'OS' ? 'Windows_NT' : e.name === 'PROCESSOR_ARCHITECTURE' ? 'AMD64' : undefined }))
+  on('session.messages', (_$, e) => {
+    expect(e.as).toBe('api')
+    return { value: [{ role: 'user', content: 'current user' }, { role: 'assistant', content: 'current assistant' }] }
+  })
+  on('session.usage', () => ({ value: { context: { tokens: 123456 } } }))
+  on('process.run', (_$, e) => {
+    expect(e.init.cwd).toBe('/repo')
+    sent.push(JSON.parse(e.init.stdin))
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  on('classic.PreCompact', () => ({}))
+
+  await $.classic.PreCompact({ session_id: 'manual-no-transcript', cwd: '/repo', trigger: 'manual', custom_instructions: null })
+
+  expect(sent.length).toBe(1)
+  expect(sent[0].trigger).toBe('manual')
+  expect(sent[0].transcript_records).toEqual([
+    { type: 'user', message: { role: 'user', content: 'current user' } },
+    { type: 'assistant', message: { role: 'assistant', content: 'current assistant', usage: { input_tokens: 123456 } } },
+  ])
 })
 
 test('Codex enforcement Stop block survives the Go Stop result', async ($, on) => {

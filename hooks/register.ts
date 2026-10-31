@@ -38,6 +38,16 @@ async function lifecycle($, e, next, name: LifecycleEvent) {
   if (name === 'UserPromptSubmit' || name === 'Stop') $.ui.invalidate('ui.render')
   let mapped: ReturnType<typeof mapHookOutput> = {}
   try {
+    if (name === 'PreCompact' && !e.transcript_path) {
+      // Diskless hosts leave transcript_path empty; read their live conversation.
+      try {
+        const [messages, usage] = await Promise.all([$.session.messages({ as: 'api' }), $.session.usage()])
+        e = { ...e, transcript_records: messages.map(message => ({
+          type: message.role,
+          message: { ...message, ...(message.role === 'assistant' ? { usage: { input_tokens: usage.context.tokens } } : {}) },
+        })) }
+      } catch { /* Keep the existing lifecycle path if the session cannot be read. */ }
+    }
     binaryPath ??= detectBinary($).catch(error => {
       binaryPath = undefined
       throw error

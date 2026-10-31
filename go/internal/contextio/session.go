@@ -763,10 +763,14 @@ func restoreHandoff(source, path, content, transcriptPath string) string {
 		footer := "Full file: " + path
 		return handoffHeader + "\n" + instruction + recentStart + "\n" + recent + "\n" + recentEnd + "\n" + footer
 	}
+	today := time.Now().UTC().Format("2006-01-02")
+	content, narrativeDate, narrativeStale := narrativeRestoreStatus(content, info.ModTime().UTC().Format("2006-01-02"), today)
+	markedContent := content
 	content, meaningful := cleanHandoff(content)
 	if !meaningful {
 		return ""
 	}
+	_ = writeHandoffAtomically(path, []byte(markedContent))
 	if source == "compact" {
 		if recent, boundary := recentTurns(transcriptPath); boundary {
 			if start := strings.Index(content, recentStart); start >= 0 {
@@ -785,12 +789,16 @@ func restoreHandoff(source, path, content, transcriptPath string) string {
 		instruction = "Reply to the user in " + language + "; everything else stays as the project rules say.\n"
 	}
 	footer := "Full file: " + path
-	full := handoffHeader + "\n" + instruction + trimPythonWhitespace(content) + "\n" + footer
+	narrativeWarning := ""
+	if narrativeStale {
+		narrativeWarning = "Narrative not updated since " + narrativeDate + "; trust the STATE block, git and NEXT.md over it.\n"
+	}
+	full := handoffHeader + "\n" + instruction + narrativeWarning + trimPythonWhitespace(content) + "\n" + footer
 	if runeLen(full) <= maxHandoffContext {
 		return full
 	}
 	truncation := "... truncated; read the full file at " + path
-	prefix := handoffHeader + "\n" + instruction
+	prefix := handoffHeader + "\n" + instruction + narrativeWarning
 	recent := ""
 	if start := strings.Index(content, recentStart); start >= 0 {
 		if end := strings.Index(content[start:], recentEnd); end >= 0 {
@@ -985,6 +993,9 @@ func cleanHandoff(content string) (string, bool) {
 		inRecent := false
 		for j := i + 1; j < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[j]), "## "); j++ {
 			trimmed := strings.TrimSpace(lines[j])
+			if strings.HasPrefix(trimmed, "<!-- PURSER:NARRATIVE:") {
+				continue
+			}
 			if trimmed == recentStart {
 				inRecent = true
 				continue
@@ -1013,6 +1024,9 @@ func cleanHandoff(content string) (string, bool) {
 	meaningful := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "<!-- PURSER:NARRATIVE:") {
+			continue
+		}
 		switch trimmed {
 		case "", "# Purser handoff", stateStart, stateEnd, recentStart, recentEnd, "## Goal", "## State", "## Decisions", "## Next", "## Open risks", "## Files to load":
 			continue
