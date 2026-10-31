@@ -335,6 +335,19 @@ func ApplyValidationResult(stateRoot, repository, jobID string) map[string]any {
 	return validationSummary(record)
 }
 
+// MaintenanceApplyValidation returns the terminal status and revision recorded
+// for a maintenance job by the host validator.
+func MaintenanceApplyValidation(stateRoot, repository, jobID string) (string, string, error) {
+	record, err := readApplyValidation(validationRecordPath(stateRoot, validationRepositoryKey(repository), jobID))
+	if err != nil {
+		return "", "", err
+	}
+	if record.JobID != jobID || !record.Maintenance || !sameApplyProjectPath(record.Repository, repository) {
+		return "", "", errors.New("host validation record does not match the maintenance job")
+	}
+	return record.Status, record.Revision, nil
+}
+
 func validationSummary(r applyValidation) map[string]any {
 	value := map[string]any{"status": r.Status, "counts": r.Counts, "failing_tests": boundedValidationIdentifiers(r.FailedTests), "reason": r.Reason, "packages": boundedValidationIdentifiers(r.Packages)}
 	if r.Lint != "" {

@@ -1,17 +1,20 @@
 package maintenance
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/fsretry"
+	"purser-hook/internal/jobs"
 	"purser-hook/internal/proc"
 )
 
@@ -183,12 +186,181 @@ func Control(state, command, repository, decision, report string, acted []string
 					return "", fmt.Errorf("acted path_line not found in report: %q", value)
 				}
 			}
+			if reportType == "test-gaps" {
+				if err := completeTestProposal(state, root, dir, notice); err != nil {
+					return "", err
+				}
+			}
 			notice["done"], notice["pending"], notice["shown"], notice["acted_findings"] = true, false, true, acted
 		}
 		return "", writeCommandJSON(path, notice)
 	default:
 		return "", fmt.Errorf("unsupported maintenance command: %s", command)
 	}
+}
+
+var removeCompletedTestProposal = removeTestProposal
+
+func completeTestProposal(state, root, dir string, notice map[string]any) error {
+	readyPath := filepath.Join(dir, "reports", "test-gaps", "ready.json")
+	completionPath := filepath.Join(filepath.Dir(readyPath), "completed.json")
+	head, err := maintenanceCommandGit(root, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return errors.New("test-gaps proposal is pending: HEAD is unavailable")
+	}
+	head = strings.TrimSpace(head)
+	finish := func(completion map[string]any) error {
+		if err := removeCompletedTestProposal(readyPath); err != nil {
+			return fmt.Errorf("test-gaps proposal is pending: ready proposal could not be removed: %w", err)
+		}
+		notice["completion_job_id"], notice["completion_revision"] = completion["job_id"], completion["revision"]
+		return nil
+	}
+	if data, readErr := os.ReadFile(completionPath); readErr == nil {
+		var completion map[string]any
+		if json.Unmarshal(data, &completion) != nil {
+			return errors.New("test-gaps proposal is pending: completion record is invalid")
+		}
+		id, _ := completion["job_id"].(string)
+		revision, _ := completion["revision"].(string)
+		at, _ := completion["completed_at"].(string)
+		_, timeErr := time.Parse(time.RFC3339Nano, at)
+		if completion["commit"] == head && id != "" && revision != "" && timeErr == nil {
+			data, readyErr := os.ReadFile(readyPath)
+			var ready map[string]any
+			if errors.Is(readyErr, os.ErrNotExist) || (readyErr == nil && json.Unmarshal(data, &ready) == nil && ready["job_id"] == id && ready["changed_paths_sha256"] == revision) {
+				return finish(completion)
+			}
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return fmt.Errorf("test-gaps proposal is pending: completion record is unavailable: %w", readErr)
+	}
+	data, err := os.ReadFile(readyPath)
+	if err != nil {
+		return fmt.Errorf("test-gaps proposal is pending: ready proposal is unavailable: %w", err)
+	}
+	var proposal map[string]any
+	if json.Unmarshal(data, &proposal) != nil || proposal["status"] != "ready" {
+		return errors.New("test-gaps proposal is pending: ready proposal is invalid")
+	}
+	id, _ := proposal["job_id"].(string)
+	digest, _ := proposal["changed_paths_sha256"].(string)
+	job, err := jobs.Read(filepath.Join(state, "codex_exec_mcp", "jobs", id+".json"))
+	if err != nil {
+		return fmt.Errorf("test-gaps proposal is pending: applied job record is unavailable: %w", err)
+	}
+	var actualID, recordedID, identitySource, applyState, appliedRevision, worktree, repository string
+	var maintenance bool
+	job.Get("jobId", &actualID)
+	job.Get("applyState", &applyState)
+	job.Get("appliedRevision", &appliedRevision)
+	job.Get("worktreePath", &worktree)
+	job.Get("repoRoot", &repository)
+	job.Get("maintenance_test_job", &maintenance)
+	job.Get("maintenance_job_id", &recordedID)
+	job.Get("maintenance_identity_source", &identitySource)
+	if id == "" || digest == "" || actualID != id || recordedID != id || identitySource != "host" || !maintenance || applyState != "applied" || appliedRevision != digest || !sameProjectPath(repository, root) || worktree == "" || sameProjectPath(worktree, root) {
+		return errors.New("test-gaps proposal is pending: its job has not been applied at the proposed revision")
+	}
+	status, revision, err := jobs.MaintenanceApplyValidation(state, repository, id)
+	if err != nil {
+		return fmt.Errorf("test-gaps proposal is pending: terminal host validation is unavailable: %w", err)
+	}
+	if status != "passed" {
+		return fmt.Errorf("test-gaps proposal is pending: terminal host validation status is %q", status)
+	}
+	if revision != digest {
+		return errors.New("test-gaps proposal is pending: terminal host validation revision does not match the proposal")
+	}
+	if err := verifyTestProposalCommit(root, proposal, head); err != nil {
+		return fmt.Errorf("test-gaps proposal is pending: %w", err)
+	}
+	current, err := maintenanceCommandGit(root, "rev-parse", "--verify", "HEAD")
+	if err != nil || strings.TrimSpace(current) != head {
+		return errors.New("test-gaps proposal is pending: HEAD changed during completion")
+	}
+	completion := map[string]any{"job_id": id, "commit": head, "revision": digest, "completed_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	if err := writeCommandJSON(completionPath, completion); err != nil {
+		return err
+	}
+	return finish(completion)
+}
+
+func verifyTestProposalCommit(root string, proposal map[string]any, head string) error {
+	baseline, _ := proposal["baseline_head"].(string)
+	projectRoot, _ := proposal["project_root"].(string)
+	if baseline == "" || !sameProjectPath(projectRoot, root) {
+		return errors.New("proposal baseline or project root is invalid")
+	}
+	parents, err := maintenanceCommandGit(root, "show", "-s", "--format=%P", head)
+	if err != nil || strings.TrimSpace(parents) != baseline {
+		return errors.New("HEAD must be one commit directly on the proposal baseline")
+	}
+	changed, err := maintenanceCommandGit(root, "diff-tree", "--no-commit-id", "--name-only", "-z", "--no-renames", baseline, head)
+	if err != nil {
+		return errors.New("HEAD commit paths could not be verified")
+	}
+	want, ok := proposal["changed_test_paths"].([]any)
+	if !ok || len(want) == 0 {
+		return errors.New("proposal test paths are invalid")
+	}
+	expected := make(map[string]bool, len(want))
+	for _, raw := range want {
+		path, ok := raw.(string)
+		if !ok || path == "" {
+			return errors.New("proposal test paths are invalid")
+		}
+		if filepath.IsAbs(path) {
+			rel, relErr := filepath.Rel(projectRoot, path)
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return errors.New("proposal test path is outside its project")
+			}
+			path = rel
+		}
+		path = filepath.ToSlash(filepath.Clean(path))
+		key := path
+		if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if expected[key] {
+			return errors.New("proposal contains duplicate test paths")
+		}
+		expected[key] = true
+	}
+	got := strings.Split(strings.TrimSuffix(changed, "\x00"), "\x00")
+	if len(got) != len(expected) {
+		return errors.New("HEAD commit does not change exactly the proposed test paths")
+	}
+	for _, path := range got {
+		key := filepath.ToSlash(filepath.Clean(path))
+		if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if !expected[key] {
+			return errors.New("HEAD commit does not change exactly the proposed test paths")
+		}
+		if _, err := maintenanceCommandGit(root, "cat-file", "blob", head+":"+path); err != nil {
+			return fmt.Errorf("HEAD test content could not be read: %q", path)
+		}
+	}
+	// Match JobChangedPathsSHA256's binary patch format, reading only committed
+	// versions so later checkout edits cannot substitute for the validated patch.
+	args := []string{"diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", baseline, head, "--"}
+	for _, path := range got {
+		args = append(args, ":(literal)"+path)
+	}
+	patch, err := maintenanceCommandGit(root, args...)
+	if err != nil || fmt.Sprintf("%x", sha256.Sum256([]byte(patch))) != proposal["changed_paths_sha256"] {
+		return errors.New("HEAD commit content does not match the validated proposal revision")
+	}
+	return nil
+}
+
+func maintenanceCommandGit(root string, args ...string) (string, error) {
+	command := proc.Hide(exec.Command("git", append([]string{"-C", root}, args...)...))
+	proc.ConfigureNoWindow(command)
+	output, err := command.Output()
+	return string(output), err
 }
 
 // DelayedCheck is the detached SessionStart worker. It scans enabled projects,

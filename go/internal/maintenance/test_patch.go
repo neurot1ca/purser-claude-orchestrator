@@ -204,7 +204,34 @@ func publishTestProposal(ctx context.Context, state, root, path string, baseline
 }
 
 func removeTestProposal(path string) error {
-	err := os.Remove(path)
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if err := os.Chmod(path, 0600); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	tombstone, err := os.CreateTemp(filepath.Dir(path), ".ready-removed-*")
+	if err != nil {
+		return err
+	}
+	tombstonePath := tombstone.Name()
+	if err = tombstone.Close(); err != nil {
+		_ = os.Remove(tombstonePath)
+		return err
+	}
+	if err = os.Remove(tombstonePath); err != nil {
+		return err
+	}
+	err = fsretry.ReplaceWith(os.Rename, path, tombstonePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	err = os.Remove(tombstonePath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
