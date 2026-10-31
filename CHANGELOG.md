@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.221 — 2026-10-31
+
+- **Fixed:** the handoff narrative marker survives state rewrites, is dated from the last narrative change, and no longer appears in restored context, so a stale narrative is flagged reliably.
+- **Docs:** README describes background test writing, the Go pre-scan, and the current auto-compact and idle-compact rules.
+
 ## 0.1.220 — 2026-10-31
 
 - **Fixed:** idle auto-compaction checks every minute against the wall clock instead of relying on one long timer, and its trace in `auto-compact.log` survives reloads and is tagged by session.
