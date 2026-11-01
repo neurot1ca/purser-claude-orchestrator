@@ -86,6 +86,28 @@ func TestReplaceExhaustionReturnsLastError(t *testing.T) {
 	}
 }
 
+func TestRetryHonorsCallerWindow(t *testing.T) {
+	withRename(t, func(string, string) error { return nil })
+	attempts := 0
+	started := now()
+	var delays []time.Duration
+	advance := sleep
+	sleep = func(delay time.Duration) {
+		delays = append(delays, delay)
+		advance(delay)
+	}
+	err := Retry(func() error {
+		attempts++
+		return os.ErrPermission
+	}, 80*time.Millisecond)
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("Retry error = %v, want permission error", err)
+	}
+	if attempts != 4 || len(delays) != 3 || now().Sub(started) != 80*time.Millisecond {
+		t.Fatalf("attempts = %d, delays = %v, elapsed = %s", attempts, delays, now().Sub(started))
+	}
+}
+
 func TestReplaceDoesNotRetryErrno5OnNonWindows(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows error 5 is transient there")

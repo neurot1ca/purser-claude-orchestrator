@@ -280,6 +280,68 @@ func TestReadCorruptAndOversized(t *testing.T) {
 	}
 }
 
+func TestReadSummaryForSelectionStatuses(t *testing.T) {
+	root := t.TempDir()
+	if _, status := ReadSummaryForSelection(root, time.Second); status != SelectionUnavailable {
+		t.Fatalf("missing summary status = %q, want unavailable", status)
+	}
+	path := summaryPath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	valid := []byte(`{"schema_version":1,"sources":[],"records":[],"cohorts":{}}`)
+	if err := os.WriteFile(path, valid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, status := ReadSummaryForSelection(root, time.Second); status != SelectionOK || numInt(got["schema_version"]) != 1 {
+		t.Fatalf("valid summary = %#v, status %q", got, status)
+	}
+	if _, status := ReadSummaryForSelection(root, 0); status != SelectionUnavailable {
+		t.Fatalf("zero-slack status = %q, want unavailable", status)
+	}
+	for name, content := range map[string][]byte{
+		"corrupt":      []byte("{"),
+		"oversized":    bytes.Repeat([]byte("x"), MaxSummaryBytes+1),
+		"trailing":     append(append([]byte(nil), valid...), []byte("{}")...),
+		"wrong-schema": []byte(`{"schema_version":2,"sources":[],"records":[],"cohorts":{}}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(path, content, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, status := ReadSummaryForSelection(root, time.Second); status != SelectionInvalid {
+				t.Fatalf("status = %q, want invalid", status)
+			}
+		})
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, status := ReadSummaryForSelection(root, time.Second); status != SelectionUnavailable {
+		t.Fatalf("permanent read error status = %q, want unavailable", status)
+	}
+}
+
+func TestReadSummaryForSelectionLongUnicodePath(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 14; i++ {
+		root = filepath.Join(root, "路径-ü-"+strings.Repeat("a", 12))
+	}
+	path := summaryPath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"schema_version":1,"sources":[],"records":[],"cohorts":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, status := ReadSummaryForSelection(root, time.Second); status != SelectionOK {
+		t.Fatalf("long Unicode path status = %q, want ok", status)
+	}
+}
+
 func TestLockFileInterop(t *testing.T) {
 	root := t.TempDir()
 	lockPath := filepath.Join(root, "telemetry", LockName)

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/fsretry"
@@ -88,6 +89,62 @@ func ReadSummary(stateRoot string) Summary {
 		return empty()
 	}
 	return value
+}
+
+type SelectionStatus string
+
+const (
+	SelectionOK          SelectionStatus = "ok"
+	SelectionUnavailable SelectionStatus = "unavailable"
+	SelectionInvalid     SelectionStatus = "invalid"
+)
+
+// ReadSummaryForSelection reads the optional summary within the caller's
+// available slack. It never takes the checkpoint writer lock.
+func ReadSummaryForSelection(stateRoot string, slack time.Duration) (Summary, SelectionStatus) {
+	if slack <= 0 {
+		return nil, SelectionUnavailable
+	}
+	path := summaryPath(stateRoot)
+	var b []byte
+	err := fsretry.Retry(func() error {
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		b, err = io.ReadAll(io.LimitReader(f, MaxSummaryBytes+1))
+		closeErr := f.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
+	}, slack)
+	if err != nil {
+		return nil, SelectionUnavailable
+	}
+	if len(b) > MaxSummaryBytes {
+		return nil, SelectionInvalid
+	}
+	var value map[string]any
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	if d.Decode(&value) != nil || numInt(value["schema_version"]) != 1 {
+		return nil, SelectionInvalid
+	}
+	var extra any
+	if d.Decode(&extra) != io.EOF {
+		return nil, SelectionInvalid
+	}
+	if _, ok := value["sources"].([]any); !ok {
+		return nil, SelectionInvalid
+	}
+	if _, ok := value["records"].([]any); !ok {
+		return nil, SelectionInvalid
+	}
+	if _, ok := value["cohorts"].(map[string]any); !ok {
+		return nil, SelectionInvalid
+	}
+	return value, SelectionOK
 }
 
 // ReadCheckpoint returns only a complete, schema-valid checkpoint. It takes the

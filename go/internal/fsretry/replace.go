@@ -22,10 +22,22 @@ func Replace(src, dst string) error {
 // ReplaceWith applies the same retry policy to a caller-supplied rename
 // function, allowing packages to preserve their existing test seams.
 func ReplaceWith(rename func(string, string) error, src, dst string) error {
-	deadline := now().Add(2 * time.Second)
+	return Retry(func() error { return rename(src, dst) }, 2*time.Second)
+}
+
+// Retry applies the bounded transient filesystem retry policy to an operation.
+// The requested window is capped at the same two-second ceiling as Replace.
+func Retry(operation func() error, window time.Duration) error {
+	if window > 2*time.Second {
+		window = 2 * time.Second
+	}
+	if window < 0 {
+		window = 0
+	}
+	deadline := now().Add(window)
 	delay := 25 * time.Millisecond
 	for {
-		err := rename(src, dst)
+		err := operation()
 		if err == nil || !transient(err) {
 			return err
 		}
