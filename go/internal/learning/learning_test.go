@@ -28,6 +28,9 @@ func TestSourceKey(t *testing.T) {
 func TestDistillNewThenSkipExisting(t *testing.T) {
 	root := t.TempDir()
 	src := fixtureSource(t, root, 1)
+	src.Job["reviewerOutcome"] = map[string]any{"execution_status": "COMPLETED", "first_attempt": map[string]any{
+		"provider": "agy", "model": "gemini-3.8-flash-high", "effort": "high", "outcome": "technical_failure", "duration_ms": float64(125),
+	}}
 	ids, err := DistillJobs(root, []Source{src}, 100, 10, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -42,9 +45,52 @@ func TestDistillNewThenSkipExisting(t *testing.T) {
 	if len(d["records"].([]any)) != 1 {
 		t.Fatalf("retry duplicated record: %d", len(d["records"].([]any)))
 	}
+	record := d["records"].([]any)[0].(map[string]any)
+	first := record["reviewer_first_attempt"].(map[string]any)
+	if first["provider"] != "agy" || first["model"] != "gemini-3.8-flash-high" || first["outcome"] != "technical_failure" || numberFloat(first["duration_ms"]) != 125 {
+		t.Fatalf("first attempt did not round-trip: %#v", first)
+	}
 	c := d["cohorts"].(map[string]any)["unknown|normal|model-a|high"].(map[string]any)
 	if numberFloat(c["counts"].(map[string]any)["tasks"]) != 1 {
 		t.Fatal("retry double-counted cohort")
+	}
+}
+
+func TestDistillRecordCapExcludesEvictedReviewerSamples(t *testing.T) {
+	root := t.TempDir()
+	sources := make([]Source, MaxTaskRecords+1)
+	for i := range sources {
+		id := fmt.Sprintf("%064x", i+1)
+		path := filepath.Join(root, id+".json")
+		if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		sources[i] = Source{Path: path, Job: map[string]any{
+			"jobId": id, "taskId": fmt.Sprintf("task-%d", i), "state": "SUCCEEDED", "finishedAt": float64(20),
+			"durationMs": float64(1000), "route": "normal", "jobModel": "model-a", "jobEffort": "high",
+			"reviewerOutcome": map[string]any{"first_attempt": map[string]any{"provider": "agy", "model": "model-r", "outcome": "completed", "duration_ms": float64(10)}},
+		}}
+	}
+	if _, err := DistillJobs(root, sources[:MaxDistillPerRun], 100, MaxDistillPerRun, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DistillJobs(root, sources[MaxDistillPerRun:2*MaxDistillPerRun], 100, MaxDistillPerRun, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DistillJobs(root, sources[2*MaxDistillPerRun:], 100, MaxDistillPerRun, nil); err != nil {
+		t.Fatal(err)
+	}
+	records := ReadSummary(root)["records"].([]any)
+	if len(records) != MaxTaskRecords {
+		t.Fatalf("record cap retained %d records, want %d", len(records), MaxTaskRecords)
+	}
+	for _, raw := range records {
+		if raw.(map[string]any)["id"] == sources[0].Job["jobId"] {
+			t.Fatal("evicted source remains eligible as a reviewer sample")
+		}
+	}
+	if records[len(records)-1].(map[string]any)["reviewer_first_attempt"] == nil {
+		t.Fatal("retained source lost reviewer sample")
 	}
 }
 

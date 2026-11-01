@@ -507,9 +507,13 @@ func TestAsyncSuccessReviewerKeepsHostValidationInArtifact(t *testing.T) {
 		t.Fatalf("reviewed artifact lost host validation: artifact=%#v compact validation=%v", artifact, compact["validation"])
 	}
 	stored, err := readAsyncObject(filepath.Join(state, "codex_exec_mcp", "jobs", stringValue(index["jobId"])+".json"))
+	first := mapValue(mapValue(stored["reviewerOutcome"])["first_attempt"])
+	duration, durationOK := first["duration_ms"].(float64)
 	if err != nil || stored["project_key"] != "project-fixture" ||
+		!durationOK || duration < 0 ||
 		!reflect.DeepEqual(stored["reviewerOutcome"], map[string]any{"execution_status": "COMPLETED", "verdict": "NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE",
-			"provider": "fixture-test", "requested_model": "fixture-model", "served_model_attestation": "fixture/actual"}) {
+			"provider": "fixture-test", "requested_model": "fixture-model", "served_model_attestation": "fixture/actual",
+			"first_attempt": map[string]any{"provider": "fixture-test", "model": "fixture-model", "effort": "", "outcome": "completed", "duration_ms": duration}}) {
 		t.Fatalf("durable reviewer facts=%#v err=%v", stored["reviewerOutcome"], err)
 	}
 }

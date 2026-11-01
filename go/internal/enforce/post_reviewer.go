@@ -3,6 +3,7 @@ package enforce
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -81,6 +82,7 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 	}
 	attempts := []postReviewerAttempt{}
 	var last review.BridgeOutcome
+	var firstObservation map[string]any
 	invoked := false
 	for index, candidate := range candidates {
 		if !postReviewerAdapters[candidate.Agent] {
@@ -122,12 +124,59 @@ func runPostReviewer(root, stateRoot string, pending, bundle map[string]any, res
 			candidateArgs["reviewer_effort"] = candidate.Effort
 		}
 		candidateArgs["reviewer_timeout_seconds"] = budget.Seconds()
+		attemptStarted := time.Now()
 		bridgeResult, err := postReviewerBridge(context.Background(), root, candidateArgs, budget)
+		if firstObservation == nil {
+			technical := "technical_failure"
+			switch {
+			case errors.Is(err, context.DeadlineExceeded) || stringValue(bridgeResult.Attributes["error_code"]) == "REVIEWER_TIMEOUT" || bridgeResult.Attributes["reason"] == "REVIEWER_TIMEOUT":
+				technical = "timeout"
+			case err == nil && bridgeResult.Outcome == "completed":
+				technical = "completed"
+			case bridgeResult.Outcome == "incomplete" && bridgeResult.Attributes["review_status"] == "NOT_RUN_INCOMPLETE_PACKET":
+				technical = ""
+			case bridgeResult.Outcome == "unavailable":
+				// Pre-launch exclusions: review/native.go (setup/launch), review/review.go
+				// (gate), enforce/post_dispatch.go, fallback.go and this function.
+				for _, key := range []string{"reason", "error_code"} {
+					switch stringValue(bridgeResult.Attributes[key]) {
+					case "REVIEWER_ADAPTER_UNAVAILABLE", "REVIEWER_EXECUTABLE_MISSING", "REVIEWER_CONFIG_INVALID",
+						"REVIEWER_WORKDIR_UNAVAILABLE", "REVIEWER_COMMAND_REFUSED", "REVIEWER_CURSOR_CONFINEMENT_UNVERIFIED",
+						"REVIEWER_CURSOR_CONFINEMENT_UNAVAILABLE", "REVIEWER_CIRCUIT_OPEN", "REVIEWER_UNAVAILABLE",
+						"REVIEWER_DISABLED", "PHASE_OPERATION", "PHASE_PLAN", "NO_DELTA", "BELOW_THRESHOLD", "LOW_CODEX_QUOTA":
+						technical = ""
+					case review.ResponseInvalid:
+						// native.go attaches diagnostics to response errors after invokePacket.
+						if bridgeResult.Diagnostics == nil {
+							technical = ""
+						}
+					}
+				}
+			}
+			if technical != "" {
+				firstObservation = map[string]any{
+					"provider": candidate.Agent, "model": candidate.Model,
+					"effort":  stringValue(candidateArgs["reviewer_effort"]),
+					"outcome": technical, "duration_ms": float64(time.Since(attemptStarted).Nanoseconds()) / float64(time.Millisecond),
+				}
+			}
+		}
+		if firstObservation != nil {
+			if bridgeResult.Attributes == nil {
+				bridgeResult.Attributes = map[string]any{}
+			}
+			bridgeResult.Attributes["_reviewer_first_attempt"] = firstObservation
+		}
 		if err != nil {
 			if review.IsReviewerBridgeException(err) {
 				bundle["findings"] = appendPostFinding(bundle["findings"], "INTERNAL_POST_ERROR", "Reviewer bridge raised unexpectedly.")
 			}
-			return review.BridgeOutcome{}, err
+			// Keep the error outcome empty except for the first-attempt observation.
+			failed := review.BridgeOutcome{}
+			if firstObservation != nil {
+				failed.Attributes = map[string]any{"_reviewer_first_attempt": firstObservation}
+			}
+			return failed, err
 		}
 		last = bridgeResult
 		invoked = true

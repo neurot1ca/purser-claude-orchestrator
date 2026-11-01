@@ -215,6 +215,79 @@ func TestDefaultReviewerFallsBackWithinReservedBudget(t *testing.T) {
 	if !ok || len(attempts) != 2 || attempts[0].Outcome != "UNAVAILABLE" || attempts[1].Outcome != "COMPLETED" {
 		t.Fatalf("attempts=%#v", bundle["reviewer1_attempts"])
 	}
+	first := outcome.Attributes["_reviewer_first_attempt"].(map[string]any)
+	if first["provider"] != "agy" || first["model"] != "gemini-3.8-flash-high" || first["outcome"] != "technical_failure" || first["duration_ms"].(float64) <= 0 {
+		t.Fatalf("first attempt attribution=%#v", first)
+	}
+}
+
+func TestRunPostReviewerPreservesFirstAttemptOnBridgeError(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	postReviewerBridge = func(context.Context, string, map[string]any, time.Duration) (review.BridgeOutcome, error) {
+		return review.BridgeOutcome{Outcome: "unavailable", Attributes: map[string]any{"error_code": "REVIEWER_TIMEOUT"}}, context.DeadlineExceeded
+	}
+	outcome, err := runPostReviewer("", "", map[string]any{}, map[string]any{}, postProfile{
+		ReviewerCandidates: []profile.ReviewerCandidate{{Agent: "agy", Model: "gemini-3.8-flash-high"}},
+	}, map[string]any{}, nil, nil, time.Now(), time.Second)
+	first, ok := outcome.Attributes["_reviewer_first_attempt"].(map[string]any)
+	if err == nil || !ok || first["outcome"] != "timeout" || first["provider"] != "agy" {
+		t.Fatalf("error return lost first attempt: outcome=%#v err=%v", outcome, err)
+	}
+}
+
+func TestRunPostReviewerSkippedCandidateDoesNotBecomeFirstAttempt(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	var agents []string
+	postReviewerBridge = func(_ context.Context, _ string, args map[string]any, _ time.Duration) (review.BridgeOutcome, error) {
+		agents = append(agents, stringValue(args["reviewer_agent"]))
+		if len(agents) == 1 {
+			return review.BridgeOutcome{Outcome: "unavailable", Attributes: map[string]any{"error_code": "REVIEWER_EXECUTABLE_MISSING"}}, nil
+		}
+		return review.BridgeOutcome{Outcome: "completed", Attributes: map[string]any{
+			"validation": "FAIL", "findings": []any{map[string]any{"code": "BUG", "message": "A material finding."}},
+		}}, nil
+	}
+	outcome, err := runPostReviewer("", "", map[string]any{}, map[string]any{}, postProfile{
+		ReviewerCandidates: []profile.ReviewerCandidate{{Agent: "agy", Model: "gemini-3.8-flash-high"}, {Agent: "claude", Model: "claude-haiku-5-5", Effort: "high"}},
+	}, map[string]any{}, nil, nil, time.Now(), time.Second)
+	first := mapValue(outcome.Attributes["_reviewer_first_attempt"])
+	if err != nil || len(agents) != 2 || first["provider"] != "claude" || first["model"] != "claude-haiku-5-5" || first["effort"] != "high" || first["outcome"] != "completed" {
+		t.Fatalf("skipped candidate or findings contaminated first attempt: agents=%v first=%#v err=%v", agents, first, err)
+	}
+}
+
+func TestRunPostReviewerHostExcludedOutcomeHasNoObservation(t *testing.T) {
+	oldBridge := postReviewerBridge
+	t.Cleanup(func() { postReviewerBridge = oldBridge })
+	for _, tc := range []struct {
+		name        string
+		result      review.BridgeOutcome
+		wantFailure bool
+	}{
+		{"confinement gate", review.BridgeOutcome{Outcome: "unavailable", Attributes: map[string]any{"reason": "REVIEWER_CURSOR_CONFINEMENT_UNVERIFIED"}}, false},
+		{"invalid command", review.BridgeOutcome{Outcome: "unavailable", Attributes: map[string]any{"error_code": review.ResponseInvalid}}, false},
+		{"invalid response after execution", review.BridgeOutcome{Outcome: "unavailable", Attributes: map[string]any{"error_code": review.ResponseInvalid}, Diagnostics: map[string]any{"reviewer_exit": "0"}}, true},
+		{"omitted packet", review.BridgeOutcome{Outcome: "incomplete", Attributes: map[string]any{"review_status": "NOT_RUN_INCOMPLETE_PACKET"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			postReviewerBridge = func(context.Context, string, map[string]any, time.Duration) (review.BridgeOutcome, error) {
+				return tc.result, nil
+			}
+			bundle := map[string]any{}
+			outcome, err := runPostReviewer("", "", map[string]any{}, bundle, postProfile{
+				ReviewerCandidates: []profile.ReviewerCandidate{{Agent: "cursor", Model: "gpt-5.6-sol-high"}},
+			}, map[string]any{}, nil, nil, time.Now(), time.Second)
+			facts := asyncReviewerFacts(outcome, err, bundle, map[string]any{}, postProfile{})
+			if err != nil || (facts["first_attempt"] != nil) != tc.wantFailure || (outcome.Attributes["_reviewer_first_attempt"] != nil) != tc.wantFailure {
+				t.Fatalf("execution attribution: outcome=%#v facts=%#v err=%v", outcome, facts, err)
+			}
+			if tc.wantFailure && mapValue(facts["first_attempt"])["outcome"] != "technical_failure" {
+				t.Fatalf("executed reviewer failure was not recorded: %#v", facts)
+			}
+		})
+	}
 }
 
 func TestPostReviewerClaudeFallbackEffortAndReason(t *testing.T) {

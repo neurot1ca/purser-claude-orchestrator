@@ -339,7 +339,7 @@ func ReadJobFacts(root string, job map[string]any) map[string]any {
 	}
 	if outcome, ok := job["reviewerOutcome"].(map[string]any); ok {
 		result["reviewer_outcome"] = outcome
-		for _, key := range []string{"verdict", "provider", "requested_model", "execution_status", "skip_reason", "served_model_attestation"} {
+		for _, key := range []string{"verdict", "provider", "requested_model", "execution_status", "skip_reason", "served_model_attestation", "first_attempt"} {
 			if value, exists := outcome[key]; exists {
 				result["reviewer_"+key] = value
 			}
@@ -487,6 +487,9 @@ func makeRecord(job, task map[string]any, stamp any) map[string]any {
 	valid := fallback(job["reviewer1Valid"], task["reviewer1_valid_count"], nil)
 	falseCount := fallback(job["reviewer1False"], task["reviewer1_false_count"], nil)
 	r := map[string]any{"id": job["jobId"], "task": job["taskId"], "project_key": task["project_key"], "at": stamp, "cohort": strings.Join(parts, "|"), "duration_ms": duration, "eta_error_ms": etaError, "acceptance": acceptance["outcome"], "send_backs": sendbacks(acceptance), "review": nonempty(review), "review_verdict": outcome["verdict"], "review_provider": outcome["provider"], "review_model": outcome["requested_model"], "review_execution_status": outcome["execution_status"], "review_skip_reason": outcome["skip_reason"], "review_served_model_attestation": outcome["served_model_attestation"], "reviewedOutcome": job["reviewedOutcome"], "reviewer1_valid": valid, "reviewer1_false": falseCount, "reviewer1_valid_present": validNumber(valid), "reviewer1_false_present": validNumber(falseCount), "validation": fallback(task["validation"], job["validation"], nil), "apply_conflict": fallback(job["applyConflictReason"], conflict(job), nil), "failure": job["errorCode"], "usage": usage, "usage_complete": usageComplete, "quota": quota}
+	if firstAttempt := compactReviewerFirstAttempt(outcome["first_attempt"]); firstAttempt != nil {
+		r["reviewer_first_attempt"] = firstAttempt
+	}
 	r["applied_as_is"] = acceptance["applied_as_is"]
 	for k, v := range r {
 		if v == nil {
@@ -514,6 +517,27 @@ func makeRecord(job, task map[string]any, stamp any) map[string]any {
 		}
 	}
 	return r
+}
+
+func compactReviewerFirstAttempt(value any) map[string]any {
+	attempt, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	provider, providerOK := attempt["provider"].(string)
+	model, modelOK := attempt["model"].(string)
+	outcome, outcomeOK := attempt["outcome"].(string)
+	duration, durationOK := attempt["duration_ms"]
+	if !providerOK || provider == "" || !modelOK || model == "" || !outcomeOK ||
+		(outcome != "completed" && outcome != "technical_failure" && outcome != "timeout") ||
+		!durationOK || !validNumber(duration) || numberFloat(duration) < 0 {
+		return nil
+	}
+	result := map[string]any{"provider": provider, "model": model, "outcome": outcome, "duration_ms": duration}
+	if effort, ok := attempt["effort"].(string); ok && effort != "" {
+		result["effort"] = effort
+	}
+	return result
 }
 
 func cell() map[string]any {
@@ -736,7 +760,7 @@ func writePython(b *bytes.Buffer, v any) {
 	}
 }
 
-var keyOrder = []string{"schema_version", "sources", "records", "cohorts", "archive", "id", "task", "project_key", "at", "cohort", "duration_ms", "eta_error_ms", "acceptance", "send_backs", "review", "review_verdict", "review_provider", "review_model", "review_execution_status", "review_skip_reason", "review_served_model_attestation", "reviewedOutcome", "reviewer1_valid", "reviewer1_false", "reviewer1_valid_present", "reviewer1_false_present", "validation", "apply_conflict", "failure", "usage", "usage_complete", "quota", "timestamp", "resets_at", "used", "limit", "counts", "tasks", "send_backs", "reviewer1_valid", "reviewer1_false", "reviewer1_valid_observations", "reviewer1_false_observations", "apply_conflicts", "failures", "token_usage", "token_usage_complete", "samples", "quota_samples"}
+var keyOrder = []string{"schema_version", "sources", "records", "cohorts", "archive", "id", "task", "project_key", "at", "cohort", "duration_ms", "eta_error_ms", "acceptance", "send_backs", "review", "review_verdict", "review_provider", "review_model", "review_execution_status", "review_skip_reason", "review_served_model_attestation", "reviewer_first_attempt", "provider", "model", "effort", "outcome", "duration_ms", "reviewedOutcome", "reviewer1_valid", "reviewer1_false", "reviewer1_valid_present", "reviewer1_false_present", "validation", "apply_conflict", "failure", "usage", "usage_complete", "quota", "timestamp", "resets_at", "used", "limit", "counts", "tasks", "send_backs", "reviewer1_valid", "reviewer1_false", "reviewer1_valid_observations", "reviewer1_false_observations", "apply_conflicts", "failures", "token_usage", "token_usage_complete", "samples", "quota_samples"}
 
 func orderedKeys(m map[string]any) []string {
 	if _, ok := m["tasks"]; ok {

@@ -339,6 +339,9 @@ func asyncReviewerFacts(result review.BridgeOutcome, runErr error, bundle, loade
 	}
 	facts := map[string]any{"execution_status": status, "verdict": firstNonNil(attrs["result"], bundle["reviewer1_result"]),
 		"provider": asyncReviewerNullable(provider), "requested_model": asyncReviewerNullable(requested)}
+	if firstAttempt, ok := attrs["_reviewer_first_attempt"].(map[string]any); ok {
+		facts["first_attempt"] = firstAttempt
+	}
 	if skip != "" {
 		facts["skip_reason"] = skip
 	}
