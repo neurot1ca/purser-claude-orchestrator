@@ -26,6 +26,27 @@ You can also run Purser with Claude alone. Claude then writes the code as well, 
 
 The coder can be Codex, Claude, Gemini through agy, Cursor, or any model that OpenCode supports.
 
+## Supported agents
+
+| Agent | Role |
+| --- | --- |
+| OpenAI Codex | Coder or Reviewer. As Reviewer it offers the newest sol model at low effort or the newest luna model at medium effort. |
+| Claude | Main planner. It can also be the coder, or the Reviewer with the newest Haiku model at medium effort. |
+| OpenCode | Coder or Reviewer. When enabled, it also races free models on eligible mechanical chores. |
+| Antigravity (agy) | Coder or Reviewer. As Reviewer it uses the newest Gemini model agy lists. |
+| Cursor | Coder only. |
+
+You can set the Codex coder's thinking effort for new jobs to low, medium, high, or xhigh, or leave it on auto to follow Purser's routes.
+
+## Built-in subagents
+
+| Subagent | Role |
+| --- | --- |
+| `purser:dispatcher` | Runs one delegated job on a Haiku model and returns a receipt of at most 250 tokens. |
+| `purser:helper` | Answers read-only lookups on a Haiku model, such as where a symbol is defined or what a log says, and never edits files. |
+
+![Heavy work stays outside main Claude's context and only small results come back](assets/purser-context.gif)
+
 ## Install
 
 | Requirement | Why |
@@ -111,27 +132,6 @@ The background job board tracks each job and the work it is waiting on.
 <tr><td><h3>Free OpenCode model race</h3><p>OpenCode publishes free models. When enabled, Purser uses them for eligible mechanical chores. New models run a built-in task bracket in the background; the bracket winner races the current leader on shadow runs. Purser ranks results with the smoothed score <code>(successes+1)/(samples+2)</code>. A newcomer can win after three samples, and the leader changes only on a race win. Live jobs use their own worktree and normal scope check and review rules. Shadow runs use scratch files, which the benchmark lets the model edit and then scores. Only mechanical chores go to free models; work needing judgment stays with your main coder.</p></td></tr>
 <tr><td><h3>Other tools</h3><p>Purser includes quota and usage monitoring for active model limits, reset countdowns, and reported session costs in your terminal. The <code>/purser:optimize</code> command finds unused plugins, skills, MCP servers, and other token waste in recent sessions and helps lighten prompt loads. When a turn stops on the Claude usage limit, Purser sends “⚓ Claude usage renewed ✓” a minute after the limit resets, and Claude picks up the interrupted work where it stopped. A message from you before then cancels it, and the session has to stay open for it to fire.</p></td></tr>
 </table>
-
-## Supported agents
-
-| Agent | Role |
-| --- | --- |
-| OpenAI Codex | Coder or Reviewer. As Reviewer it offers the newest sol model at low effort or the newest luna model at medium effort. |
-| Claude | Main planner. It can also be the coder, or the Reviewer with the newest Haiku model at medium effort. |
-| OpenCode | Coder or Reviewer. When enabled, it also races free models on eligible mechanical chores. |
-| Antigravity (agy) | Coder or Reviewer. As Reviewer it uses the newest Gemini model agy lists. |
-| Cursor | Coder only. |
-
-You can set the Codex coder's thinking effort for new jobs to low, medium, high, or xhigh, or leave it on auto to follow Purser's routes.
-
-## Built-in subagents
-
-| Subagent | Role |
-| --- | --- |
-| `purser:dispatcher` | Runs one delegated job on a Haiku model and returns a receipt of at most 250 tokens. |
-| `purser:helper` | Answers read-only lookups on a Haiku model, such as where a symbol is defined or what a log says, and never edits files. |
-
-![Heavy work stays outside main Claude's context and only small results come back](assets/purser-context.gif)
 
 ## Commands
 
