@@ -45,6 +45,12 @@ Run these commands inside Claude Code:
 /plugin install purser@purser-claude-orchestrator
 ```
 
+Or, from a terminal:
+
+```bash
+claude plugin marketplace add neurot1ca/purser-claude-orchestrator && claude plugin install purser@purser-claude-orchestrator
+```
+
 Restart Claude Code, then configure Purser:
 
 ```text
