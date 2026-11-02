@@ -91,6 +91,10 @@ The background job board tracks each job and the work it is waiting on.
 4. **Review:** Claude reviews every finished job. Reviewer can provide an advisory second opinion. Unaccepted work can return to the recorded job for repair.
 5. **Apply and validate:** After Claude accepts the reviewed change, Purser applies it and host validation runs on the applied revision. Finished worktrees are scheduled for cleanup when eligible.
 
+![One delegated job, from the prompt to a validated commit](assets/purser-flow.gif)
+
+[Watch as MP4](assets/purser-flow.mp4)
+
 ## Highlights
 
 <table>
@@ -123,6 +127,10 @@ You can set the Codex coder's thinking effort for new jobs to low, medium, high,
 | --- | --- |
 | `purser:dispatcher` | Runs one delegated job on a Haiku model and returns a receipt of at most 250 tokens. |
 | `purser:helper` | Answers read-only lookups on a Haiku model, such as where a symbol is defined or what a log says, and never edits files. |
+
+![Heavy work stays outside main Claude's context and only small results come back](assets/purser-context.gif)
+
+[Watch as MP4](assets/purser-context.mp4)
 
 ## Commands
 
