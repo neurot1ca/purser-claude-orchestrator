@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.226 — 2026-11-02
+
+- **Fixed:** `plan accept` takes a milestone write path that ends in a directory glob such as `dir/**`; other globs are still refused.
+- **Fixed:** an agy coder job whose agy process exits waiting on a background task keeps its worktree changes and goes to review with a warning instead of failing.
+
 ## 0.1.225 — 2026-11-02
 
 - **Fixed:** the idle auto-compact wake prompt is recognised even when the host omits its origin, so the resume turn no longer re-arms the idle timer; a prompt with an explicit user origin still re-arms it.
