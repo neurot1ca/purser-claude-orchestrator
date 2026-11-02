@@ -201,8 +201,16 @@ func TestRunChecksPassEmptyAndDeadlineSideEffects(t *testing.T) {
 			t.Fatalf("unstarted check side effects %#v", exhausted)
 		}
 	} else if exhausted.Results[0].Tail == "timed out" || strings.HasSuffix(exhausted.Results[0].Tail, "\ntimed out") {
-		if strings.Join(exhausted.SideEffectPaths, ",") != "generated.txt" {
-			t.Fatalf("started check side effects %#v", exhausted)
+		_, statErr := os.Stat(path)
+		if statErr != nil && !os.IsNotExist(statErr) {
+			t.Fatalf("stat generated file: %v", statErr)
+		}
+		wantSideEffects := ""
+		if statErr == nil {
+			wantSideEffects = "generated.txt"
+		}
+		if strings.Join(exhausted.SideEffectPaths, ",") != wantSideEffects {
+			t.Fatalf("timed out check side effects %#v, want %q", exhausted, wantSideEffects)
 		}
 	} else {
 		t.Fatalf("unexpected deadline result %#v", exhausted.Results[0])
