@@ -14,8 +14,6 @@ Purser is a parallel coding agent orchestrator for Claude Code: it delegates cod
 
 ![One delegated job, from the prompt to a validated commit](assets/purser-flow.gif)
 
-[Watch as MP4](assets/purser-flow.mp4)
-
 ![Purser plans five features, runs them in parallel and applies them](assets/purser-demo.gif)
 </div>
 
@@ -129,8 +127,6 @@ You can set the Codex coder's thinking effort for new jobs to low, medium, high,
 | `purser:helper` | Answers read-only lookups on a Haiku model, such as where a symbol is defined or what a log says, and never edits files. |
 
 ![Heavy work stays outside main Claude's context and only small results come back](assets/purser-context.gif)
-
-[Watch as MP4](assets/purser-context.mp4)
 
 ## Commands
 
