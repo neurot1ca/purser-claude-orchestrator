@@ -1,0 +1,40 @@
+{
+  "id": "share-codex-go-build-cache-config",
+  "class": "behavior_preserving_refactor",
+  "split": "confirmation",
+  "source_commit": "f305ebbaa87e00e9fa7d5b2f23506516d50f319a",
+  "start_commit": "ad09caa3edb0fc8bb062e261fd1c8fa2225a8429",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/jobs/host_run_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/jobs",
+      "-run",
+      "TestHostAddsSharedGoCacheForWorkspaceWrite|TestHostAddsSharedGoCacheWithoutWorktree|TestHostPreservesExplicitGoCacheEnvironment",
+      "-count=1"
+    ],
+    "structural": [
+      {
+        "path": "go/internal/jobs/host.go",
+        "must_contain": "func configureCodexGoCache("
+      },
+      {
+        "path": "go/internal/jobs/host.go",
+        "must_contain": "configureCodexGoCache(&args, &childEnv, stateRoot, writableRoots)"
+      }
+    ]
+  },
+  "scope": [
+    "go/internal/jobs/host.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

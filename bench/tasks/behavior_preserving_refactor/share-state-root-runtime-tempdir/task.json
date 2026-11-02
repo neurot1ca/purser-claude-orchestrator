@@ -1,0 +1,61 @@
+{
+  "id": "share-state-root-runtime-tempdir",
+  "class": "behavior_preserving_refactor",
+  "split": "confirmation",
+  "source_commit": "f70ac3d2998ef7b79e9d0b5f7072526d8088ff7c",
+  "start_commit": "67ae956cbf9327d7d8012b02efed4d906750ced9",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/enforce/probe_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/enforce",
+      "./go/internal/review",
+      "-run",
+      "TestP39SuccessfulProbeReturnsAndQueuesCreditNotice|TestReadiness",
+      "-count=1"
+    ],
+    "structural": [
+      {
+        "path": "go/internal/enforce/runtime_temp.go",
+        "must_contain": "func runtimeTempDir("
+      },
+      {
+        "path": "go/internal/enforce/probe.go",
+        "must_contain": "runtimeTempDir(\"purser-api-probe-\")"
+      },
+      {
+        "path": "go/internal/enforce/probe.go",
+        "must_not_contain": "os.MkdirTemp(\"\", \"purser-api-probe-\")"
+      },
+      {
+        "path": "go/internal/review/runtime_temp.go",
+        "must_contain": "func runtimeTempDir("
+      },
+      {
+        "path": "go/internal/review/native.go",
+        "must_contain": "runtimeTempDir(\"reviewer1-\")"
+      },
+      {
+        "path": "go/internal/review/readiness.go",
+        "must_contain": "runtimeTempDir(\"readiness-check-\")"
+      }
+    ]
+  },
+  "scope": [
+    "go/internal/enforce/probe.go",
+    "go/internal/enforce/runtime_temp.go",
+    "go/internal/review/native.go",
+    "go/internal/review/readiness.go",
+    "go/internal/review/runtime_temp.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

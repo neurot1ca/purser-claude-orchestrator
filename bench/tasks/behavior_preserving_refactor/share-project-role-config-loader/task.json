@@ -1,0 +1,58 @@
+{
+  "id": "share-project-role-config-loader",
+  "class": "behavior_preserving_refactor",
+  "split": "calibration",
+  "source_commit": "621451dffd128ceae4080d7abf3742b2f64904a0",
+  "start_commit": "1dceb4cd35239bc1e882544cf030c08e579dad93",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/cmd/purser-hook/coder_effort_test.go",
+      "go/internal/jobs/readiness_host_test.go",
+      "go/internal/jobs/start_validate_test.go",
+      "go/internal/models/models_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/cmd/purser-hook",
+      "./go/internal/jobs",
+      "./go/internal/models",
+      "-run",
+      "TestCoderEffortUsesProjectCoderRole|TestProjectRoleGearOutputUsesProjectRoutes|TestProjectRoleReadinessUsesProjectExecutable|TestProjectRoleConfiguredAgentUsesResolvedRepository|TestDiscoverChecksOverlayOnlyRoute",
+      "-count=1"
+    ],
+    "structural": [
+      {
+        "path": "go/cmd/purser-hook/gear.go",
+        "must_contain": "policy.LoadCoderConfigForRepository("
+      },
+      {
+        "path": "go/cmd/purser-hook/private.go",
+        "must_contain": "policy.LoadCoderConfigForRepository("
+      },
+      {
+        "path": "go/internal/jobs/readiness_host.go",
+        "must_contain": "policy.LoadCoderConfigForRepository("
+      },
+      {
+        "path": "go/internal/models/models.go",
+        "must_contain": "policy.LoadCoderConfigForRepository("
+      }
+    ]
+  },
+  "scope": [
+    "go/cmd/purser-hook/coder_effort.go",
+    "go/cmd/purser-hook/gear.go",
+    "go/cmd/purser-hook/private.go",
+    "go/internal/jobs/readiness_host.go",
+    "go/internal/jobs/start_validate.go",
+    "go/internal/models/models.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

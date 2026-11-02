@@ -1,0 +1,66 @@
+{
+  "id": "share-retrying-file-replace",
+  "class": "behavior_preserving_refactor",
+  "split": "calibration",
+  "source_commit": "8b5db3a403dfd64241f66401c16405d071bf7fea",
+  "start_commit": "805907cef80b565f4ab60e91735ee4bf6bee9b78",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/fsretry/replace_test.go",
+      "go/internal/enforce/observations_test.go",
+      "go/internal/jobs/store_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/fsretry",
+      "./go/internal/enforce",
+      "./go/internal/jobs",
+      "-run",
+      "TestReplace|TestAtomicObservationNoteRetriesTransientReplaceFailure|TestAtomicWriteRetriesTransientReplaceError",
+      "-count=1"
+    ],
+    "structural": [
+      {
+        "path": "go/internal/fsretry/replace.go",
+        "must_contain": "func ReplaceWith("
+      },
+      {
+        "path": "go/internal/contextio/context.go",
+        "must_contain": "fsretry.Replace("
+      },
+      {
+        "path": "go/internal/jobs/store.go",
+        "must_contain": "fsretry.ReplaceWith("
+      },
+      {
+        "path": "go/internal/jobs/store.go",
+        "must_not_contain": "func transientReplace("
+      },
+      {
+        "path": "go/internal/enforce/observations.go",
+        "must_contain": "fsretry.ReplaceWith("
+      }
+    ]
+  },
+  "scope": [
+    "go/internal/contextio/context.go",
+    "go/internal/contextio/session.go",
+    "go/internal/enforce/admission.go",
+    "go/internal/enforce/bundle.go",
+    "go/internal/enforce/observations.go",
+    "go/internal/enforce/post.go",
+    "go/internal/enforce/pre.go",
+    "go/internal/enforce/task_usage.go",
+    "go/internal/fsretry/replace.go",
+    "go/internal/jobs/store.go",
+    "go/internal/jobs/thread.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

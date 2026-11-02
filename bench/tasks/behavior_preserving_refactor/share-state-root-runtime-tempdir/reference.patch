@@ -1,0 +1,83 @@
+diff --git a/go/internal/enforce/probe.go b/go/internal/enforce/probe.go
+index edf05bc8..58689379 100644
+--- a/go/internal/enforce/probe.go
++++ b/go/internal/enforce/probe.go
+@@ -25,7 +25,7 @@ func RunProbe(prefix []string, model string, timeout time.Duration) map[string]a
+ 	if timeout <= 0 || len(prefix) == 0 {
+ 		return ProbeResult(nil, "invalid probe command", false, false, -1, false)
+ 	}
+-	cwd, err := os.MkdirTemp("", "purser-api-probe-")
++	cwd, err := runtimeTempDir("purser-api-probe-")
+ 	if err != nil {
+ 		return ProbeResult(nil, err.Error(), false, false, -1, false)
+ 	}
+diff --git a/go/internal/enforce/runtime_temp.go b/go/internal/enforce/runtime_temp.go
+new file mode 100644
+index 00000000..c60f4b84
+--- /dev/null
++++ b/go/internal/enforce/runtime_temp.go
+@@ -0,0 +1,16 @@
++package enforce
++
++import (
++	"os"
++	"path/filepath"
++)
++
++func runtimeTempDir(prefix string) (string, error) {
++	dir := filepath.Join(defaultPreStateRoot(""), "cache", "tmp")
++	if err := os.MkdirAll(dir, 0700); err == nil {
++		if path, err := os.MkdirTemp(dir, prefix); err == nil {
++			return path, nil
++		}
++	}
++	return os.MkdirTemp("", prefix)
++}
+diff --git a/go/internal/review/native.go b/go/internal/review/native.go
+index d34b8300..15ccac16 100644
+--- a/go/internal/review/native.go
++++ b/go/internal/review/native.go
+@@ -330,7 +330,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
+ 		return bridgeOutcome(Unavailable("REVIEWER_TIMEOUT", "Reviewer-1 exceeded its bounded timeout.", config, provider))
+ 	}
+ 	root := fmt.Sprint(args["repo_root"])
+-	working, err := os.MkdirTemp("", "reviewer1-")
++	working, err := runtimeTempDir("reviewer1-")
+ 	if err != nil {
+ 		return bridgeOutcome(Unavailable("REVIEWER_WORKDIR_UNAVAILABLE", "The isolated Reviewer-1 working directory failed ("+errorType(err)+").", config, provider))
+ 	}
+diff --git a/go/internal/review/readiness.go b/go/internal/review/readiness.go
+index 8bf5e4e4..5ea89a98 100644
+--- a/go/internal/review/readiness.go
++++ b/go/internal/review/readiness.go
+@@ -81,7 +81,7 @@ func RunReadiness(ctx context.Context, pluginRoot string, request ReadinessReque
+ 	}
+ 	ctx, cancel := context.WithTimeout(ctx, timeout)
+ 	defer cancel()
+-	working, err := os.MkdirTemp("", "readiness-check-")
++	working, err := runtimeTempDir("readiness-check-")
+ 	if err != nil {
+ 		return unknownReadiness(), err
+ 	}
+diff --git a/go/internal/review/runtime_temp.go b/go/internal/review/runtime_temp.go
+new file mode 100644
+index 00000000..c14f4597
+--- /dev/null
++++ b/go/internal/review/runtime_temp.go
+@@ -0,0 +1,16 @@
++package review
++
++import (
++	"os"
++	"path/filepath"
++)
++
++func runtimeTempDir(prefix string) (string, error) {
++	dir := filepath.Join(reviewerDiagnosticStateRoot(), "cache", "tmp")
++	if err := os.MkdirAll(dir, 0700); err == nil {
++		if path, err := os.MkdirTemp(dir, prefix); err == nil {
++			return path, nil
++		}
++	}
++	return os.MkdirTemp("", prefix)
++}

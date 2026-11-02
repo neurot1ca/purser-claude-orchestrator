@@ -1,0 +1,349 @@
+diff --git a/go/cmd/purser-hook/private.go b/go/cmd/purser-hook/private.go
+index 732c181c..9c60137d 100644
+--- a/go/cmd/purser-hook/private.go
++++ b/go/cmd/purser-hook/private.go
+@@ -20,6 +20,7 @@ import (
+ 	"purser-hook/internal/enforce"
+ 	"purser-hook/internal/jobs"
+ 	"purser-hook/internal/obsidian"
++	"purser-hook/internal/pluginroot"
+ 	"purser-hook/internal/policy"
+ )
+ 
+@@ -352,7 +353,7 @@ func launchPrivate(root string, args ...string) (int, int64, error) {
+ 	if os.Getenv("PURSER_TEST_DISABLE_CHILD_LAUNCH") == "1" {
+ 		return 0, 0, errors.New("private child launch disabled by test")
+ 	}
+-	executable, err := os.Executable()
++	executable, err := pluginroot.RuntimeExecutable(root)
+ 	if err != nil {
+ 		return 0, 0, err
+ 	}
+diff --git a/go/cmd/purser-hook/session_maintenance.go b/go/cmd/purser-hook/session_maintenance.go
+index 918adb8a..4da54fb7 100644
+--- a/go/cmd/purser-hook/session_maintenance.go
++++ b/go/cmd/purser-hook/session_maintenance.go
+@@ -10,6 +10,7 @@ import (
+ 
+ 	"purser-hook/internal/contextio"
+ 	"purser-hook/internal/maintenance"
++	"purser-hook/internal/pluginroot"
+ 	"purser-hook/internal/proc"
+ )
+ 
+@@ -44,7 +45,7 @@ func launchCatalogRefresh(repository string) {
+ 	if err != nil {
+ 		return
+ 	}
+-	executable, err := os.Executable()
++	executable, err := pluginroot.RuntimeExecutable(stateRoot())
+ 	if err != nil {
+ 		fmt.Fprintf(os.Stderr, "Purser: catalog refresh launch failed: %v\n", err)
+ 		return
+@@ -90,7 +91,7 @@ func wakeMaintenanceReport(repository string) {
+ 	if json.Unmarshal(markerData, &marker) != nil || !marker.Enabled || marker.ProjectRoot != root {
+ 		return
+ 	}
+-	executable, err := os.Executable()
++	executable, err := pluginroot.RuntimeExecutable(stateRoot())
+ 	if err != nil {
+ 		return
+ 	}
+diff --git a/go/internal/enforce/code_map.go b/go/internal/enforce/code_map.go
+index 40fb9753..1fd85683 100644
+--- a/go/internal/enforce/code_map.go
++++ b/go/internal/enforce/code_map.go
+@@ -14,6 +14,7 @@ import (
+ 	"time"
+ 
+ 	"purser-hook/internal/contextio"
++	"purser-hook/internal/pluginroot"
+ 	"purser-hook/internal/proc"
+ )
+ 
+@@ -58,7 +59,7 @@ func startCodeMapCompletion(repo, stateRoot string, start func([]string, []strin
+ 		return
+ 	}
+ 	_ = marker.Close()
+-	executable, err := os.Executable()
++	executable, err := pluginroot.RuntimeExecutable(stateRoot)
+ 	if err == nil {
+ 		err = start([]string{executable, "code-map", "--repo", repo, "--budget-seconds", "60"}, os.Environ(), repo)
+ 	}
+diff --git a/go/internal/enforce/post_mechanical.go b/go/internal/enforce/post_mechanical.go
+index 11467ec1..7d8c7496 100644
+--- a/go/internal/enforce/post_mechanical.go
++++ b/go/internal/enforce/post_mechanical.go
+@@ -12,6 +12,7 @@ import (
+ 	"time"
+ 
+ 	"purser-hook/internal/contextio"
++	"purser-hook/internal/pluginroot"
+ 	"purser-hook/internal/proc"
+ )
+ 
+@@ -844,7 +845,7 @@ func startMechanicalShadow(root, projectKey, repository, prompt, report, served,
+ 		_ = os.Remove(lock)
+ 		return false, err
+ 	}
+-	executable, err := os.Executable()
++	executable, err := pluginroot.RuntimeExecutable(root)
+ 	if err != nil {
+ 		_ = os.Remove(job)
+ 		_ = os.Remove(lock)
+diff --git a/go/internal/jobs/apply_validation.go b/go/internal/jobs/apply_validation.go
+index 6a3bf878..0b8aa92c 100644
+--- a/go/internal/jobs/apply_validation.go
++++ b/go/internal/jobs/apply_validation.go
+@@ -21,6 +21,7 @@ import (
+ 
+ 	"purser-hook/internal/contextio"
+ 	"purser-hook/internal/lease"
++	"purser-hook/internal/pluginroot"
+ 	"purser-hook/internal/proc"
+ 	"purser-hook/internal/profile"
+ 	"purser-hook/internal/waiter"
+@@ -199,6 +200,7 @@ func enqueueAppliedValidation(stateRoot string, job map[string]any, value map[st
+ 		result = validationSummary(record)
+ 		return
+ 	}
++	executable = pluginroot.RuntimeCopy(stateRoot, executable)
+ 	env := setValidationChildEnv(os.Environ())
+ 	pid, identity, err := launchApplyValidation([]string{executable, "validate-apply", stateRoot, key, id}, env, repo)
+ 	if err != nil {
+diff --git a/go/internal/jobs/cleanup.go b/go/internal/jobs/cleanup.go
+index e30109b9..72ccc685 100644
+--- a/go/internal/jobs/cleanup.go
++++ b/go/internal/jobs/cleanup.go
+@@ -19,6 +19,7 @@ import (
+ 	"purser-hook/internal/enforce"
+ 	"purser-hook/internal/learning"
+ 	"purser-hook/internal/lease"
++	"purser-hook/internal/pluginroot"
+ 	"purser-hook/internal/proc"
+ 	"purser-hook/internal/retention"
+ )
+@@ -79,6 +80,9 @@ func RunCleanup(root string, launch func() (int, int64, error)) error {
+ 		if executable, err := os.Executable(); err == nil {
+ 			retention.PrunePluginCache(executable)
+ 		}
++		if executable, err := pluginroot.RuntimeExecutable(root); err == nil {
++			pluginroot.PruneRuntime(root, executable, time.Now())
++		}
+ 		return nil
+ 	})
+ }
+diff --git a/go/internal/jobs/retirement.go b/go/internal/jobs/retirement.go
+index e68d7795..388f5ac5 100644
+--- a/go/internal/jobs/retirement.go
++++ b/go/internal/jobs/retirement.go
+@@ -13,6 +13,7 @@ import (
+ 	"time"
+ 
+ 	"purser-hook/internal/enforce"
++	"purser-hook/internal/pluginroot"
+ 	"purser-hook/internal/retention"
+ )
+ 
+@@ -89,7 +90,7 @@ func DispatchWorktreeRetirement(stateRoot, jobID string) error {
+ 	if !claimed {
+ 		return nil
+ 	}
+-	executable, err := os.Executable()
++	executable, err := pluginroot.RuntimeExecutable(root)
+ 	if err != nil {
+ 		releaseRetirementClaim(root, worktree)
+ 		return err
+diff --git a/go/internal/jobs/supervision.go b/go/internal/jobs/supervision.go
+index 29f19397..b1fc72ec 100644
+--- a/go/internal/jobs/supervision.go
++++ b/go/internal/jobs/supervision.go
+@@ -12,6 +12,8 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"purser-hook/internal/contextio"
++	"purser-hook/internal/pluginroot"
+ 	"purser-hook/internal/proc"
+ )
+ 
+@@ -143,7 +145,7 @@ type supervisedCommand struct {
+ }
+ 
+ func startSupervisedCommand(ctx context.Context, cmd *exec.Cmd, receipt string) (*supervisedCommand, error) {
+-	executable, err := os.Executable()
++	executable, err := pluginroot.RuntimeExecutable(contextio.StateRoot())
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/go/internal/pluginroot/runtime.go b/go/internal/pluginroot/runtime.go
+new file mode 100644
+index 00000000..9cc70172
+--- /dev/null
++++ b/go/internal/pluginroot/runtime.go
+@@ -0,0 +1,109 @@
++package pluginroot
++
++import (
++	"crypto/sha256"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"runtime"
++	"time"
++)
++
++// RuntimeExecutable keeps long-lived children outside the replaceable plugin
++// directory. Copy failures preserve the original executable and launch behavior.
++func RuntimeExecutable(stateRoot string) (string, error) {
++	executable, err := os.Executable()
++	if err != nil {
++		return executable, err
++	}
++	return RuntimeCopy(stateRoot, executable), nil
++}
++
++// RuntimeCopy also supports launchers that resolve a separate hook binary.
++func RuntimeCopy(stateRoot, executable string) string {
++	source, err := os.Open(executable)
++	if err != nil {
++		return executable
++	}
++	defer source.Close()
++	info, err := source.Stat()
++	if err != nil || !info.Mode().IsRegular() {
++		return executable
++	}
++	hash := sha256.New()
++	if _, err = io.Copy(hash, source); err != nil {
++		return executable
++	}
++	dir, err := filepath.Abs(filepath.Join(stateRoot, "runtime", fmt.Sprintf("%x", hash.Sum(nil)[:16])))
++	if err != nil {
++		return executable
++	}
++	target := filepath.Join(dir, filepath.Base(executable))
++	ready := func() bool {
++		cached, err := os.Lstat(target)
++		return err == nil && cached.Mode().IsRegular() && cached.Size() == info.Size() &&
++			(runtime.GOOS == "windows" || cached.Mode().Perm()&0111 == 0111)
++	}
++	if ready() {
++		return target
++	}
++	if err = os.MkdirAll(dir, 0700); err != nil {
++		return executable
++	}
++	temp, err := os.CreateTemp(dir, ".copy-")
++	if err != nil {
++		return executable
++	}
++	defer os.Remove(temp.Name())
++	_, err = source.Seek(0, io.SeekStart)
++	if err == nil {
++		_, err = io.Copy(temp, source)
++	}
++	if err == nil {
++		err = temp.Chmod(0755)
++	}
++	if err == nil {
++		err = temp.Sync()
++	}
++	closeErr := temp.Close()
++	if err != nil || closeErr != nil {
++		return executable
++	}
++	for attempt := 0; attempt < 4; attempt++ {
++		// Another hook may have published the same copy while we were writing.
++		if ready() || os.Rename(temp.Name(), target) == nil {
++			return target
++		}
++		if runtime.GOOS != "windows" {
++			break
++		}
++		if attempt < 3 {
++			time.Sleep(25 * time.Millisecond)
++		}
++	}
++	return executable
++}
++
++// PruneRuntime removes only older copies after the normal retention interval.
++// In-use Windows executables may resist deletion; the next sweep retries them.
++func PruneRuntime(stateRoot, current string, now time.Time) {
++	root, err := filepath.Abs(filepath.Join(stateRoot, "runtime"))
++	if err != nil || filepath.Dir(filepath.Dir(current)) != root {
++		return
++	}
++	currentDir := filepath.Dir(current)
++	currentInfo, err := os.Stat(currentDir)
++	if err != nil {
++		return
++	}
++	entries, _ := os.ReadDir(root)
++	for _, entry := range entries {
++		path := filepath.Join(root, entry.Name())
++		info, err := entry.Info()
++		if err == nil && entry.IsDir() && path != currentDir &&
++			info.ModTime().Before(currentInfo.ModTime()) && now.Sub(info.ModTime()) >= 72*time.Hour {
++			_ = os.RemoveAll(path)
++		}
++	}
++}
+diff --git a/go/internal/review/supervised.go b/go/internal/review/supervised.go
+index fc7fadcd..c30ca476 100644
+--- a/go/internal/review/supervised.go
++++ b/go/internal/review/supervised.go
+@@ -11,6 +11,8 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"purser-hook/internal/contextio"
++	"purser-hook/internal/pluginroot"
+ 	"purser-hook/internal/proc"
+ )
+ 
+@@ -104,7 +106,7 @@ func runSupervised(ctx context.Context, args []string, cwd string, env []string,
+ 			return -1, err
+ 		}
+ 	}
+-	executable, err := os.Executable()
++	executable, err := pluginroot.RuntimeExecutable(contextio.StateRoot())
+ 	if err != nil {
+ 		_ = outRead.Close()
+ 		_ = outWrite.Close()
+diff --git a/go/internal/waiter/command.go b/go/internal/waiter/command.go
+index a94a4ce9..94e91697 100644
+--- a/go/internal/waiter/command.go
++++ b/go/internal/waiter/command.go
+@@ -1,16 +1,18 @@
+ package waiter
+ 
+ import (
+-	"os"
+ 	"path/filepath"
+ 	"runtime"
+ 	"strings"
++
++	"purser-hook/internal/pluginroot"
++	"purser-hook/internal/profile"
+ )
+ 
+ // Command returns the runnable command for the waiter of jobID.
+ func Command(jobID string) string {
+ 	executable := "purser-hook"
+-	if path, err := os.Executable(); err == nil {
++	if path, err := pluginroot.RuntimeExecutable(profile.StateRoot()); err == nil {
+ 		if path, err = filepath.Abs(path); err == nil {
+ 			if resolved, err := filepath.EvalSymlinks(path); err == nil {
+ 				executable = resolved
+@@ -30,7 +32,7 @@ func Command(jobID string) string {
+ // ValidationCommand returns a shell-ready command for the bounded apply-validation waiter.
+ func ValidationCommand(stateRoot, repositoryKey, jobID string) string {
+ 	executable := "purser-hook"
+-	if path, err := os.Executable(); err == nil {
++	if path, err := pluginroot.RuntimeExecutable(stateRoot); err == nil {
+ 		if path, err = filepath.Abs(path); err == nil {
+ 			if resolved, err := filepath.EvalSymlinks(path); err == nil {
+ 				executable = resolved

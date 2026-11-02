@@ -1,0 +1,357 @@
+diff --git a/go/internal/contextio/context.go b/go/internal/contextio/context.go
+index ade4e0b6..82a66bc1 100644
+--- a/go/internal/contextio/context.go
++++ b/go/internal/contextio/context.go
+@@ -17,10 +17,10 @@ import (
+ 	"runtime"
+ 	"strconv"
+ 	"strings"
+-	"syscall"
+ 	"time"
+ 	"unicode/utf8"
+ 
++	"purser-hook/internal/fsretry"
+ 	"purser-hook/internal/proc"
+ )
+ 
+@@ -357,32 +357,7 @@ func writeTurn(path string, t map[string]any) error {
+ 	return replaceWithRetry(name, path)
+ }
+ func replaceWithRetry(source, destination string) error {
+-	deadline := time.Now().Add(30 * time.Millisecond)
+-	for attempt := 0; attempt < 4; attempt++ {
+-		err := os.Rename(source, destination)
+-		if err == nil {
+-			return nil
+-		}
+-		if !isPermissionError(err) || attempt == 3 {
+-			return err
+-		}
+-		remaining := time.Until(deadline)
+-		if remaining <= 0 {
+-			return err
+-		}
+-		delay := time.Duration(5*(1<<attempt)) * time.Millisecond
+-		if delay > remaining {
+-			delay = remaining
+-		}
+-		time.Sleep(delay)
+-	}
+-	return nil
+-}
+-func isPermissionError(err error) bool {
+-	if errors.Is(err, os.ErrPermission) {
+-		return true
+-	}
+-	return runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(32))
++	return fsretry.Replace(source, destination)
+ }
+ func isOSError(err error) bool {
+ 	var pathErr *os.PathError
+diff --git a/go/internal/contextio/session.go b/go/internal/contextio/session.go
+index 0eb5699f..4e14a66d 100644
+--- a/go/internal/contextio/session.go
++++ b/go/internal/contextio/session.go
+@@ -20,6 +20,7 @@ import (
+ 	"time"
+ 	"unicode"
+ 
++	"purser-hook/internal/fsretry"
+ 	"purser-hook/internal/measures"
+ 	"purser-hook/internal/pluginroot"
+ 	"purser-hook/internal/waiter"
+@@ -1317,7 +1318,7 @@ func writeJSONAtomically(path string, state any) error {
+ 	if err := file.Close(); err != nil {
+ 		return err
+ 	}
+-	return os.Rename(name, path)
++	return fsretry.Replace(name, path)
+ }
+ 
+ func number(value any) int {
+diff --git a/go/internal/enforce/admission.go b/go/internal/enforce/admission.go
+index 594416e6..bea9ce3b 100644
+--- a/go/internal/enforce/admission.go
++++ b/go/internal/enforce/admission.go
+@@ -9,6 +9,7 @@ import (
+ 	"path/filepath"
+ 	"unicode/utf8"
+ 
++	"purser-hook/internal/fsretry"
+ 	"purser-hook/internal/lease"
+ 	"purser-hook/internal/ledger"
+ )
+@@ -200,7 +201,7 @@ func atomicAdmissionJSON(path string, value any) error {
+ 	if closeErr != nil {
+ 		return closeErr
+ 	}
+-	return os.Rename(tmp.Name(), path)
++	return fsretry.Replace(tmp.Name(), path)
+ }
+ 
+ func threadIndexFile(root, threadID string) string {
+diff --git a/go/internal/enforce/bundle.go b/go/internal/enforce/bundle.go
+index 2b90aace..8fc448b4 100644
+--- a/go/internal/enforce/bundle.go
++++ b/go/internal/enforce/bundle.go
+@@ -10,6 +10,7 @@ import (
+ 	"strings"
+ 	"unicode/utf8"
+ 
++	"purser-hook/internal/fsretry"
+ 	"purser-hook/internal/review"
+ )
+ 
+@@ -384,5 +385,5 @@ func atomicWrite(path string, data []byte) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	return os.Rename(name, path)
++	return fsretry.Replace(name, path)
+ }
+diff --git a/go/internal/enforce/observations.go b/go/internal/enforce/observations.go
+index 29c75a1a..991b06be 100644
+--- a/go/internal/enforce/observations.go
++++ b/go/internal/enforce/observations.go
+@@ -20,6 +20,7 @@ import (
+ 	"time"
+ 
+ 	"purser-hook/internal/contextio"
++	"purser-hook/internal/fsretry"
+ 	"purser-hook/internal/obsidian"
+ 	"purser-hook/internal/telemetryhealth"
+ )
+@@ -1844,7 +1845,7 @@ func atomicObservationJSON(path string, encoded []byte) error {
+ 	if closeErr != nil {
+ 		return closeErr
+ 	}
+-	return os.Rename(tmp, path)
++	return fsretry.Replace(tmp, path)
+ }
+ 
+ var observationProjectionNow = time.Now
+@@ -1875,13 +1876,7 @@ func atomicObservationNote(path, content string) error {
+ 	if closeErr != nil {
+ 		return closeErr
+ 	}
+-	for attempt := 0; ; attempt++ {
+-		err = renameObservationNote(tmp, path)
+-		if err == nil || attempt == 2 {
+-			return err
+-		}
+-		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
+-	}
++	return fsretry.ReplaceWith(renameObservationNote, tmp, path)
+ }
+ 
+ func observationErrorCategory(err error) string {
+diff --git a/go/internal/enforce/post.go b/go/internal/enforce/post.go
+index 5455a888..f31c8f53 100644
+--- a/go/internal/enforce/post.go
++++ b/go/internal/enforce/post.go
+@@ -10,6 +10,7 @@ import (
+ 	"path/filepath"
+ 	"time"
+ 
++	"purser-hook/internal/fsretry"
+ 	"purser-hook/internal/lease"
+ )
+ 
+@@ -133,7 +134,7 @@ func persistRawOutputAs(root, name string, value any) (string, error) {
+ 	if err != nil {
+ 		return "", err
+ 	}
+-	if err = os.Rename(tmpName, path); err != nil {
++	if err = fsretry.Replace(tmpName, path); err != nil {
+ 		return "", err
+ 	}
+ 	absolute, err := filepath.Abs(path)
+diff --git a/go/internal/enforce/pre.go b/go/internal/enforce/pre.go
+index d813afe8..f5f93219 100644
+--- a/go/internal/enforce/pre.go
++++ b/go/internal/enforce/pre.go
+@@ -13,6 +13,7 @@ import (
+ 	"time"
+ 	"unicode/utf8"
+ 
++	"purser-hook/internal/fsretry"
+ 	"purser-hook/internal/lease"
+ 	"purser-hook/internal/ledger"
+ )
+@@ -310,7 +311,7 @@ func writeBypass(root string, event map[string]any, reason string, metadata map[
+ 	if err != nil {
+ 		return err
+ 	}
+-	return os.Rename(tmp.Name(), path)
++	return fsretry.Replace(tmp.Name(), path)
+ }
+ 
+ func WriteUndeliveredMarker(root string, event map[string]any) error {
+@@ -366,7 +367,7 @@ func WriteUndeliveredMarker(root string, event map[string]any) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	return os.Rename(tmp.Name(), path)
++	return fsretry.Replace(tmp.Name(), path)
+ }
+ 
+ func cleanupUndeliveredAsyncStart(root, pendingPath, markerPath string) error {
+diff --git a/go/internal/enforce/task_usage.go b/go/internal/enforce/task_usage.go
+index da11db49..948e2fd6 100644
+--- a/go/internal/enforce/task_usage.go
++++ b/go/internal/enforce/task_usage.go
+@@ -13,6 +13,7 @@ import (
+ 	"time"
+ 
+ 	"purser-hook/internal/contextio"
++	"purser-hook/internal/fsretry"
+ )
+ 
+ const (
+@@ -207,7 +208,7 @@ func writeActiveTaskJSON(path string, record map[string]any) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	return os.Rename(tempPath, path)
++	return fsretry.Replace(tempPath, path)
+ }
+ 
+ func taskUsageUnknown(reason string) map[string]any {
+diff --git a/go/internal/fsretry/replace.go b/go/internal/fsretry/replace.go
+new file mode 100644
+index 00000000..47886722
+--- /dev/null
++++ b/go/internal/fsretry/replace.go
+@@ -0,0 +1,56 @@
++// Package fsretry provides bounded retries for atomic file replacement.
++package fsretry
++
++import (
++	"errors"
++	"os"
++	"runtime"
++	"syscall"
++	"time"
++)
++
++var rename = os.Rename
++var now = time.Now
++var sleep = time.Sleep
++
++// Replace atomically renames src over dst, retrying transient filesystem
++// failures for a bounded period to accommodate short-lived Windows file locks.
++func Replace(src, dst string) error {
++	return ReplaceWith(rename, src, dst)
++}
++
++// ReplaceWith applies the same retry policy to a caller-supplied rename
++// function, allowing packages to preserve their existing test seams.
++func ReplaceWith(rename func(string, string) error, src, dst string) error {
++	deadline := now().Add(2 * time.Second)
++	delay := 25 * time.Millisecond
++	for {
++		err := rename(src, dst)
++		if err == nil || !transient(err) {
++			return err
++		}
++		remaining := deadline.Sub(now())
++		if remaining <= 0 {
++			return err
++		}
++		if delay > remaining {
++			delay = remaining
++		}
++		sleep(delay)
++		delay *= 2
++		if delay > 250*time.Millisecond {
++			delay = 250 * time.Millisecond
++		}
++	}
++}
++
++func transient(err error) bool {
++	if errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EBUSY) {
++		return true
++	}
++	if runtime.GOOS != "windows" {
++		return false
++	}
++	var errno syscall.Errno
++	return errors.As(err, &errno) && (errno == syscall.Errno(5) || errno == syscall.Errno(32))
++}
+diff --git a/go/internal/jobs/store.go b/go/internal/jobs/store.go
+index aa1a9d03..300304e2 100644
+--- a/go/internal/jobs/store.go
++++ b/go/internal/jobs/store.go
+@@ -8,10 +8,9 @@ import (
+ 	"io"
+ 	"os"
+ 	"path/filepath"
+-	"runtime"
+ 	"strings"
+-	"syscall"
+-	"time"
++
++	"purser-hook/internal/fsretry"
+ )
+ 
+ // Record keeps top-level fields in their original order and retains raw values,
+@@ -191,35 +190,7 @@ func atomicWrite(path string, data []byte) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	deadline := time.Now().Add(2 * time.Second)
+-	delay := 25 * time.Millisecond
+-	for {
+-		err = replaceFile(tmp, path)
+-		if err == nil || !transientReplace(err) {
+-			return err
+-		}
+-		remaining := time.Until(deadline)
+-		if remaining <= 0 {
+-			return err
+-		}
+-		if delay > remaining {
+-			delay = remaining
+-		}
+-		time.Sleep(delay)
+-		delay *= 2
+-		if delay > 250*time.Millisecond {
+-			delay = 250 * time.Millisecond
+-		}
+-	}
+-}
+-
+-func transientReplace(err error) bool {
+-	var errno syscall.Errno
+-	if !errors.As(err, &errno) {
+-		return false
+-	}
+-	return errno == syscall.EACCES || errno == syscall.EBUSY ||
+-		runtime.GOOS == "windows" && (errno == syscall.Errno(5) || errno == syscall.Errno(32))
++	return fsretry.ReplaceWith(replaceFile, tmp, path)
+ }
+ 
+ var ErrClaimConflict = errors.New("job generation claim conflict")
+diff --git a/go/internal/jobs/thread.go b/go/internal/jobs/thread.go
+index 52096ded..ee0f9a78 100644
+--- a/go/internal/jobs/thread.go
++++ b/go/internal/jobs/thread.go
+@@ -12,6 +12,8 @@ import (
+ 	"path/filepath"
+ 	"sort"
+ 	"strings"
++
++	"purser-hook/internal/fsretry"
+ )
+ 
+ const outputTokenLimitPrefix = "tool_output_token_limit="
+@@ -97,7 +99,7 @@ func SaveRecord(stateDir string, record map[string]any) error {
+ 	if err = file.Close(); err != nil {
+ 		return err
+ 	}
+-	return os.Rename(temp, RecordPath(stateDir, threadID))
++	return fsretry.Replace(temp, RecordPath(stateDir, threadID))
+ }
+ 
+ func marshalPythonJSON(value any) ([]byte, error) {

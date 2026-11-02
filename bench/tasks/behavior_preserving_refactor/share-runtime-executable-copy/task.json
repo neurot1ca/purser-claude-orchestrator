@@ -1,0 +1,69 @@
+{
+  "id": "share-runtime-executable-copy",
+  "class": "behavior_preserving_refactor",
+  "split": "confirmation",
+  "source_commit": "1540808670723f832f4c3f271c221468d9cbed75",
+  "start_commit": "72c4e60bd7e6b29b7e848f4afec620b95fcd6ee3",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/pluginroot/runtime_test.go",
+      "go/internal/enforce/post_mechanical_test.go",
+      "go/internal/enforce/post_start_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/pluginroot",
+      "./go/internal/enforce",
+      "-run",
+      "TestRuntimeExecutable|TestPruneRuntime|TestStartMechanicalShadowLaunchesBundledCommand|TestPostStartWaiterUsesExecutablePath",
+      "-count=1"
+    ],
+    "structural": [
+      {
+        "path": "go/internal/pluginroot/runtime.go",
+        "must_contain": "func RuntimeExecutable(stateRoot string) (string, error)"
+      },
+      {
+        "path": "go/internal/pluginroot/runtime.go",
+        "must_contain": "func RuntimeCopy(stateRoot, executable string) string"
+      },
+      {
+        "path": "go/internal/pluginroot/runtime.go",
+        "must_contain": "func PruneRuntime("
+      },
+      {
+        "path": "go/internal/waiter/command.go",
+        "must_contain": "pluginroot.RuntimeExecutable("
+      },
+      {
+        "path": "go/internal/jobs/supervision.go",
+        "must_contain": "pluginroot.RuntimeExecutable("
+      },
+      {
+        "path": "go/internal/review/supervised.go",
+        "must_contain": "pluginroot.RuntimeExecutable("
+      }
+    ]
+  },
+  "scope": [
+    "go/cmd/purser-hook/private.go",
+    "go/cmd/purser-hook/session_maintenance.go",
+    "go/internal/enforce/code_map.go",
+    "go/internal/enforce/post_mechanical.go",
+    "go/internal/jobs/apply_validation.go",
+    "go/internal/jobs/cleanup.go",
+    "go/internal/jobs/retirement.go",
+    "go/internal/jobs/supervision.go",
+    "go/internal/pluginroot/runtime.go",
+    "go/internal/review/supervised.go",
+    "go/internal/waiter/command.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}
