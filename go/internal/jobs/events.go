@@ -11,14 +11,18 @@ import (
 	"unicode/utf8"
 )
 
+const AgyBackgroundTaskAbandonedCode = "AGY_BACKGROUND_TASK_ABANDONED"
+
 // EventResult is the interpretation of an agent's JSON event stream.
 type EventResult struct {
-	ThreadID string         `json:"threadId,omitempty"`
-	Status   string         `json:"status"`
-	Failure  string         `json:"failure,omitempty"`
-	Final    string         `json:"final,omitempty"`
-	Notes    []string       `json:"notes,omitempty"`
-	Usage    map[string]any `json:"usage,omitempty"`
+	ThreadID string           `json:"threadId,omitempty"`
+	Status   string           `json:"status"`
+	Failure  string           `json:"failure,omitempty"`
+	Final    string           `json:"final,omitempty"`
+	Notes    []string         `json:"notes,omitempty"`
+	Findings []map[string]any `json:"findings,omitempty"`
+	Warnings []map[string]any `json:"warnings,omitempty"`
+	Usage    map[string]any   `json:"usage,omitempty"`
 }
 
 // EventStream consumes output as it arrives so ThreadID is available before
@@ -27,8 +31,10 @@ type EventStream struct {
 	agent          string
 	expectedThread string
 	pending        []byte
+	raw            []byte
 	result         EventResult
 	text           []string
+	fallbackText   []string
 	events         []map[string]any
 }
 
@@ -43,6 +49,10 @@ func NewEventStream(agent string, expectedThread ...string) *EventStream {
 // Write accepts arbitrary stdout chunks. A final unterminated JSON line is
 // consumed by Result, matching the bridge's EOF behavior.
 func (s *EventStream) Write(chunk []byte) string {
+	s.raw = append(s.raw, chunk...)
+	if len(s.raw) > 4000 {
+		s.raw = append(s.raw[:0], s.raw[len(s.raw)-4000:]...)
+	}
 	s.pending = append(s.pending, chunk...)
 	for {
 		i := bytes.IndexByte(s.pending, '\n')
@@ -77,6 +87,9 @@ func (s *EventStream) consume(line []byte) {
 		if success {
 			s.text = append(s.text, response)
 		} else {
+			if responseOK && response != "" {
+				s.fallbackText = append(s.fallbackText, response)
+			}
 			failure = firstString(event["error"], status, "Antigravity completion missing")
 		}
 	case "opencode":
@@ -169,6 +182,16 @@ func (s *EventStream) consume(line []byte) {
 }
 
 func (s *EventStream) Events() []map[string]any { return s.events }
+func (s *EventStream) RawOutput() string        { return string(s.raw) }
+func (s *EventStream) FallbackFinal() string    { return strings.Join(s.fallbackText, "") }
+
+func agyBackgroundTaskAbandoned(agent string, exitCode int, stdout, stderr, output string, result EventResult) bool {
+	if agent != "agy" || exitCode == 0 {
+		return false
+	}
+	combined := strings.ToLower(stdout + "\n" + stderr + "\n" + output + "\n" + result.Failure + "\n" + result.Final)
+	return strings.Contains(combined, "root agent idle") && strings.Contains(combined, "background task")
+}
 
 type testEvidenceRun struct {
 	index int

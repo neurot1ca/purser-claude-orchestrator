@@ -660,6 +660,39 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		if cancelled.Load() || ctx.Err() != nil {
 			break
 		}
+		outputData, _ := readArtifact(args.OutputPath)
+		if agyBackgroundTaskAbandoned(agent, exitCode, stream.RawOutput(), stderr.String(), string(outputData), result) {
+			var snapshot string
+			if !job.Get("snapshot", &snapshot) || snapshot == "" {
+				job.Get("baselineSnapshot", &snapshot)
+			}
+			if worktreeHasDelta(worktreePath, snapshot) {
+				finding := map[string]any{
+					"code":     AgyBackgroundTaskAbandonedCode,
+					"severity": "warning",
+					"message":  "Antigravity exited non-zero after root agent went idle waiting for a background task; worktree changes were preserved for review.",
+				}
+				result.Status = "success"
+				result.Failure = ""
+				result.Findings = []map[string]any{finding}
+				result.Warnings = []map[string]any{finding}
+				result.Notes = append(result.Notes, AgyBackgroundTaskAbandonedCode+": Antigravity exited non-zero after root agent went idle waiting for a background task; worktree changes were preserved for review.")
+				if result.ThreadID == "" {
+					result.ThreadID = args.ThreadID
+				}
+				if result.ThreadID == "" {
+					var recordedThread string
+					job.Get("threadId", &recordedThread)
+					result.ThreadID = recordedThread
+				}
+				if result.ThreadID == "" {
+					result.ThreadID = "agy-" + jobID
+				}
+				if result.Final == "" {
+					result.Final = firstString(stream.FallbackFinal(), strings.TrimSpace(string(outputData)), strings.TrimSpace(stderr.String()), strings.TrimSpace(stream.RawOutput()))
+				}
+			}
+		}
 		failureEvidence = LaunchFailureEvidence(agent, stream.Events(), stderr.String(), true,
 			numberOr(activity["stdoutBytes"], 0) > 0, hostOutputHasData(args.OutputPath), &exitCode)
 		if err = saveHostAttemptFields(path, jobID, generation, token, result.Status != "success" || result.ThreadID == "", failureEvidence); err != nil {
@@ -751,7 +784,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			}
 		}
 		content := result.Final
-		if data, readErr := os.ReadFile(args.OutputPath); readErr == nil {
+		if data, readErr := readArtifact(args.OutputPath); readErr == nil {
 			content = string(data)
 		}
 		jobResult := map[string]any{
@@ -759,6 +792,12 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 		if len(result.Notes) > 0 {
 			jobResult["notes"] = result.Notes
+		}
+		if len(result.Findings) > 0 {
+			jobResult["findings"] = result.Findings
+		}
+		if len(result.Warnings) > 0 {
+			jobResult["warnings"] = result.Warnings
 		}
 		checkReadinessBeforeSuccess(dir, jobID, jobResult)
 		finished = float64(time.Now().UnixNano()) / 1e9
@@ -1162,8 +1201,30 @@ func saveHostAttemptFields(path, id string, generation int64, token string, fail
 }
 
 func hostOutputHasData(path string) bool {
-	data, err := os.ReadFile(path)
+	data, err := readArtifact(path)
 	return len(data) > 0 || err != nil && !errors.Is(err, os.ErrNotExist)
+}
+
+func worktreeHasDelta(worktree, snapshot string) bool {
+	if worktree == "" || snapshot == "" {
+		return false
+	}
+	backoff := gitRetryBackoff[:]
+	for {
+		delta := ledger.ComputeJobDelta(worktree, snapshot)
+		if delta["status"] == "OK" {
+			if filtered, err := ledger.FilterJobDeltaChecked(worktree, delta); err == nil && filtered["status"] == "OK" {
+				count, _ := filtered["changed_file_count"].(int)
+				return count > 0
+			}
+		}
+		if patch, err := ledger.JobPatch(worktree, snapshot); err == nil {
+			return patch != ""
+		}
+		if !waitGitRetry(&backoff) {
+			return false
+		}
+	}
 }
 
 type eventWriter struct {

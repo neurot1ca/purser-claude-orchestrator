@@ -106,6 +106,12 @@ func finishJob(dir, id, state, code string, result map[string]any, message strin
 			if notes, ok := result["notes"]; ok {
 				_ = r.Set("notes", notes)
 			}
+			if findings, ok := result["findings"]; ok {
+				_ = r.Set("findings", findings)
+			}
+			if warnings, ok := result["warnings"]; ok {
+				_ = r.Set("warnings", warnings)
+			}
 			if models, ok := result["attemptedModels"]; ok {
 				_ = r.Set("attemptedModels", models)
 				_ = r.Set("servedAgent", result["servedAgent"])
@@ -256,7 +262,7 @@ func resultJob(dir, id string, now float64, opt ResultOptions) map[string]any {
 	if state == "SUCCEEDED" {
 		name, nOK := m["outputFile"].(string)
 		thread, tOK := m["threadId"].(string)
-		b, err := os.ReadFile(filepath.Join(dir, name))
+		b, err := readArtifact(filepath.Join(dir, name))
 		if !nOK || !tOK || err != nil {
 			value["state"] = "FAILED"
 			value["errorCode"] = "OUTPUT_UNAVAILABLE"
@@ -273,6 +279,14 @@ func resultJob(dir, id string, now float64, opt ResultOptions) map[string]any {
 			if notes, ok := m["notes"]; ok {
 				value["notes"] = notes
 				keys = append(keys, "notes")
+			}
+			if findings, ok := m["findings"]; ok {
+				value["findings"] = findings
+				keys = append(keys, "findings")
+			}
+			if warnings, ok := m["warnings"]; ok {
+				value["warnings"] = warnings
+				keys = append(keys, "warnings")
 			}
 		}
 	} else if terminalJobs[state] {

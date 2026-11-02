@@ -91,6 +91,15 @@ func TestHostFakeWorker(t *testing.T) {
 		_, _ = os.Stdout.WriteString("{\"type\": \"step_finish\", \"sessionID\": \"fake-session\", \"part\": {\"reason\": \"stop\"}}\r\n")
 		os.Exit(0)
 	}
+	if os.Getenv("PURSER_HOST_FAKE_AGENT") == "agy" {
+		if mode == "agy_background_edit" {
+			if err := os.WriteFile("change.txt", []byte("completed change\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, _ = os.Stderr.WriteString("root agent idle; waiting up to 30m0s for 1 background task(s)\n")
+		os.Exit(1)
+	}
 	if mode == "sleep" {
 		time.Sleep(3 * time.Second)
 		os.Exit(0)
@@ -1560,5 +1569,126 @@ func writeHostTestJSON(t *testing.T, path string, value any) {
 	}
 	if err = os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func runHostAgyAbandonedBackgroundFixture(t *testing.T, editWorktree bool) (string, *Record, map[string]any) {
+	t.Helper()
+	base := jobsScratchDir(t, "agy-bg-")
+	repo, state := filepath.Join(base, "repo"), filepath.Join(base, "state")
+	dir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) {
+		t.Helper()
+		out, err := proc.Hide(exec.Command("git", append([]string{"-C", repo}, args...)...)).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("config", "core.autocrlf", "false")
+	write(t, filepath.Join(repo, "change.txt"), "baseline\n")
+	git("add", "-A")
+	git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "baseline")
+
+	deadline := float64(time.Now().Add(time.Minute).UnixNano()) / 1e9
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": deadline, "repoRoot": repo, "taskId": "task-agy",
+		"readinessCheck": map[string]any{
+			"grounded": true, "agent": "off", "objective": "implement change", "acceptance_criteria": "change.txt updated",
+		},
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex", "agent": "agy", "codexBin": "agy", "args": map[string]any{
+			"cwd": repo, "worktree": true, "prompt": "implement change", "model": "gemini-2.5-pro",
+			"config": map[string]any{"model_reasoning_effort": "high"},
+		},
+	})
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_AGENT", "agy")
+	if editWorktree {
+		t.Setenv("PURSER_HOST_FAKE_MODE", "agy_background_edit")
+	} else {
+		t.Setenv("PURSER_HOST_FAKE_MODE", "agy_background_empty")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = RunHostGeneration(dir, hostTestID, 1, "owner", HostOptions{
+		StateRoot: state,
+		WorkerCommand: func(args LaunchArgs) ([]string, error) {
+			return []string{executable, "-test.run=^TestHostFakeWorker$", "--", args.OutputPath}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := readJob(dir, hostTestID)
+	if job == nil {
+		t.Fatal("job record missing")
+	}
+	res := Result(state, hostTestID, float64(time.Now().UnixNano())/1e9, ResultOptions{StateRoot: state})
+	return dir, job, res
+}
+
+func TestHostAgyAbandonedBackgroundTaskCompletesWithDelta(t *testing.T) {
+	dir, job, res := runHostAgyAbandonedBackgroundFixture(t, true)
+	m := recordMap(job)
+	if m["state"] != "SUCCEEDED" || nonemptyString(m["errorCode"]) != "" {
+		t.Fatalf("job state/errorCode = %v/%v, want SUCCEEDED/empty", m["state"], m["errorCode"])
+	}
+	if _, err := os.Stat(filepath.Join(dir, hostTestID+".partial.patch")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial patch should not exist on completed job, stat err = %v", err)
+	}
+	if m["launchFailureEvidence"] != nil || m["resumeStatus"] == "partial patch saved" {
+		t.Fatalf("unexpected failure evidence or partial patch status: evidence=%#v resumeStatus=%v", m["launchFailureEvidence"], m["resumeStatus"])
+	}
+	findings, ok := m["findings"].([]any)
+	if !ok || len(findings) != 1 || findings[0].(map[string]any)["code"] != AgyBackgroundTaskAbandonedCode || findings[0].(map[string]any)["severity"] != "warning" {
+		t.Fatalf("job findings = %#v, want single %s warning", m["findings"], AgyBackgroundTaskAbandonedCode)
+	}
+	readiness, _ := m["readinessCheck"].(map[string]any)
+	if readiness["result"] == nil {
+		t.Fatalf("review readiness path was not reached: readinessCheck = %#v", readiness)
+	}
+	if m["reviewedOutcome"] != nil || m["reviewedSnapshot"] != nil {
+		t.Fatalf("review must not be marked passed by warning recovery: reviewedOutcome=%v reviewedSnapshot=%v", m["reviewedOutcome"], m["reviewedSnapshot"])
+	}
+	structured, _ := res["structuredContent"].(map[string]any)
+	if res["isError"] == true || structured["state"] != "SUCCEEDED" || nonemptyString(structured["threadId"]) == "" || nonemptyString(structured["worktreePath"]) == "" {
+		t.Fatalf("Result() = %#v, want completed structured result with threadId and worktreePath", res)
+	}
+	resFindings, ok := structured["findings"].([]any)
+	if !ok || len(resFindings) != 1 || resFindings[0].(map[string]any)["code"] != AgyBackgroundTaskAbandonedCode {
+		t.Fatalf("Result() structured findings = %#v, want %s", structured["findings"], AgyBackgroundTaskAbandonedCode)
+	}
+}
+
+func TestHostAgyAbandonedBackgroundTaskFailsWithEmptyDelta(t *testing.T) {
+	_, job, res := runHostAgyAbandonedBackgroundFixture(t, false)
+	m := recordMap(job)
+	if m["state"] != "FAILED" || m["errorCode"] != "CODEX_FAILED" {
+		t.Fatalf("job state/errorCode = %v/%v, want FAILED/CODEX_FAILED", m["state"], m["errorCode"])
+	}
+	if m["findings"] != nil || m["warnings"] != nil {
+		t.Fatalf("failed job should not record completion findings/warnings: %#v %#v", m["findings"], m["warnings"])
+	}
+	if m["resumeStatus"] != "no partial changes" {
+		t.Fatalf("resumeStatus = %v, want no partial changes", m["resumeStatus"])
+	}
+	readiness, _ := m["readinessCheck"].(map[string]any)
+	if readiness["result"] != nil {
+		t.Fatalf("failed job should not run readiness review path: %#v", readiness)
+	}
+	structured, _ := res["structuredContent"].(map[string]any)
+	if res["isError"] != true || structured["state"] != "FAILED" || structured["errorCode"] != "CODEX_FAILED" {
+		t.Fatalf("Result() = %#v, want FAILED/CODEX_FAILED", res)
 	}
 }
