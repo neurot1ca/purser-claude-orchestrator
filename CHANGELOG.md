@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.225 — 2026-11-02
+
+- **Fixed:** the idle auto-compact wake prompt is recognised even when the host omits its origin, so the resume turn no longer re-arms the idle timer; a prompt with an explicit user origin still re-arms it.
+- **Docs:** the README opens with an animated flow diagram, explains context management with a second animation and gives each supported agent badge its own color.
+
 ## 0.1.224 — 2026-11-02
 
 - **Fixed:** idle auto-compact runs once per idle period instead of every hour; it re-arms only after a new prompt, because the resume turn restored most of the context it had just saved.
