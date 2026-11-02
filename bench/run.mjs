@@ -32,17 +32,23 @@ export function usageFromTranscript(input) {
     : input;
   const main = Object.fromEntries(PROTOCOL.endpoints[0].token_categories.map(k => [k, 0]));
   const seen = new Set(), workers = new Map();
-  let mainMessages = 0;
+  let mainMessages = 0, aggregate;
   for (const event of events) {
     const data = event.message ?? event;
     const usage = data.usage ?? data.message?.usage;
     if (!usage || typeof usage !== 'object') continue;
-    const id = data.id ?? data.message_id ?? event.request_id ?? event.id;
-    if (id && seen.has(id)) continue;
-    if (id) seen.add(id);
     const side = event.isSidechain === true || event.sidechain === true || data.isSidechain === true ||
       event.parent_tool_use_id != null || data.parent_tool_use_id != null ||
       (event.session_id && event.main_session_id && event.session_id !== event.main_session_id);
+    if (event.type === 'result') {
+      if (!side) aggregate = usage;
+      continue;
+    }
+    if (!side && event.type !== 'assistant' && data.role !== 'assistant') continue;
+    const id = data.id ?? data.message_id ?? (side ? event.request_id ?? event.id : undefined);
+    if (!side && !id) throw new Error('main assistant message id is missing');
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
     if (side) {
       const key = `${usage.provider ?? data.provider ?? 'unknown'}|${usage.model ?? data.model ?? 'unknown'}|${data.role ?? event.role ?? 'worker'}`;
       const current = workers.get(key) ?? { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0, complete: true };
@@ -59,7 +65,7 @@ export function usageFromTranscript(input) {
     }
   }
   if (!mainMessages) throw new Error('main transcript usage is missing');
-  return { main, workers: [...workers].map(([key, value]) => {
+  return { main, aggregate: aggregate ?? 'unknown', reconciliation_mismatch: aggregate ? Object.keys(main).some(key => main[key] !== aggregate[key]) : 'unknown', workers: [...workers].map(([key, value]) => {
     const [provider, model, role] = key.split('|');
     return { provider, model, role, usage: value.complete ? value : 'unknown' };
   }) };
@@ -334,7 +340,8 @@ async function main() {
         let usage = { main: 'unknown', workers: 'unknown' }, accountingError;
         try {
           if (transcriptError) throw new Error(transcriptError);
-          const result = usageFromTranscript(parsed); usage = { main: result.main, workers: result.workers.length ? result.workers : 'unknown' };
+          const result = usageFromTranscript(parsed); usage = { main: result.main, aggregate: result.aggregate, reconciliation_mismatch: result.reconciliation_mismatch, workers: result.workers.length ? result.workers : 'unknown' };
+          if (result.reconciliation_mismatch === true) accountingError = 'main transcript usage does not match aggregate result usage';
         } catch (e) { accountingError = e.message; }
         if (!opts.dryRun && !run.timedOut && run.code === 0) outcome = await grade(target, m, campaignDir);
         // The contract measures launch through independent grading.

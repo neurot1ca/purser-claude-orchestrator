@@ -1,16 +1,19 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFile, mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, rmdir, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { armSettings, campaignMetadata, ensureEngine, grade, retryIO, runProcess, terminalAttempts, usageFromTranscript } from '../run.mjs';
 
+const scratchRoot = fileURLToPath(new URL('../../.tmp/bench-test/', import.meta.url));
+await mkdir(scratchRoot, { recursive: true });
+after(() => retryIO(() => rmdir(scratchRoot)).catch(error => {
+  if (error.code !== 'ENOENT' && error.code !== 'ENOTEMPTY') throw error;
+}));
+
 test('resume skips terminal arms, keeps partial pairs pending, and ignores interrupted ledger tails', async t => {
-  const repo = fileURLToPath(new URL('../../', import.meta.url));
-  await mkdir(path.join(repo, '.tmp'), { recursive: true });
-  const scratch = await mkdtemp(path.join(repo, '.tmp', 'bench-ledger-'));
+  const scratch = await mkdtemp(path.join(scratchRoot, 'bench-ledger-'));
   t.after(() => retryIO(() => rm(scratch, { recursive: true, force: true })));
   const ledger = path.join(scratch, 'attempts.jsonl');
   const records = [
@@ -33,8 +36,7 @@ test('resume skips terminal arms, keeps partial pairs pending, and ignores inter
 
 test('grading deadline kills check descendants and returns a grading timeout instead of a pass', async t => {
   const repo = fileURLToPath(new URL('../../', import.meta.url));
-  await mkdir(path.join(repo, '.tmp'), { recursive: true });
-  const scratch = await mkdtemp(path.join(repo, '.tmp', 'bench-grade-timeout-'));
+  const scratch = await mkdtemp(path.join(scratchRoot, 'bench-grade-timeout-'));
   t.after(() => retryIO(() => rm(scratch, { recursive: true, force: true })));
   const target = path.join(scratch, 'target');
   const options = { cwd: repo, shell: false, windowsHide: true, encoding: 'utf8' };
@@ -54,9 +56,7 @@ test('grading deadline kills check descendants and returns a grading timeout ins
 });
 
 test('campaign reuse requires matching metadata and explicit resume preserves seed and schedule', async t => {
-  const repo = fileURLToPath(new URL('../../', import.meta.url));
-  await mkdir(path.join(repo, '.tmp'), { recursive: true });
-  const scratch = await mkdtemp(path.join(repo, '.tmp', 'bench-resume-'));
+  const scratch = await mkdtemp(path.join(scratchRoot, 'bench-resume-'));
   t.after(() => retryIO(() => rm(scratch, { recursive: true, force: true })));
   const expected = {
     campaign_id: 'resume-test', action: 'run', suite_hash: 'suite', engine_sha: 'engine', harness_sha: 'harness',
@@ -77,8 +77,7 @@ test('campaign reuse requires matching metadata and explicit resume preserves se
 
 test('engine checkout populates a no-checkout clone whose HEAD is already pinned', async t => {
   const repo = fileURLToPath(new URL('../../', import.meta.url));
-  await mkdir(path.join(repo, '.tmp'), { recursive: true });
-  const scratch = await mkdtemp(path.join(repo, '.tmp', 'bench-engine-'));
+  const scratch = await mkdtemp(path.join(scratchRoot, 'bench-engine-'));
   t.after(() => retryIO(() => rm(scratch, { recursive: true, force: true })));
   const engine = path.join(scratch, 'engine');
   const { pinned_commit } = JSON.parse(await readFile(path.join(repo, 'bench', 'protocol.json'), 'utf8'));
@@ -95,8 +94,7 @@ test('engine checkout populates a no-checkout clone whose HEAD is already pinned
 
 test('grading includes untracked production files and restores trusted checks', async t => {
   const repo = fileURLToPath(new URL('../../', import.meta.url));
-  await mkdir(path.join(repo, '.tmp'), { recursive: true });
-  const scratch = await mkdtemp(path.join(repo, '.tmp', 'bench-grade-'));
+  const scratch = await mkdtemp(path.join(scratchRoot, 'bench-grade-'));
   t.after(() => retryIO(() => rm(scratch, { recursive: true, force: true })));
   const target = path.join(scratch, 'target');
   const options = { cwd: repo, shell: false, windowsHide: true, encoding: 'utf8' };
@@ -134,7 +132,7 @@ test('arm settings differ only at the Purser plugin switch', () => {
 });
 
 test('duplicate message ids contribute once and sidechain usage is separate', () => {
-  const main = { id: 'msg-1', usage: { input_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 1, output_tokens: 4 } };
+  const main = { role: 'assistant', id: 'msg-1', usage: { input_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 1, output_tokens: 4 } };
   const result = usageFromTranscript([
     { message: main }, { message: main },
     { message: { id: 'child-1', parent_tool_use_id: 'tool-1', usage: { provider: 'anthropic', model: 'worker', input_tokens: 30, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 } } }
@@ -143,9 +141,24 @@ test('duplicate message ids contribute once and sidechain usage is separate', ()
   assert.equal(result.workers[0].usage.output_tokens, 5);
 });
 
+test('result usage reconciles assistant message totals without being added to them', () => {
+  const expected = { input_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 1, output_tokens: 4 };
+  const assistant = { type: 'assistant', message: { id: 'msg-1', role: 'assistant', usage: expected } };
+  const events = [assistant, assistant, { type: 'system', usage: expected }, { type: 'result', usage: { ...expected } }];
+  const result = usageFromTranscript(events);
+  assert.deepEqual(result.main, expected);
+  assert.deepEqual(result.aggregate, expected);
+  assert.equal(result.reconciliation_mismatch, false);
+  events.at(-1).usage.output_tokens++;
+  const mismatch = usageFromTranscript(events);
+  assert.deepEqual(mismatch.main, expected);
+  assert.equal(mismatch.aggregate.output_tokens, 5);
+  assert.equal(mismatch.reconciliation_mismatch, true);
+});
+
 test('missing worker token categories are unknown, not zero', () => {
   const result = usageFromTranscript([
-    { message: { id: 'main', usage: { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 } } },
+    { message: { role: 'assistant', id: 'main', usage: { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 } } },
     { message: { id: 'worker', parent_tool_use_id: 'tool', usage: { input_tokens: 1 } } }
   ]);
   assert.equal(result.workers[0].usage, 'unknown');
@@ -162,12 +175,12 @@ test('locked transcript reads retry and then succeed', async () => {
 });
 
 test('preflight uses the injected fake Claude executable without network access', async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'bench-cli-'));
+  const dir = await mkdtemp(path.join(scratchRoot, 'bench-cli-'));
   const campaign = `test-${process.pid}-${Date.now()}`;
   const runner = fileURLToPath(new URL('../run.mjs', import.meta.url));
   const repo = path.resolve(path.dirname(runner), '..');
   const artifacts = path.join(repo, '.tmp', 'bench', campaign);
-  t.after(async () => { await rm(dir, { recursive: true, force: true }); await rm(artifacts, { recursive: true, force: true }); });
+  t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
   const fake = path.join(dir, 'fake-claude.mjs');
   await writeFile(fake, `process.stdout.write('Claude Code 2.1.302\\n');`);
   const result = await new Promise((resolve, reject) => {
@@ -182,8 +195,8 @@ test('preflight uses the injected fake Claude executable without network access'
 });
 
 test('deadline kills the process tree', async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'bench-timeout-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await mkdtemp(path.join(scratchRoot, 'bench-timeout-'));
+  t.after(() => retryIO(() => rm(dir, { recursive: true, force: true })));
   const marker = path.join(dir, 'orphan.txt');
   const childCode = `setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'alive'),1200)`;
   const parentCode = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{stdio:'ignore'}); setTimeout(()=>{},10000)`;
