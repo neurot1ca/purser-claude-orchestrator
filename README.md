@@ -14,7 +14,6 @@ Purser is a parallel coding agent orchestrator for Claude Code: it delegates cod
 
 ![One delegated job, from the prompt to a validated commit](assets/purser-flow.gif)
 
-![Purser plans five features, runs them in parallel and applies them](assets/purser-demo.gif)
 </div>
 
 <div align="justify">
