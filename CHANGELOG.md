@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.224 — 2026-11-02
+
+- **Fixed:** idle auto-compact runs once per idle period instead of every hour; it re-arms only after a new prompt, because the resume turn restored most of the context it had just saved.
+- **Fixed:** an apply validation marked stale by a later apply keeps its earlier outcome and reason.
+- **Added:** learning records note the first reviewer that actually ran and whether it completed, failed or timed out, and a bounded learning-summary reader prepares later reviewer selection.
+
 ## 0.1.223 — 2026-10-31
 
 - **Fixed:** research jobs on OpenCode run with your MCP servers turned off, and research set to run on agy goes to Codex instead, because agy cannot turn MCP servers off.
