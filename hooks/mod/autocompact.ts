@@ -34,6 +34,7 @@ let cacheTtlMs = DEFAULT_CACHE_TTL_MS
 let previousTurnEnd: number | undefined
 let longGapForNextTurn = false
 let idle = true
+let idleCompactNeedsPrompt = false
 let idleTimer: { cancel: () => void } | undefined
 let idleGeneration = 0
 let idleTimerTokens: number | undefined
@@ -48,6 +49,7 @@ export function resetAutoCompactForTests() {
   previousTurnEnd = undefined
   longGapForNextTurn = false
   idle = true
+  idleCompactNeedsPrompt = false
   idleTimer = undefined
   idleGeneration++
   idleTimerTokens = undefined
@@ -149,11 +151,12 @@ async function resume($, before: number) {
 // winding down, so retry a few times. Each attempt is a clock.after timer, not a
 // sleep inside the hook: a timer outlives the turn.complete dispatch, a detached
 // promise does not.
-function compactWhenIdle($, tokens: number, attempt = 0) {
+function compactWhenIdle($, tokens: number, attempt = 0, idleCompact = false) {
   $.clock.after(RETRY_DELAYS_MS[attempt]!, async () => {
     try {
       const result = await $.session.compact()
       await log($, result?.skip ? `skipped at ${tokens} tokens: ${result.skip}` : `compacted at ${tokens} tokens`)
+      if (idleCompact && !result?.skip) idleCompactNeedsPrompt = true
       inFlight = false
     } catch (error) {
       // The headless refusal is the expected path on an SDK host, not a failure
@@ -168,6 +171,7 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
         $.command.run({ command: 'compact' }).then(
           async () => {
             await log($, `/compact command resolved at ${tokens} tokens (idle: ${idle})`)
+            if (idleCompact) idleCompactNeedsPrompt = true
             await resume($, tokens)
           },
           (runError) => log($, `/compact failed at ${tokens} tokens: ${String(runError)}`),
@@ -175,7 +179,7 @@ function compactWhenIdle($, tokens: number, attempt = 0) {
       } else if (turnRunning && !idle) {
         inFlight = false
         await trace($, `stopped retries at ${tokens} tokens because a new turn started`)
-      } else if (attempt + 1 < RETRY_DELAYS_MS.length) compactWhenIdle($, tokens, attempt + 1)
+      } else if (attempt + 1 < RETRY_DELAYS_MS.length) compactWhenIdle($, tokens, attempt + 1, idleCompact)
       else inFlight = false
     }
   })
@@ -188,6 +192,7 @@ export function registerAutoCompact(on) {
       dropIdleTimer($, 'prompt submitted')
       const submittedAt = await $.clock.now()
       longGapForNextTurn = previousTurnEnd !== undefined && submittedAt - previousTurnEnd > LONG_GAP_MS
+      idleCompactNeedsPrompt = false
     }
     if (pendingWake === undefined || e.text !== WAKE_MARKER || e.origin?.kind !== 'plugin') return next(e)
     const context = pendingWake
@@ -231,6 +236,10 @@ export function registerAutoCompact(on) {
       await trace($, `turn ${e.turnId}: ${tokens ?? 'no'} tokens, threshold ${threshold}, ${compacting ? 'compacting' : 'below'}`)
       if (!compacting) {
         if (idle && tokens !== undefined && tokens >= IDLE_COMPACT_MIN_TOKENS) {
+          if (idleCompactNeedsPrompt) {
+            await trace($, 'idle timer not re-armed: no user prompt since idle compact')
+            return result
+          }
           const ttl = cacheTtlMs
           const margin = ttl === LONG_CACHE_TTL_MS ? LONG_CACHE_MARGIN_MS : CACHE_MARGIN_MS
           const generation = ++idleGeneration
@@ -259,7 +268,7 @@ export function registerAutoCompact(on) {
               }
               idleTimerTokens = undefined
               inFlight = true
-              compactWhenIdle($, tokens)
+              compactWhenIdle($, tokens, 0, true)
             })
           }
           await checkIdle()

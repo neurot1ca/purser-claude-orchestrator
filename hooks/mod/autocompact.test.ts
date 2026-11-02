@@ -65,6 +65,29 @@ test('arms the idle timer at the 100K floor through just below the main threshol
   expect(calls.compacts).toBe(1)
 })
 
+test('does not re-arm after idle compact until a user prompt completes', async ($, on) => {
+  const { calls, clock, files } = engine(on, 130_000, {}, 0, '{"enabled": true}', true)
+  const log = () => [...files.entries()].find(([path]) => path.endsWith('auto-compact.log'))?.[1] ?? ''
+  await $.turn.complete(TURN)
+  await clock.advance(271_000)
+  expect(calls.compacts).toBe(1)
+
+  await $.prompt.submit({ text: WAKE_MARKER })
+  await $.turn.complete({ ...TURN, turnId: 't-resume' })
+  expect(log()).toContain('idle timer not re-armed: no user prompt since idle compact')
+  expect(log().match(/idle timer armed at 130000 tokens/g)?.length).toBe(1)
+
+  await $.prompt.submit({ text: 'continue' })
+  await $.turn.complete({ ...TURN, turnId: 't-user-without-asUser' })
+  expect(log().match(/idle timer armed at 130000 tokens/g)?.length).toBe(2)
+  await clock.advance(271_000)
+  expect(calls.compacts).toBe(2)
+
+  await $.prompt.submit({ text: 'continue', asUser: true })
+  await $.turn.complete({ ...TURN, turnId: 't-user' })
+  expect(log().match(/idle timer armed at 130000 tokens/g)?.length).toBe(3)
+})
+
 test('does not arm the idle timer below 100K tokens', async ($, on) => {
   const { calls, clock } = engine(on, 99_999)
   await $.turn.complete(TURN)
