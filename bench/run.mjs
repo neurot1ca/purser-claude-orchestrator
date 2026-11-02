@@ -285,8 +285,13 @@ async function main() {
   const pf = await preflight(campaignDir, opts.dryRun);
   const dirs = await taskDirs(opts.tasks);
   if (opts.action === 'preflight') { console.log(json({ ok: true, cli: pf.version, engine_sha: pf.engine.sha })); return; }
-  if (!dirs.length) throw new Error('no task manifests matched');
-  const tasks = await Promise.all(dirs.map(async dir => ({ dir, manifest: JSON.parse(await readFile(path.join(dir, 'task.json'), 'utf8')) })));
+  const split = opts.action === 'calibrate' ? 'calibration' : 'confirmation';
+  const tasks = (await Promise.all(dirs.map(async dir => ({ dir, manifest: JSON.parse(await readFile(path.join(dir, 'task.json'), 'utf8')) }))))
+    .filter(task => task.manifest.split === split);
+  if (!tasks.length) throw new Error(`no ${split} task manifests matched`);
+  if (opts.action === 'calibrate' && tasks.length !== PROTOCOL.calibration_size.tasks) {
+    throw new Error(`calibration selection must contain exactly ${PROTOCOL.calibration_size.tasks} tasks; got ${tasks.length}`);
+  }
   const pairs = [];
   for (const task of tasks) for (let rep = 0; rep < opts.reps; rep++) pairs.push({ task, rep });
   const ledger = path.join(campaignDir, 'attempts.jsonl');

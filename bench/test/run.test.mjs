@@ -194,6 +194,66 @@ test('preflight uses the injected fake Claude executable without network access'
   assert.match(result.stdout, /2\.1\.302/);
 });
 
+test('run selects confirmation tasks and calibrate rejects a narrowed task selection', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'bench-split-'));
+  const campaign = `test-${process.pid}-${Date.now()}`;
+  const runner = fileURLToPath(new URL('../run.mjs', import.meta.url));
+  const repo = path.resolve(path.dirname(runner), '..');
+  const artifacts = path.join(repo, '.tmp', 'bench', campaign);
+  const narrowedArtifacts = path.join(repo, '.tmp', 'bench', `${campaign}-narrow`);
+  t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); await retryIO(() => rm(narrowedArtifacts, { recursive: true, force: true })); });
+  const fake = path.join(dir, 'fake-claude.mjs');
+  await writeFile(fake, `process.stdout.write('Claude Code 2.1.302\\n');`);
+  const run = await runProcess(process.execPath, [runner, 'run', '--campaign', campaign, '--dry-run'], {
+    cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake }, input: '', deadlineSeconds: 30
+  });
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /"tasks": 12,\s+"pairs": 12/);
+  const records = (await readFile(path.join(artifacts, 'attempts.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+  assert.equal(new Set(records.map(row => row.task_id)).size, 12);
+  const taskSplits = new Map();
+  for (const file of execFileSync(process.execPath, ['-e', `const fs=require('fs'),path=require('path'); const root=${JSON.stringify(path.join(repo, 'bench', 'tasks'))}; function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isDirectory())walk(p);else if(e.name==='task.json'){const m=JSON.parse(fs.readFileSync(p));console.log(m.id+'\\t'+m.split)}}}walk(root);`], { cwd: repo, encoding: 'utf8' }).trim().split(/\r?\n/)) {
+    const [id, split] = file.split('\t'); taskSplits.set(id, split);
+  }
+  assert.ok(records.every(row => taskSplits.get(row.task_id) === 'confirmation'));
+
+  const narrowed = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', `${campaign}-narrow`, '--tasks', 'correctness_repair/*', '--dry-run'], {
+    cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake }, input: '', deadlineSeconds: 30
+  });
+  assert.equal(narrowed.code, 1);
+  assert.match(narrowed.stderr, /calibration selection must contain exactly 8 tasks; got 2/);
+});
+
+test('fake Claude calibration artifacts are accepted by analyze allocate', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'bench-allocate-'));
+  const campaign = `test-${process.pid}-${Date.now()}`;
+  const runner = fileURLToPath(new URL('../run.mjs', import.meta.url));
+  const analyzer = fileURLToPath(new URL('../analyze.mjs', import.meta.url));
+  const repo = path.resolve(path.dirname(runner), '..');
+  const artifacts = path.join(repo, '.tmp', 'bench', campaign);
+  t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
+  const fake = path.join(dir, 'fake-claude.mjs');
+  await writeFile(fake, `import { randomUUID } from 'node:crypto'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.302\\n'); else { const u={input_tokens:10,cache_read_input_tokens:2,cache_creation_input_tokens:1,output_tokens:4}; process.stdout.write(JSON.stringify({type:'assistant',message:{id:randomUUID(),role:'assistant',usage:u}})+'\\n'+JSON.stringify({type:'result',usage:u})+'\\n'); process.exitCode=1; }`);
+  const campaignRun = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
+    cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
+  });
+  assert.equal(campaignRun.code, 0, campaignRun.stderr);
+  const records = (await readFile(path.join(artifacts, 'attempts.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+  assert.equal(records.length, 32);
+  for (const row of records) {
+    for (const field of ['task_class', 'repetition', 'arm', 'passed', 'verified_wall_time_ms', 'usage', 'n_pairs']) assert.ok(field in row, `${field} missing`);
+    for (const field of ['engine_sha', 'harness_sha', 'suite_hash', 'campaign_id', 'n_tasks', 'repetitions', 'n_pairs', 'n_on', 'n_off']) assert.ok(field in row, `${field} provenance missing`);
+    assert.equal(row.usage.reconciliation_mismatch, false);
+    assert.equal(row.usage.main.input_tokens, 10);
+  }
+  const allocation = await runProcess(process.execPath, [analyzer, 'allocate', '--campaign', campaign], {
+    cwd: repo, env: process.env, input: '', deadlineSeconds: 30
+  });
+  assert.equal(allocation.code, 0, allocation.stderr);
+  assert.equal(JSON.parse(allocation.stdout).provenance.n_pairs, 16);
+  assert.ok((await readFile(path.join(artifacts, 'allocation.json'), 'utf8')).includes('variance_components'));
+});
+
 test('deadline kills the process tree', async t => {
   const dir = await mkdtemp(path.join(scratchRoot, 'bench-timeout-'));
   t.after(() => retryIO(() => rm(dir, { recursive: true, force: true })));
