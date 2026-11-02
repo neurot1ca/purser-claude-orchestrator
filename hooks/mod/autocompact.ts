@@ -187,14 +187,16 @@ function compactWhenIdle($, tokens: number, attempt = 0, idleCompact = false) {
 
 export function registerAutoCompact(on) {
   on('prompt.submit', async ($, e, next) => {
-    if (!(e.text === WAKE_MARKER && e.origin?.kind === 'plugin')) {
+    const isWake = e.text === WAKE_MARKER
+    const isPluginWake = isWake && (e.origin?.kind === 'plugin' || (e.origin === undefined && (pendingWake !== undefined || idleCompactNeedsPrompt)))
+    if (!isPluginWake) {
       idle = false
       dropIdleTimer($, 'prompt submitted')
       const submittedAt = await $.clock.now()
       longGapForNextTurn = previousTurnEnd !== undefined && submittedAt - previousTurnEnd > LONG_GAP_MS
       idleCompactNeedsPrompt = false
     }
-    if (pendingWake === undefined || e.text !== WAKE_MARKER || e.origin?.kind !== 'plugin') return next(e)
+    if (!isPluginWake || pendingWake === undefined) return next(e)
     const context = pendingWake
     pendingWake = undefined
     return next({ ...e, context: [...(e.context ?? []), context] })

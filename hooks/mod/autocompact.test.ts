@@ -86,6 +86,11 @@ test('does not re-arm after idle compact until a user prompt completes', async (
   await $.prompt.submit({ text: 'continue', asUser: true })
   await $.turn.complete({ ...TURN, turnId: 't-user' })
   expect(log().match(/idle timer armed at 130000 tokens/g)?.length).toBe(3)
+
+  await clock.advance(271_000)
+  await $.prompt.submit({ text: WAKE_MARKER, origin: { kind: 'user' } })
+  await $.turn.complete({ ...TURN, turnId: 't-user-marker' })
+  expect(log().match(/idle timer armed at 130000 tokens/g)?.length).toBe(4)
 })
 
 test('does not arm the idle timer below 100K tokens', async ($, on) => {
