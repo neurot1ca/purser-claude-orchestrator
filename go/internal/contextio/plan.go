@@ -353,7 +353,7 @@ func parsePlanMilestonesMode(data []byte, accepted []int, enforcePrerequisites b
 									m.DroppedWritePaths = append(m.DroppedWritePaths, candidate)
 									continue
 								}
-								clean := pathpkg.Clean(normalized)
+								clean := pathpkg.Clean(strings.TrimSuffix(normalized, "/**"))
 								if clean == "." || strings.Contains(clean, ":") || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(clean, "*?[]{}") {
 									return nil, fmt.Errorf("invalid write path for %s", m.ID)
 								}

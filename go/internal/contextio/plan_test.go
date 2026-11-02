@@ -275,6 +275,24 @@ func TestParsePlanMilestonesExpandsBracePaths(t *testing.T) {
 	}
 }
 
+func TestParsePlanMilestonesDirectoryGlobWritePaths(t *testing.T) {
+	artifact := []byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:** `bench/tasks/**`, `bench\\other\\**`, `bench/trailing/`\n")
+	milestones, err := parsePlanMilestones(artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bench/tasks", "bench/other", "bench/trailing"}
+	if !reflect.DeepEqual(milestones[0].WritePaths, want) {
+		t.Fatalf("write paths = %v, want %v", milestones[0].WritePaths, want)
+	}
+	if _, err := parsePlanMilestones([]byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:** `bench/*/tasks`\n"), []int{1}); err == nil {
+		t.Fatal("mid-path glob accepted")
+	}
+	if _, err := parsePlanMilestones([]byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:** `a/**`\n### M2\n**Dependency:** none\n**Write paths:** `a/b/**`\n"), []int{1, 2}); err == nil {
+		t.Fatal("overlapping directory globs accepted")
+	}
+}
+
 func TestParsePlanMilestonesLegacyAndBulletDependency(t *testing.T) {
 	legacy, err := parsePlanMilestones([]byte(readyPlanArtifact), []int{1, 2, 3})
 	if err != nil {
