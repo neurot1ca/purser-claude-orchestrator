@@ -249,7 +249,8 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	}
 	afterPreMetadata()
 	requested := map[string]any{"task_id": *parsed.TaskID, "route": *parsed.Route, "model": *route.Model, "effort": *route.Effort}
-	if reply && research {
+	if reply && (research || stringValue(live["agent"]) != stringValue(config["coder_agent"]) &&
+		supportedCoderModel(stringValue(live["agent"]), stringValue(live["model"]))) {
 		requested["model"], requested["effort"] = live["model"], live["effort"]
 	}
 	if reply {

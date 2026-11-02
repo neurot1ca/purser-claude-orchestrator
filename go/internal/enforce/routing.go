@@ -11,6 +11,7 @@ import (
 
 	"purser-hook/internal/ledger"
 	"purser-hook/internal/models"
+	"purser-hook/internal/models/cursor"
 	"purser-hook/internal/policy"
 )
 
@@ -44,7 +45,7 @@ func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, r
 		if !ok || threadAgent == "" {
 			threadAgent = "codex"
 		}
-		allowed := threadAgent == agent
+		allowed := threadAgent == agent || supportedCoderModel(threadAgent, stringValue(liveThread["model"]))
 		if fallback != nil && threadAgent == fallback["agent"] {
 			allowed = true
 		}
@@ -118,6 +119,23 @@ func SelectCoder(route, routeModel, routeEffort, parsedReason string, newCall, r
 }
 
 var codexModelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+func supportedCoderModel(agent, model string) bool {
+	switch agent {
+	case "codex":
+		return codexModelPattern.MatchString(model) && modelFamily(model) == "gpt"
+	case "agy":
+		return codexModelPattern.MatchString(model) && modelFamily(model) == "gemini"
+	case "claude":
+		return codexModelPattern.MatchString(model) && modelFamily(model) == "claude"
+	case "opencode":
+		provider, name, ok := strings.Cut(model, "/")
+		return ok && codexModelPattern.MatchString(provider) && codexModelPattern.MatchString(name)
+	case "cursor":
+		return cursor.ValidModel(model)
+	}
+	return false
+}
 
 func firstOpenCodeCandidate(candidates []any) string {
 	measured := make([]string, 0)

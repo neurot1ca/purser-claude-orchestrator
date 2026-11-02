@@ -178,6 +178,57 @@ func TestPreReplyUsesRecordedEffortBeforeCompatibility(t *testing.T) {
 	}
 }
 
+func TestPreReplyKeepsRecordedAgyThreadAfterCoderRoleSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name, task, model, effort, denial string
+	}{
+		{name: "recorded owner", task: "task-recorded", model: "gemini-4-argon", effort: "medium"},
+		{name: "task mismatch", task: "different-task", model: "gemini-4-argon", effort: "medium", denial: "THREAD_TASK_MISMATCH:"},
+		{name: "foreign model", task: "task-recorded", model: "gpt-6-luna", effort: "high", denial: "THREAD_AGENT_MISMATCH:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, repo, state := setupRecordedReply(t, "gpt-6-luna", "high", tc.model, tc.effort)
+			for key, value := range map[string]string{"HOME": root, "USERPROFILE": root, "PURSER_STATE_DIR": state, "CODEX_HOME": root, "CLAUDE_PLUGIN_ROOT": root} {
+				t.Setenv(key, value)
+			}
+			project := filepath.Join(state, "projects", projectKey(&repo))
+			record := ledger.FindByThreadID(project, "thread-p63")
+			mapValue(record["live_thread"])["agent"] = "agy"
+			if saved := ledger.Save(project, record); saved.Status != ledger.OK {
+				t.Fatalf("record agy owner: %#v", saved)
+			}
+			if err := os.WriteFile(filepath.Join(project, "roles.toml"), []byte("schema_version = 1\n[roles]\ncoder = \"codex\"\n[coding]\ncoder_agent = \"codex\"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start",
+				"tool_input": map[string]any{"mode": "reply", "threadId": "thread-p63", "prompt": "ORCH|task=" + tc.task + "|phase=implementation|route=subtle|reason=fix|scope=src/a.go\nContinue the review fix."},
+				"cwd":        repo, "session_id": "role-switch", "tool_use_id": "role-switch"}
+			got, err := Pre(event, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hook := mapValue(got["hookSpecificOutput"])
+			if tc.denial != "" {
+				if hook["permissionDecision"] != "deny" || !strings.HasPrefix(stringValue(hook["permissionDecisionReason"]), tc.denial) {
+					t.Fatalf("wanted %s, got %#v", tc.denial, got)
+				}
+				return
+			}
+			updated := mapValue(hook["updatedInput"])
+			if hook["permissionDecision"] == "deny" || updated["agent"] != "agy" || updated["mode"] != "reply" || updated["threadId"] != "thread-p63" {
+				t.Fatalf("reply lost recorded owner: %#v", got)
+			}
+			pending, err := readAsyncObject(mustPendingPath(t, state, event))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pending["agent"] != "agy" || pending["model"] != tc.model || pending["effort"] != tc.effort {
+				t.Fatalf("dispatch lost recorded model/effort: %#v", pending)
+			}
+		})
+	}
+}
+
 func TestPreDeniesAgyResearchReply(t *testing.T) {
 	root, repo, state := setupRecordedReply(t, "gpt-6-luna", "high", "gemini-test", "high")
 	for key, value := range map[string]string{"HOME": root, "USERPROFILE": root, "PURSER_STATE_DIR": state, "CODEX_HOME": root, "CLAUDE_PLUGIN_ROOT": root} {
