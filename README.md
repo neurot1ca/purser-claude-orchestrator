@@ -117,6 +117,13 @@ The background job board tracks each job and the work it is waiting on.
 
 You can set the Codex coder's thinking effort for new jobs to low, medium, high, or xhigh, or leave it on auto to follow Purser's routes.
 
+## Built-in subagents
+
+| Subagent | Role |
+| --- | --- |
+| `purser:dispatcher` | Runs one delegated job on a Haiku model and returns a receipt of at most 250 tokens. |
+| `purser:helper` | Answers read-only lookups on a Haiku model, such as where a symbol is defined or what a log says, and never edits files. |
+
 ## Commands
 
 | Command | Description |
