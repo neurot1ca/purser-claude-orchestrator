@@ -1,0 +1,31 @@
+{
+  "id": "stop-open-task-list-reminder",
+  "class": "feature_extension",
+  "split": "confirmation",
+  "source_commit": "5177717d28b7c80abfa5e2864d0042a27fbb387a",
+  "start_commit": "58d4db3706ec1ff31b611e5b27b11593bbd8a8a8",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/contextio/stop_todos_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/contextio",
+      "-run",
+      "^(TestStopTodoSnapshotRemindsOnOpenItem|TestStopTodoSnapshotCompletedItemsDoNotBlock|TestStopTodoQuestionTurnDoesNotBlock|TestStopTodoReminderDedupesWithinUserTurn|TestStopTaskReplayCompletedDoesNotBlock|TestStopLatestTodoSnapshotSupersedesTaskReplay|TestStopPlanReminderSuppressesTodoReason)$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/contextio/stop.go",
+    "go/internal/contextio/stop_flow.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

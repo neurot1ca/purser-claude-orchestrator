@@ -1,0 +1,32 @@
+{
+  "id": "readonly-launch-integration-overrides",
+  "class": "feature_extension",
+  "split": "confirmation",
+  "source_commit": "b3d1f053560a6c1faaee022802fc0580230f652b",
+  "start_commit": "955353dce55ddec2da53d84518b64fa6729885ee",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/jobs/agents_test.go",
+      "go/internal/jobs/launch_args_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/jobs",
+      "-run",
+      "^(TestClaudeResearchIsReadOnlyAndAliasNoneOmitsEffort|TestBuildCodexResearchDisablesExternalIntegrations|TestBuildCodexReadOnlyMCPOverrides|TestBuildCodexReadOnlyUnavailableConfig)$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/jobs/agents.go",
+    "go/internal/jobs/launch_args.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

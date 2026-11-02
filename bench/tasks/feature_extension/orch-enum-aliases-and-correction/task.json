@@ -1,0 +1,30 @@
+{
+  "id": "orch-enum-aliases-and-correction",
+  "class": "feature_extension",
+  "split": "calibration",
+  "source_commit": "5ea3af924a2c483c5d1f3c4a31beefee6196f168",
+  "start_commit": "b3d1f053560a6c1faaee022802fc0580230f652b",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/policy/orch_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/policy",
+      "-run",
+      "^TestOrchEnumAliasesAndCorrectedLineValidity$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/policy/orch.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

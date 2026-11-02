@@ -1,0 +1,30 @@
+{
+  "id": "ready-test-proposal-coverage-precision",
+  "class": "correctness_repair",
+  "split": "calibration",
+  "source_commit": "82ff575ce9665650a33f8b22b6f041fce2a98f3d",
+  "start_commit": "68958ac64b8d4326da31d4a13342754c72def653",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/contextio/maintenance_notice_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/contextio",
+      "-run",
+      "^TestReadyTestProposalCoverageDisplayPrecision$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/contextio/maintenance_notice.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

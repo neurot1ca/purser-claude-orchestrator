@@ -1,0 +1,31 @@
+{
+  "id": "scope-dir-glob-and-bundle-preview",
+  "class": "correctness_repair",
+  "split": "confirmation",
+  "source_commit": "c02ed46625f5f9d9faa9fa785a21de7abecec047",
+  "start_commit": "d382d2ccaf76a0ba53170a301e55f4864c5e487d",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/enforce/post_delta_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/enforce",
+      "-run",
+      "^(TestOutOfScopeDirGlobAllowsNestedFiles|TestOutOfScopeDirGlobStillFlagsOutsideFiles|TestOutOfScopeDirGlobNormalizesSeparatorsAndWhitespace|TestCompactBundleMandatoryFallbackKeepsChangedPathPreview)$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/enforce/bundle.go",
+    "go/internal/ledger/out_of_scope.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

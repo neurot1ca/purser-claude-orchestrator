@@ -1,0 +1,66 @@
+diff --git a/go/internal/enforce/bundle.go b/go/internal/enforce/bundle.go
+index 83c4a814..2b90aace 100644
+--- a/go/internal/enforce/bundle.go
++++ b/go/internal/enforce/bundle.go
+@@ -85,6 +85,7 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
+ 		}
+ 		compact["known_concurrent_scopes"] = map[string]any{"count": len(scopes), "task_ids": ordered}
+ 	}
++	changedPathsPreview := []any{}
+ 	paths, pathsOK := bundle["changed_paths"].([]any)
+ 	if strings, ok := bundle["changed_paths"].([]string); ok {
+ 		paths, pathsOK = make([]any, len(strings)), true
+@@ -102,6 +103,7 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
+ 		if len(preview) > 10 {
+ 			preview = preview[:10]
+ 		}
++		changedPathsPreview = preview
+ 		compact["changed_paths"] = preview
+ 		compact["changed_path_count"] = len(paths)
+ 		if digest, ok := bundle["changed_paths_sha256"].(string); ok && digest != "" {
+@@ -195,7 +197,7 @@ func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error)
+ 	if audit, ok := bundle["audit_receipt"].(map[string]any); ok && audit["verdict"] != nil {
+ 		mandatory["audit_receipt"] = map[string]any{"verdict": audit["verdict"]}
+ 	}
+-	mandatory["changed_paths"] = []any{}
++	mandatory["changed_paths"] = changedPathsPreview
+ 	mandatory["changed_path_count"] = compact["changed_path_count"]
+ 	mandatory["changed_paths_sha256"] = compact["changed_paths_sha256"]
+ 	mandatory["findings"] = copyFindings(bundle["findings"], intPointer(0))
+diff --git a/go/internal/ledger/out_of_scope.go b/go/internal/ledger/out_of_scope.go
+index 8616554c..83a8f22c 100644
+--- a/go/internal/ledger/out_of_scope.go
++++ b/go/internal/ledger/out_of_scope.go
+@@ -2,6 +2,7 @@ package ledger
+ 
+ import (
+ 	"path/filepath"
++	"runtime"
+ 	"strings"
+ 	"time"
+ )
+@@ -78,8 +79,23 @@ func DetectOutOfScopeModifications(repoRoot string, baseline map[string]any, sco
+ }
+ 
+ func pathInScope(path string, scope []string) bool {
++	path = strings.ReplaceAll(path, `\`, "/")
+ 	for _, item := range scope {
+-		if item == "." || path == item || strings.HasPrefix(path, strings.TrimRight(item, "/")+"/") {
++		item = strings.ReplaceAll(item, `\`, "/")
++		candidate := path
++		if runtime.GOOS == "windows" {
++			candidate, item = strings.ToLower(candidate), strings.ToLower(item)
++		}
++		if item == "." || candidate == item || strings.HasPrefix(candidate, strings.TrimRight(item, "/")+"/") {
++			return true
++		}
++		if strings.HasSuffix(item, "/**") {
++			directory := strings.TrimSuffix(item, "/**")
++			if candidate == directory || strings.HasPrefix(candidate, directory+"/") {
++				return true
++			}
++		}
++		if item == "**" {
+ 			return true
+ 		}
+ 	}

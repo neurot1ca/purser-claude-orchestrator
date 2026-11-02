@@ -1,0 +1,191 @@
+diff --git a/go/internal/contextio/stop.go b/go/internal/contextio/stop.go
+index e11b6671..169dd40e 100644
+--- a/go/internal/contextio/stop.go
++++ b/go/internal/contextio/stop.go
+@@ -204,6 +204,27 @@ func Stop(event map[string]any, started time.Time) []byte {
+ 			}
+ 		}
+ 	}
++	todosReason := ""
++	if latestUser >= 0 && !questionTurn && planReason == "" {
++		openTitles := openTranscriptTasks(records)
++		if len(openTitles) > 0 {
++			openSet := strings.Join(openTitles, "; ")
++			reminded, _ := state["todos_reminded"].(map[string]any)
++			remindedUser, remindedUserOK := exactInteger(reminded["user_index"])
++			if !remindedUserOK || remindedUser != latestUser || str(reminded["open_set"]) != openSet {
++				state["todos_reminded"] = map[string]any{"user_index": latestUser, "open_set": openSet}
++				shown := make([]string, min(3, len(openTitles)))
++				for i, title := range openTitles[:len(shown)] {
++					shown[i] = runePrefix(title, 60)
++				}
++				more := ""
++				if remaining := len(openTitles) - len(shown); remaining > 0 {
++					more = fmt.Sprintf(", +%d more", remaining)
++				}
++				todosReason = "Approved work is still open in your task list: " + strings.Join(shown, ", ") + more + ". Continue it now unless it needs a real user decision; if an item is obsolete, mark it completed or remove it."
++			}
++		}
++	}
+ 	if notice, ok := state["notice_pending"].(map[string]any); ok && validNoticePending(notice) && notice["blocked"] != true {
+ 		if !autoCompactModActive() {
+ 			notice["blocked"] = true
+@@ -240,6 +261,10 @@ func Stop(event map[string]any, started time.Time) []byte {
+ 		reasons = append(reasons, planReason)
+ 		kinds["plan"] = true
+ 	}
++	if todosReason != "" {
++		reasons = append(reasons, todosReason)
++		kinds["todos"] = true
++	}
+ 	if changed || len(reasons) > 0 {
+ 		if writeAdvisorState(path, state) != nil {
+ 			return nil
+diff --git a/go/internal/contextio/stop_flow.go b/go/internal/contextio/stop_flow.go
+index c74bed81..f7c44847 100644
+--- a/go/internal/contextio/stop_flow.go
++++ b/go/internal/contextio/stop_flow.go
+@@ -1,6 +1,142 @@
+ package contextio
+ 
+-import "strings"
++import (
++	"fmt"
++	"regexp"
++	"sort"
++	"strings"
++)
++
++var transcriptTaskResultID = regexp.MustCompile(`(?i)\btask\s+#([a-z0-9_-]+)\b`)
++
++func openTranscriptTasks(records []map[string]any) []string {
++	type task struct{ title, status string }
++	todoTasks, taskTasks := map[string]task{}, map[string]task{}
++	createUses := map[string]string{}
++	latestTodo, latestTask, sequence := -1, -1, 0
++	for _, record := range records {
++		for _, raw := range transcriptBlocks(record) {
++			sequence++
++			block, ok := raw.(map[string]any)
++			if !ok {
++				continue
++			}
++			if block["type"] == "tool_result" {
++				useID := str(block["tool_use_id"])
++				key, exists := createUses[useID]
++				if !exists {
++					continue
++				}
++				if id := transcriptTaskResultIDFor(block); id != "" {
++					if item, exists := taskTasks[key]; exists {
++						delete(taskTasks, key)
++						taskTasks[id] = item
++						createUses[useID] = id
++					}
++				}
++				continue
++			}
++			if transcriptRecordType(record) != "assistant" || block["type"] != "tool_use" {
++				continue
++			}
++			input, ok := block["input"].(map[string]any)
++			if !ok {
++				continue
++			}
++			switch shortStopToolName(str(block["name"])) {
++			case "TodoWrite":
++				latestTodo = sequence
++				todoTasks = map[string]task{}
++				todos, _ := input["todos"].([]any)
++				for i, rawTodo := range todos {
++					todo, ok := rawTodo.(map[string]any)
++					if !ok {
++						continue
++					}
++					title, status := str(todo["content"]), str(todo["status"])
++					if title != "" && validTranscriptTaskStatus(status) {
++						todoTasks[fmt.Sprintf("todo:%d", i)] = task{title, status}
++					}
++				}
++			case "TaskCreate":
++				latestTask = sequence
++				title := str(input["subject"])
++				status := "pending"
++				if title == "" {
++					continue
++				}
++				id := str(input["taskId"])
++				if id == "" {
++					if useID := str(block["id"]); useID != "" {
++						id = "create:" + useID
++						createUses[useID] = id
++					} else {
++						id = "subject:" + title
++					}
++				}
++				taskTasks[id] = task{title, status}
++			case "TaskUpdate":
++				latestTask = sequence
++				id, status := str(input["taskId"]), str(input["status"])
++				if id == "" {
++					continue
++				}
++				if status == "deleted" {
++					delete(taskTasks, id)
++					continue
++				}
++				if !validTranscriptTaskStatus(status) {
++					continue
++				}
++				if existing, exists := taskTasks[id]; exists {
++					existing.status = status
++					taskTasks[id] = existing
++				}
++			}
++		}
++	}
++	tasks := taskTasks
++	if latestTodo > latestTask {
++		tasks = todoTasks
++	}
++	var titles []string
++	for _, item := range tasks {
++		if item.status == "pending" || item.status == "in_progress" {
++			titles = append(titles, item.title)
++		}
++	}
++	sort.Strings(titles)
++	return titles
++}
++
++func transcriptTaskResultIDFor(result map[string]any) string {
++	for _, key := range []string{"taskId", "task_id"} {
++		if id := str(result[key]); id != "" {
++			return id
++		}
++	}
++	if structured, ok := result["structuredContent"].(map[string]any); ok {
++		for _, key := range []string{"taskId", "task_id", "id"} {
++			if id := str(structured[key]); id != "" {
++				return id
++			}
++		}
++	}
++	text := transcriptText(result["content"])
++	if match := transcriptTaskResultID.FindStringSubmatch(text); len(match) == 2 {
++		return match[1]
++	}
++	return ""
++}
++
++func validTranscriptTaskStatus(status string) bool {
++	switch status {
++	case "pending", "in_progress", "completed":
++		return true
++	default:
++		return false
++	}
++}
+ 
+ func assistantEndsWithQuestion(message string) bool {
+ 	trimmed := strings.TrimRightFunc(message, isPythonWhitespace)

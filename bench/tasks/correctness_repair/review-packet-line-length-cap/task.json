@@ -1,0 +1,30 @@
+{
+  "id": "review-packet-line-length-cap",
+  "class": "correctness_repair",
+  "split": "confirmation",
+  "source_commit": "f6d76c9ab8a7e213f9a2fda8f4bda73c1d2774fe",
+  "start_commit": "32a2400ec8441c2eeb0610c27ad9334bb03c40f5",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/review/packet_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/review",
+      "-run",
+      "^TestWritePacketBoundsFileReviewLinesLosslessly$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/review/packet.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "id": "plan-milestone-label-rune-cap",
+  "class": "correctness_repair",
+  "split": "calibration",
+  "source_commit": "b62811d0b3a81d43371aa801ad74dffab044b834",
+  "start_commit": "84c9d28199119dfbb31bf351658b76f43f131c07",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/enforce/pre_decision_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/enforce",
+      "-run",
+      "^TestPlanMilestoneLabel$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/enforce/pre_decision.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

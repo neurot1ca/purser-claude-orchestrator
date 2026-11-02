@@ -1,0 +1,30 @@
+{
+  "id": "reviewer-default-installed-agent",
+  "class": "feature_extension",
+  "split": "confirmation",
+  "source_commit": "d0e4165487d1d387b8c47c36a6af702cd06282b2",
+  "start_commit": "9d9889efe04c779c715504f738d063c13e75aa73",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/initsetup/reviewer_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/initsetup",
+      "-run",
+      "^(TestReviewerCurrentDefaultUsesNextInstalledAgent|TestReviewerCurrentDefaultNoneInstalled|TestReviewerCurrentExplicitSelectionUnchanged)$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/initsetup/reviewer.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

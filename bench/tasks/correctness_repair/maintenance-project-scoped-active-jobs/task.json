@@ -1,0 +1,30 @@
+{
+  "id": "maintenance-project-scoped-active-jobs",
+  "class": "correctness_repair",
+  "split": "confirmation",
+  "source_commit": "bd18192a9ae63f8d5bfcf6357f694d6943f5bf1e",
+  "start_commit": "a1ffbf4e0b639004e1a407b328f3f7d3e4367125",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/maintenance/runner_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/maintenance",
+      "-run",
+      "^(TestLifecycleOracle|TestRunScopesActiveJobsToRepository|TestRunSkipsUnattributableCorruptJobFile|TestRunSkipsProjectJobWithoutState)$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/maintenance/runner.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

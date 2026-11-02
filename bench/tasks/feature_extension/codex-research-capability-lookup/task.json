@@ -1,0 +1,30 @@
+{
+  "id": "codex-research-capability-lookup",
+  "class": "feature_extension",
+  "split": "calibration",
+  "source_commit": "d087e79f678cfaa9bae7f011bc2b3ab3801e336f",
+  "start_commit": "b2f113a9928ae9a583fa72c2f6ad0853a9e22fc6",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/models/models_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/models",
+      "-run",
+      "^TestCodexResearchCapabilities$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/models/models.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}
