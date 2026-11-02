@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "pinned_commit": "37964a9528778ca1ad22203c5a879bda08cec78e",
+  "pinned_engine": {
+    "tag": "v0.1.225",
+    "commit": "37964a9528778ca1ad22203c5a879bda08cec78e",
+    "treatment_plugin_key": "purser@inline"
+  },
+  "cli": {
+    "version": "2.1.302",
+    "command": "claude",
+    "required_flags": [
+      "-p",
+      "--model",
+      "--effort",
+      "--session-id",
+      "--setting-sources",
+      "--settings",
+      "--plugin-dir",
+      "--output-format",
+      "--verbose",
+      "--include-hook-events"
+    ],
+    "disallowed_flags": [
+      "--bare",
+      "--safe-mode"
+    ]
+  },
+  "alpha": 0.025,
+  "familywise_alpha": 0.05,
+  "multiple_testing": "bonferroni",
+  "bound_type": "one_sided_upper_log_ratio",
+  "analysis_unit": "task_level_mean_paired_log_ratio",
+  "endpoints": [
+    {
+      "id": "main_claude_tokens",
+      "name": "Main-Claude tokens",
+      "role": "confirmatory",
+      "definition": "Unweighted sum of input_tokens, cache_read_input_tokens, cache_creation_input_tokens, and output_tokens",
+      "token_categories": [
+        "input_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "output_tokens"
+      ],
+      "weighting": "unweighted",
+      "alpha": 0.025,
+      "power_target": 0.9,
+      "prospective_reduction_target": 0.4
+    },
+    {
+      "id": "verified_wall_time",
+      "name": "Wall time to a verified success",
+      "role": "confirmatory",
+      "definition": "Observed elapsed time to a verified passing result; unsuccessful runs are charged the predeclared task deadline",
+      "failure_penalty": "predeclared_deadline",
+      "alpha": 0.025,
+      "power_target": 0.9,
+      "prospective_reduction_target": 0.3
+    }
+  ],
+  "descriptive_metrics": {
+    "pass_rate": {
+      "role": "descriptive_only",
+      "quality_non_inferiority_test": false,
+      "equal_quality_claims": false
+    },
+    "observed_elapsed_time": {
+      "role": "descriptive_only"
+    },
+    "worker_usage": {
+      "role": "separate_reporting",
+      "missing_value": "unknown",
+      "never_zero_when_missing": true
+    }
+  },
+  "power_targets": {
+    "main_claude_tokens_reduction": 0.4,
+    "verified_wall_time_reduction": 0.3,
+    "per_endpoint_power": 0.9,
+    "joint_power_min": 0.8
+  },
+  "calibration_size": {
+    "tasks": 8,
+    "tasks_per_class": 2,
+    "paired_repetitions": 2,
+    "total_pairs": 16,
+    "total_arm_runs": 32,
+    "excluded_from_confirmation": true
+  },
+  "k_floor": 12,
+  "confirmation_allocation": {
+    "k_min": 12,
+    "k_multiple": 4,
+    "initial_held_out_tasks": 12,
+    "initial_tasks_per_class": 3,
+    "r_min": 1,
+    "variance_components": [
+      "tau_squared_between_task",
+      "sigma_squared_within_task"
+    ],
+    "se_squared_formula": "(tau_m^2 + sigma_m^2 / R) / K",
+    "k_formula": "K >= ((t_{0.975,K-1} + z_{0.90})^2 * (tau_m^2 + sigma_m^2 / R)) / |log(1 - delta_m)|^2",
+    "k_floor_rationale": "sqrt(2 / (K - 1)) <= 0.50 variance-estimate relative standard error stability criterion, rounded up to a multiple of 4",
+    "k_floor_is_validity_guarantee": false
+  },
+  "initial_bank": {
+    "total_tasks": 20,
+    "calibration_tasks": 8,
+    "confirmation_tasks": 12
+  },
+  "task_classes": [
+    "correctness_repair",
+    "feature_extension",
+    "behavior_preserving_refactor",
+    "failure_path_repair"
+  ],
+  "provenance_fields": [
+    "engine_sha",
+    "harness_sha",
+    "suite_hash",
+    "campaign_id",
+    "n_tasks",
+    "repetitions",
+    "n_pairs",
+    "n_on",
+    "n_off"
+  ],
+  "storage": {
+    "raw_artifacts_dir": ".tmp/bench"
+  },
+  "cross_os": {
+    "platforms": [
+      "windows",
+      "macos",
+      "linux"
+    ],
+    "path_module": "node:path",
+    "shell": false,
+    "windows_hide": true,
+    "windows_cmd_shim_resolution": true,
+    "process_tree_cleanup": true,
+    "bounded_transcript_lock_retry": true,
+    "separate_os_cohorts": true,
+    "pool_cohorts_across_os": false
+  }
+}

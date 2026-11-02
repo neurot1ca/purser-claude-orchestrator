@@ -1,0 +1,11 @@
+# Raw benchmark artifacts belong under the repo-root .tmp/bench/ directory.
+# Ignore any accidental local raw output or scratch files inside bench/.
+results/
+raw/
+runs/
+campaigns/
+transcripts/
+artifacts/
+*.tmp
+*.log
+*.jsonl
