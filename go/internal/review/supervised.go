@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,14 @@ func runDirect(ctx context.Context, args []string, cwd string, env []string, std
 func runSupervised(ctx context.Context, args []string, cwd string, env []string, stdin io.Reader, stdout, stderr io.Writer, options ...ProcessOptions) (int, error) {
 	if len(args) == 0 {
 		return -1, os.ErrInvalid
+	}
+	if runtime.GOOS == "windows" && (strings.EqualFold(filepath.Ext(args[0]), ".cmd") || strings.EqualFold(filepath.Ext(args[0]), ".ps1")) {
+		// PowerShell invokes either shim while preserving literal argument boundaries.
+		quoted := make([]string, len(args))
+		for i, arg := range args {
+			quoted[i] = "'" + strings.ReplaceAll(arg, "'", "''") + "'"
+		}
+		args = []string{filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "& " + strings.Join(quoted, " ") + "; exit $LASTEXITCODE"}
 	}
 	var input *os.File
 	var inputWriter *os.File

@@ -308,7 +308,7 @@ func reviewMaterials(ctx context.Context, materials map[string]any, config map[s
 	if adapterErr != nil {
 		return bridgeOutcome(Unavailable("REVIEWER_ADAPTER_UNAVAILABLE", "No reviewer adapter is registered for "+provider+".", config, provider))
 	}
-	if provider == "cursor" && config["reviewer1_internal_cursor_enabled"] != true {
+	if provider == "cursor" && !cursorConfinementVerified(ctx, config) {
 		return bridgeOutcome(Unavailable("REVIEWER_CURSOR_CONFINEMENT_UNVERIFIED", "Cursor reviewer is unavailable until live confinement is verified.", config, provider))
 	}
 	budget := defaultPacketBudget

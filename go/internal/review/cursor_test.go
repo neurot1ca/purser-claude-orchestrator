@@ -74,17 +74,7 @@ func TestCursorReviewerConfinementAndEnvelope(t *testing.T) {
 	if name == "" || len(data) == 0 {
 		t.Fatal("Cursor reviewer has no restrictive project permission configuration")
 	}
-	var confinement struct {
-		Version     int `json:"version"`
-		Permissions struct {
-			Allow []string `json:"allow"`
-			Deny  []string `json:"deny"`
-		} `json:"permissions"`
-	}
-	if err := json.Unmarshal(data, &confinement); err != nil {
-		t.Fatal(err)
-	}
-	if confinement.Version != 1 || len(confinement.Permissions.Allow) != 1 || confinement.Permissions.Allow[0] != "Read(**)" || len(confinement.Permissions.Deny) < 4 {
+	if string(data) != `{"permissions":{"allow":["Read(**)"],"deny":["Shell(**)","Write(**)","WebFetch(**)","Mcp(**)"]}}` {
 		t.Fatalf("Cursor permissions are not deny-only: %s", data)
 	}
 	if _, err := adapter.ParseEnvelope(`{"session_id":"cursor-session","result":"{\"result\":\"NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE\",\"validation\":\"PASS\",\"findings\":[]}"}`); err != nil {
@@ -155,8 +145,27 @@ func TestNativeCursorReviewerGateAndEnabledResult(t *testing.T) {
 	response, _ := json.Marshal(map[string]any{"result": NoMaterialFinding, "validation": "PASS", "findings": []any{}})
 	envelope, _ := json.Marshal(map[string]string{"session_id": "cursor-session", "result": string(response)})
 	t.Setenv("MOCK_OUTPUT", string(envelope))
+	cwdCapture := filepath.Join(root, "cursor-cwd")
+	t.Setenv("MOCK_CAPTURE_CWD", cwdCapture)
 	got, err = RunBridge(context.Background(), root, args, 30*time.Second)
 	if err != nil || got.Outcome != "completed" || got.Attributes["conversation_id"] != "cursor-session" {
 		t.Fatalf("enabled Cursor reviewer outcome = %#v, %v", got, err)
 	}
+	t.Run("isolated_cwd", func(t *testing.T) {
+		data, err := os.ReadFile(cwdCapture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cwd := string(data)
+		parent, err := resolveReviewerPath(filepath.Join(reviewerDiagnosticStateRoot(), "cache", "tmp"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(filepath.Base(cwd), "reviewer1-") || filepath.Dir(cwd) != parent {
+			t.Fatalf("production launch cwd = %q, want isolated reviewer1- directory under %q", cwd, parent)
+		}
+		if err := RefuseWorkingDirectory(cwd, root); err != nil {
+			t.Fatal(err)
+		}
+	})
 }

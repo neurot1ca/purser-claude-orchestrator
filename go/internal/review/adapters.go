@@ -1,6 +1,7 @@
 package review
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -217,7 +218,7 @@ func (a reviewerAdapter) BuildCommand(prompt string, schema map[string]any, conf
 		return []string{executable, "--setting-sources", "", "--restricted", "--print", "--output-format", "json", "--json-schema", string(encoded),
 			"--model", model.(string), "--effort", effort, prompt, "--tools", "Read,Glob,Grep"}, nil
 	case "cursor":
-		if config["reviewer1_internal_cursor_enabled"] != true {
+		if !cursorConfinementVerified(context.Background(), config) {
 			return nil, errors.New("Cursor reviewer is unavailable until confinement is verified")
 		}
 		cwd, err := resolveReviewerPath(options.WorkingDirectory)
@@ -266,8 +267,6 @@ func (a reviewerAdapter) ConfinementConfig([]string) (string, []byte) {
 		return "", nil
 	}
 	config, _ := canonicalJSON(map[string]any{
-		"version": 1,
-		"editor":  map[string]any{"vimMode": false},
 		"permissions": map[string]any{
 			"allow": []string{"Read(**)"},
 			"deny":  []string{"Shell(**)", "Write(**)", "WebFetch(**)", "Mcp(**)"},
@@ -301,6 +300,7 @@ func ReviewerExecutable(config map[string]any, provider string) (string, error) 
 		name = strings.TrimSuffix(name, ".exe")
 		if provider == "cursor" && runtime.GOOS == "windows" {
 			name = strings.TrimSuffix(name, ".cmd")
+			name = strings.TrimSuffix(name, ".ps1")
 		}
 		if name == command {
 			return executable, nil

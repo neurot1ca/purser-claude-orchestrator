@@ -71,7 +71,7 @@ func nativeFixture(t *testing.T) (string, string) {
 	}
 	source := `package main
 import ("fmt"; "io"; "os"; "strings"; "time")
-func main() { if path := os.Getenv("MOCK_CAPTURE_STDIN"); path != "" { b, _ := io.ReadAll(os.Stdin); _ = os.WriteFile(path, b, 0600) }; if d := os.Getenv("MOCK_SLEEP_MS"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); time.Sleep(time.Duration(n)*time.Millisecond) }; output := os.Getenv("MOCK_OUTPUT"); if d := os.Getenv("MOCK_OUTPUT_SIZE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); output = strings.Repeat("x", n) }; fmt.Print(output); if d := os.Getenv("MOCK_EXIT_CODE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); os.Exit(n) } }`
+func main() { if path := os.Getenv("MOCK_CAPTURE_CWD"); path != "" { cwd, _ := os.Getwd(); _ = os.WriteFile(path, []byte(cwd), 0600); if _, err := os.Lstat(".cursor/mcp.json"); !os.IsNotExist(err) { os.Exit(8) } }; if path := os.Getenv("MOCK_CAPTURE_STDIN"); path != "" { b, _ := io.ReadAll(os.Stdin); _ = os.WriteFile(path, b, 0600) }; if d := os.Getenv("MOCK_SLEEP_MS"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); time.Sleep(time.Duration(n)*time.Millisecond) }; output := os.Getenv("MOCK_OUTPUT"); if d := os.Getenv("MOCK_OUTPUT_SIZE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); output = strings.Repeat("x", n) }; fmt.Print(output); if d := os.Getenv("MOCK_EXIT_CODE"); d != "" { var n int; fmt.Sscanf(d, "%d", &n); os.Exit(n) } }`
 	src := filepath.Join(dir, "mock.go")
 	if err := os.WriteFile(src, []byte(source), 0600); err != nil {
 		t.Fatal(err)
