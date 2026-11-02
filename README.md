@@ -12,6 +12,10 @@ Purser is a parallel coding agent orchestrator for Claude Code: it delegates cod
 
 **[Install](#install) · [How it works](#workflow) · [Commands](#commands) · [Docs](#documentation)**
 
+![One delegated job, from the prompt to a validated commit](assets/purser-flow.gif)
+
+[Watch as MP4](assets/purser-flow.mp4)
+
 ![Purser plans five features, runs them in parallel and applies them](assets/purser-demo.gif)
 </div>
 
@@ -90,10 +94,6 @@ The background job board tracks each job and the work it is waiting on.
 3. **Run in a worktree:** Purser runs independent steps in separate worktrees, keeping your working folder untouched while workers edit files and run tests.
 4. **Review:** Claude reviews every finished job. Reviewer can provide an advisory second opinion. Unaccepted work can return to the recorded job for repair.
 5. **Apply and validate:** After Claude accepts the reviewed change, Purser applies it and host validation runs on the applied revision. Finished worktrees are scheduled for cleanup when eligible.
-
-![One delegated job, from the prompt to a validated commit](assets/purser-flow.gif)
-
-[Watch as MP4](assets/purser-flow.mp4)
 
 ## Highlights
 
