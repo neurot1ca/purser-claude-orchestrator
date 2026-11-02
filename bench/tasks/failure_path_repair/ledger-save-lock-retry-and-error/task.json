@@ -1,0 +1,33 @@
+{
+  "id": "ledger-save-lock-retry-and-error",
+  "class": "failure_path_repair",
+  "split": "confirmation",
+  "source_commit": "16ca875ce3ed458490745213a4c2d9565c2fbd07",
+  "start_commit": "c37675d340bf16e6cc572c557e90ec4861d8e768",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/fsretry/replace_test.go",
+      "go/internal/ledger/ledger_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/ledger",
+      "./go/internal/fsretry",
+      "-run",
+      "^(TestSaveAndFailedReplacementPreservesPriorRecord|TestSaveRetriesTransientReplacement|TestReplaceRetriesWindowsSharingErrors)$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/fsretry/replace.go",
+    "go/internal/ledger/ledger.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

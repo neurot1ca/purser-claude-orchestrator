@@ -1,0 +1,30 @@
+{
+  "id": "marketplace-leftover-recovery",
+  "class": "failure_path_repair",
+  "split": "confirmation",
+  "source_commit": "b9f9d059c29f236806ee75d214c9e61aa598f759",
+  "start_commit": "2c107e94b1e9983afb9e946ceeabb150a77f0762",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/release/release_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/release",
+      "-run",
+      "^TestExportMarketplaceUsesCommittedTreeAndLocalManifest$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/release/release.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

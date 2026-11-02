@@ -1,0 +1,30 @@
+{
+  "id": "validation-gitlink-directory-check",
+  "class": "failure_path_repair",
+  "split": "confirmation",
+  "source_commit": "c5fd2f46814833125d2d0da383df087ef0406034",
+  "start_commit": "40ea3bdfb805c3ba83dd5b432eb84b8a4b5b601d",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/jobs/apply_validation_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/jobs",
+      "-run",
+      "^(TestCheckoutRevisionFailsWhenDirectoryReplacesTrackedFile|TestCheckoutRevisionHandlesDeletedTrackedFile|TestCheckoutRevisionAllowsGitlinkDirectory)$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/jobs/apply_validation.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

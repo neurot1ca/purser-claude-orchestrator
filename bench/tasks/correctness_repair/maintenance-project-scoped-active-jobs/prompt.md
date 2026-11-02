@@ -6,11 +6,11 @@ In `go/internal/maintenance/runner.go`, `Runner.Run` checks `<state>/codex_exec_
 
 As a result:
 1. A `"QUEUED"` or `"RUNNING"` job belonging to a different repository (`repoRoot` or `cwd` pointing to another project) causes `Runner.Run` to skip or cancel maintenance for the current repository.
-2. An unreadable job file, an unattributable corrupt JSON file, or a job file whose `repoRoot`/`cwd` does not match the current repository causes `activeUserJobs` to report unknown job state and fail with `"active or unknown user job state; maintenance skipped"`.
+2. Job files that cannot be read, cannot be attributed to a project, or belong to a different repository can interfere with maintenance for the current repository.
 
 ## Expected Behavior
 
 - Scope active user job detection in `go/internal/maintenance/runner.go` to the target repository (`root`).
 - Identify a job record's project from `repoRoot` (falling back to `cwd` when `repoRoot` is empty) and compare it to `root` after resolving absolute paths, evaluating symlinks when possible, and cleaning paths (comparing case-insensitively on Windows and macOS).
-- Ignore job files that cannot be read or whose project path is empty or refers to a different repository (including corrupt JSON files that do not identify `root` as their project).
-- For job records that belong to `root`, continue treating corrupt JSON or a missing/non-string `state` as unknown state (`false, false`), and continue treating `"QUEUED"` or `"RUNNING"` (when not matching the excluded maintenance job ID) as an active user job (`true, true`).
+- Ignore job files that cannot be read or whose project path is empty or refers to a different repository, including syntactically corrupt files that cannot be attributed to the current repository.
+- For readable, valid job records attributed to `root`, treat a missing or non-string `state` as unknown state (`false, false`). Treat `"QUEUED"` or `"RUNNING"` as an active user job (`true, true`) unless its job ID matches the excluded maintenance job ID.

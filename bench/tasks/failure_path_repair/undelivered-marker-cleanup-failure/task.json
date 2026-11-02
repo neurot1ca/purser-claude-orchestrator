@@ -1,0 +1,31 @@
+{
+  "id": "undelivered-marker-cleanup-failure",
+  "class": "failure_path_repair",
+  "split": "calibration",
+  "source_commit": "cf4a0171f6b9a4ffa5ef747a29830c6150a2728d",
+  "start_commit": "971767518dc51a9f38a1567f4699d4b085f041de",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/enforce/undelivered_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/enforce",
+      "-run",
+      "^TestCleanupUndeliveredAsyncStartReportsMarkerRemovalFailure$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/enforce/pre.go",
+    "go/internal/enforce/task_usage.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

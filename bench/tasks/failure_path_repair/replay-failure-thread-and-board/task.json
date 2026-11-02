@@ -1,0 +1,32 @@
+{
+  "id": "replay-failure-thread-and-board",
+  "class": "failure_path_repair",
+  "split": "calibration",
+  "source_commit": "0b08048aadb72cceb6a1bccfa24d716f0a2c91b5",
+  "start_commit": "cd26d47f43577623abe1fda3a429b52404df2210",
+  "prompt_file": "prompt.md",
+  "check": {
+    "files": [
+      "go/internal/enforce/failure_shared_test.go",
+      "go/internal/enforce/post_board_test.go"
+    ],
+    "command": [
+      "go",
+      "test",
+      "./go/internal/enforce",
+      "-run",
+      "^(TestReplayPreparationFailurePreservesPriorThreadIdentity|TestPostBoardTerminalAndQueuedStates)$",
+      "-count=1"
+    ]
+  },
+  "scope": [
+    "go/internal/enforce/failure_shared.go",
+    "go/internal/enforce/post_board.go"
+  ],
+  "deadline_seconds": 1800,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ]
+}

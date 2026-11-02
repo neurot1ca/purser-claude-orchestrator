@@ -2,11 +2,11 @@
 
 ## Problem
 
-In `go/internal/review/packet.go`, `WritePacket(directory, name string, encoded []byte)` writes the encoded review packet directly to disk. When `name` is `"review-packet.json"`, downstream file readers enforce a 2000-byte per-line limit, so single-line JSON output or long string values (such as multi-line diffs, authority contracts, or long source lines containing multi-byte UTF-8 characters and JSON escapes) exceed 2000 bytes on a single line.
+In `go/internal/review/packet.go`, `WritePacket(directory, name string, encoded []byte)` writes the encoded review packet directly to disk. When `name` is `"review-packet.json"`, long top-level string values (such as multi-line diffs, authority contracts, or long source lines containing multi-byte UTF-8 characters and JSON escapes) can exceed what downstream file readers handle reliably.
 
 ## Expected Behavior
 
 When `name == "review-packet.json"`:
-- Ensure no line in the written `review-packet.json` file exceeds 2000 bytes.
-- Preserve short string fields as plain JSON strings, and represent long string fields as `{"concatenate_without_separator": [...]}` where joining the string array elements with `""` losslessly reconstructs the exact original string (including all line endings, escapes, and multi-byte runes).
-- Return an error if `encoded` is not valid JSON for a packet object.
+- For each top-level string value longer than 240 bytes, represent it as `{"concatenate_without_separator": [...]}`. Split the string into chunks of at most 240 runes, preserving all content and line endings so joining the chunks with `""` reconstructs the exact original string.
+- Leave shorter top-level string values and non-string values unchanged.
+- Return an error when `encoded` is not valid JSON.
