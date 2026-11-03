@@ -91,7 +91,7 @@ Each campaign provisions:
 - Verified release or source-built binaries matching the pinned commit.
 - Separate per-arm target worktrees, `CLAUDE_CONFIG_DIR`, `PURSER_STATE_DIR`, and transcript directories.
 
-Both arms launch via `claude -p` (verified against Claude CLI `2.1.302`) with identical arguments and stdin prompt bytes:
+Both arms launch via `claude -p` (verified against Claude CLI `2.1.317`) with identical arguments and stdin prompt bytes:
 
 ```text
 claude -p \

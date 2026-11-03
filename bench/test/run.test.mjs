@@ -182,7 +182,7 @@ test('preflight uses the injected fake Claude executable without network access'
   const artifacts = path.join(repo, '.tmp', 'bench', campaign);
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `process.stdout.write('Claude Code 2.1.302\\n');`);
+  await writeFile(fake, `process.stdout.write('Claude Code 2.1.317\\n');`);
   const result = await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [runner, 'preflight', '--campaign', campaign, '--dry-run'], { env: { ...process.env, BENCH_CLAUDE: fake }, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
@@ -191,7 +191,7 @@ test('preflight uses the injected fake Claude executable without network access'
     child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
   });
   assert.equal(result.code, 0, result.stderr);
-  assert.match(result.stdout, /2\.1\.302/);
+  assert.match(result.stdout, /2\.1\.317/);
 });
 
 test('run selects confirmation tasks and calibrate rejects a narrowed task selection', async t => {
@@ -203,7 +203,7 @@ test('run selects confirmation tasks and calibrate rejects a narrowed task selec
   const narrowedArtifacts = path.join(repo, '.tmp', 'bench', `${campaign}-narrow`);
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); await retryIO(() => rm(narrowedArtifacts, { recursive: true, force: true })); });
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `process.stdout.write('Claude Code 2.1.302\\n');`);
+  await writeFile(fake, `process.stdout.write('Claude Code 2.1.317\\n');`);
   const run = await runProcess(process.execPath, [runner, 'run', '--campaign', campaign, '--dry-run'], {
     cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake }, input: '', deadlineSeconds: 30
   });
@@ -233,7 +233,7 @@ test('fake Claude calibration artifacts are accepted by analyze allocate', async
   const artifacts = path.join(repo, '.tmp', 'bench', campaign);
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `import { randomUUID } from 'node:crypto'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.302\\n'); else { const u={input_tokens:10,cache_read_input_tokens:2,cache_creation_input_tokens:1,output_tokens:4}; process.stdout.write(JSON.stringify({type:'assistant',message:{id:randomUUID(),role:'assistant',usage:u}})+'\\n'+JSON.stringify({type:'result',usage:u})+'\\n'); process.exitCode=1; }`);
+  await writeFile(fake, `import { randomUUID } from 'node:crypto'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const u={input_tokens:10,cache_read_input_tokens:2,cache_creation_input_tokens:1,output_tokens:4}; process.stdout.write(JSON.stringify({type:'assistant',message:{id:randomUUID(),role:'assistant',usage:u}})+'\\n'+JSON.stringify({type:'result',usage:u})+'\\n'); process.exitCode=1; }`);
   const campaignRun = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
     cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
   });
