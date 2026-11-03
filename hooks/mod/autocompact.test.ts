@@ -58,11 +58,43 @@ test('leaves turns under the threshold alone', async ($, on) => {
   expect(calls.compacts).toBe(0)
 })
 
-test('arms the idle timer at the 100K floor through just below the main threshold', async ($, on) => {
-  const { calls, clock } = engine(on, 130_000)
+test('arms the idle timer at 150K below the native idle threshold', async ($, on) => {
+  const { calls, clock, files } = engine(on, 150_000, {}, 0, '{"enabled": true}', true)
   await $.turn.complete(TURN)
+  expect([...files.values()].join('\n')).toContain('idle timer armed at 150000 tokens')
   await clock.advance(271_000)
   expect(calls.compacts).toBe(1)
+})
+
+test('yields the idle timer to native idle compaction at 200K', async ($, on) => {
+  const { calls, clock, files } = engine(on, 200_000, {}, 0, '{"enabled": true}', true)
+  on('settings.read', async () => ({ value: { idleCompaction: true } }))
+  await $.turn.complete(TURN)
+  const log = [...files.values()].join('\n')
+  expect(log).toContain('idle timer yielded to native idle compaction at 200000 tokens')
+  expect(log).not.toContain('idle timer armed')
+  await clock.advance(271_000)
+  expect(calls.compacts).toBe(0)
+})
+
+test('arms the idle timer above 200K when native idle compaction is disabled', async ($, on) => {
+  const { calls, clock, files } = engine(on, 240_000, {}, 0, '{"enabled": true}', true)
+  on('settings.read', async () => ({ value: { idleCompaction: false } }))
+  await $.turn.complete(TURN)
+  expect([...files.values()].join('\n')).toContain('idle timer armed at 240000 tokens')
+  await clock.advance(271_000)
+  expect(calls.compacts).toBe(1)
+})
+
+test('assumes native idle compaction is on when settings cannot be read', async ($, on) => {
+  const { calls, clock, files } = engine(on, 240_000, {}, 0, '{"enabled": true}', true)
+  on('settings.read', async () => { throw new Error('settings unavailable') })
+  await $.turn.complete(TURN)
+  const log = [...files.values()].join('\n')
+  expect(log).toContain('idle timer yielded to native idle compaction at 240000 tokens')
+  expect(log).not.toContain('idle timer armed')
+  await clock.advance(271_000)
+  expect(calls.compacts).toBe(0)
 })
 
 test('does not re-arm after idle compact until a user prompt completes', async ($, on) => {

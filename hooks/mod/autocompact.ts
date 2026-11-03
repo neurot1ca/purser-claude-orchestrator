@@ -238,6 +238,14 @@ export function registerAutoCompact(on) {
       await trace($, `turn ${e.turnId}: ${tokens ?? 'no'} tokens, threshold ${threshold}, ${compacting ? 'compacting' : 'below'}`)
       if (!compacting) {
         if (idle && tokens !== undefined && tokens >= IDLE_COMPACT_MIN_TOKENS) {
+          if (tokens >= 200_000) {
+            let nativeIdleCompaction = true
+            try { nativeIdleCompaction = (await $.settings.read()).idleCompaction !== false } catch { /* native defaults to on */ }
+            if (nativeIdleCompaction) {
+              await trace($, `idle timer yielded to native idle compaction at ${tokens} tokens`)
+              return result
+            }
+          }
           if (idleCompactNeedsPrompt) {
             await trace($, 'idle timer not re-armed: no user prompt since idle compact')
             return result
