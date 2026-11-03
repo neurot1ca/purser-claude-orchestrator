@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, stat, writeFile, appendFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,9 +22,29 @@ export async function retryIO(fn, attempts = RETRIES) {
   }
 }
 
-export function armSettings(arm) {
+export function armSettings(arm, disabledPlugins = []) {
   if (!['on', 'off'].includes(arm)) throw new Error(`invalid arm: ${arm}`);
-  return { enabledPlugins: { [PROTOCOL.pinned_engine.treatment_plugin_key]: arm === 'on' } };
+  return { enabledPlugins: { ...Object.fromEntries(disabledPlugins.map(key => [key, false])), [PROTOCOL.pinned_engine.treatment_plugin_key]: arm === 'on' } };
+}
+
+export function childEnvironment(env, stateDir) {
+  return { ...Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'CLAUDECODE' && !key.startsWith('CLAUDE_CODE_') && key !== 'CLAUDE_EFFORT' && key !== 'CLAUDE_PID')), PURSER_STATE_DIR: stateDir };
+}
+
+async function userPurserPlugins() {
+  const configDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(homedir(), '.claude'));
+  let settings;
+  try { settings = JSON.parse(await retryIO(() => readFile(path.join(configDir, 'settings.json'), 'utf8'))); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  const inline = PROTOCOL.pinned_engine.treatment_plugin_key;
+  return Object.entries(settings.enabledPlugins ?? {}).filter(([key, enabled]) => key.startsWith('purser@') && key !== inline && enabled === true).map(([key]) => key);
+}
+
+function authFailure(events) {
+  return events.some(event => event.type === 'result' && event.is_error === true && (
+    event.terminal_reason === 'api_error' ||
+    (typeof event.result === 'string' && event.result.includes('Not logged in'))
+  ));
 }
 
 export function usageFromTranscript(input) {
@@ -269,7 +290,7 @@ export async function terminalAttempts(ledger) {
     try { record = JSON.parse(line); }
     // Interrupted appends may precede records written by a later resume.
     catch { continue; }
-    if (['completed', 'failed', 'deadline', 'grading_timeout', 'dry_run'].includes(record.attempt_status)) {
+    if (['completed', 'failed', 'deadline', 'grading_timeout', 'dry_run'].includes(record.attempt_status) && record.failure_reason !== 'auth') {
       terminal.add(JSON.stringify([record.task_id, record.repetition, record.arm]));
     }
   }
@@ -283,6 +304,7 @@ async function main() {
   if (path.dirname(campaignDir) !== campaignBase) throw new Error('campaign directory must stay inside .tmp/bench');
   await mkdir(campaignDir, { recursive: true });
   const pf = await preflight(campaignDir, opts.dryRun);
+  const disabledPlugins = await userPurserPlugins();
   const dirs = await taskDirs(opts.tasks);
   if (opts.action === 'preflight') { console.log(json({ ok: true, cli: pf.version, engine_sha: pf.engine.sha })); return; }
   const split = opts.action === 'calibrate' ? 'calibration' : 'confirmation';
@@ -321,7 +343,7 @@ async function main() {
         const m = task.manifest, runId = `${arm}-${m.id}-${rep + 1}-${randomUUID()}`;
         const runDir = path.join(campaignDir, 'targets', runId), configDir = path.join(campaignDir, 'config', runId), stateDir = path.join(campaignDir, 'state', runId), transcriptDir = path.join(campaignDir, 'transcripts', runId);
         await Promise.all([runDir, configDir, stateDir, transcriptDir].map(p => mkdir(p, { recursive: true })));
-        const configFile = path.join(configDir, 'settings.json'); await writeFile(configFile, json(armSettings(arm)));
+        const configFile = path.join(configDir, 'settings.json'); await writeFile(configFile, json(armSettings(arm, disabledPlugins)));
         const target = path.join(runDir, 'repo');
         if (!opts.dryRun) {
           await command('git', ['clone', '--quiet', '--no-hardlinks', ROOT, target]).then(r => { if (r.code) throw Error(r.stderr); });
@@ -330,10 +352,10 @@ async function main() {
         }
         const prompt = await readFile(path.join(task.dir, m.prompt_file));
         const session = randomUUID();
-        const args = [...pf.claude.prefix, '-p', '--model', metadata.model, '--effort', metadata.effort, '--session-id', session, '--setting-sources', 'user,project,local', '--settings', configFile, '--plugin-dir', pf.engine.dir, '--output-format', 'stream-json', '--verbose', '--include-hook-events'];
+        const args = [...pf.claude.prefix, '-p', '--model', metadata.model, '--effort', metadata.effort, '--session-id', session, '--setting-sources', 'project,local', '--settings', configFile, '--plugin-dir', pf.engine.dir, '--output-format', 'stream-json', '--verbose', '--include-hook-events'];
         const started = Date.now();
         let run = { code: 0, timedOut: false, stdout: '', stderr: '' }, outcome = { passed: null };
-        if (!opts.dryRun) run = await runProcess(pf.claude.exe, args, { cwd: target, input: prompt, deadlineSeconds: m.deadline_seconds, env: { ...process.env, CLAUDE_CONFIG_DIR: configDir, PURSER_STATE_DIR: stateDir } });
+        if (!opts.dryRun) run = await runProcess(pf.claude.exe, args, { cwd: target, input: prompt, deadlineSeconds: m.deadline_seconds, env: childEnvironment(process.env, stateDir) });
         await writeFile(path.join(transcriptDir, 'stdout.jsonl'), run.stdout);
         await writeFile(path.join(transcriptDir, 'stderr.log'), run.stderr);
         const transcript = await retryIO(() => readFile(path.join(transcriptDir, 'stdout.jsonl'), 'utf8'));
@@ -342,20 +364,22 @@ async function main() {
           try { parsed.push(JSON.parse(line)); }
           catch { transcriptError = 'malformed stream-json transcript'; break; }
         }
+        const isAuthFailure = authFailure(parsed);
         let usage = { main: 'unknown', workers: 'unknown' }, accountingError;
         try {
           if (transcriptError) throw new Error(transcriptError);
           const result = usageFromTranscript(parsed); usage = { main: result.main, aggregate: result.aggregate, reconciliation_mismatch: result.reconciliation_mismatch, workers: result.workers.length ? result.workers : 'unknown' };
           if (result.reconciliation_mismatch === true) accountingError = 'main transcript usage does not match aggregate result usage';
         } catch (e) { accountingError = e.message; }
-        if (!opts.dryRun && !run.timedOut && run.code === 0) outcome = await grade(target, m, campaignDir);
+        if (!opts.dryRun && !isAuthFailure && !run.timedOut && run.code === 0) outcome = await grade(target, m, campaignDir);
         // The contract measures launch through independent grading.
         const elapsed = Date.now() - started;
-        const result = { ...metadata, n_tasks: tasks.length, repetitions: opts.reps, n_pairs: pairs.length, n_on: pairs.length, n_off: pairs.length, task_id: m.id, task_class: m.class, repetition: rep + 1, arm, order, session_id: session, attempt_status: opts.dryRun ? 'dry_run' : run.timedOut ? 'deadline' : run.code === 0 ? 'completed' : 'failed', exit_code: run.code, timed_out: run.timedOut, elapsed_ms: elapsed, verified_wall_time_ms: outcome.passed === true ? elapsed : m.deadline_seconds * 1000, usage, accounting_error: accountingError, prompt_sha: sha(prompt), settings_sha: sha(await readFile(configFile)), transcript_sha: sha(transcript), binary_sha: sha(await readFile(pf.claude.hashPath)), source_commit: m.source_commit, start_commit: m.start_commit, repository_head: repoHash, ...outcome, worker_usage: usage.workers };
+        const result = { ...metadata, n_tasks: tasks.length, repetitions: opts.reps, n_pairs: pairs.length, n_on: pairs.length, n_off: pairs.length, task_id: m.id, task_class: m.class, repetition: rep + 1, arm, order, session_id: session, attempt_status: isAuthFailure ? 'failed' : opts.dryRun ? 'dry_run' : run.timedOut ? 'deadline' : run.code === 0 ? 'completed' : 'failed', ...(isAuthFailure ? { failure_reason: 'auth' } : {}), exit_code: run.code, timed_out: run.timedOut, elapsed_ms: elapsed, verified_wall_time_ms: outcome.passed === true ? elapsed : m.deadline_seconds * 1000, usage, accounting_error: accountingError, prompt_sha: sha(prompt), settings_sha: sha(await readFile(configFile)), transcript_sha: sha(transcript), binary_sha: sha(await readFile(pf.claude.hashPath)), source_commit: m.source_commit, start_commit: m.start_commit, repository_head: repoHash, ...outcome, worker_usage: usage.workers };
         await writeFile(path.join(campaignDir, `${runId}.json`), json(result));
-        // Separate this record from any interrupted final line without rewriting the ledger.
-        await appendFile(ledger, '\n' + JSON.stringify(result) + '\n');
+        // Auth failures stay inspectable but must not enter the terminal analysis ledger.
+        if (!isAuthFailure) await appendFile(ledger, '\n' + JSON.stringify(result) + '\n');
         if (!opts.dryRun) await retryIO(() => rm(runDir, { recursive: true, force: true }));
+        if (isAuthFailure) throw new Error('Claude authentication failed (Not logged in). Run /login in the default Claude config, then resume the campaign.');
       }
     }
   }

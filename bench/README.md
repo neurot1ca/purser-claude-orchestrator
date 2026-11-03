@@ -89,7 +89,7 @@ Each campaign provisions:
 
 - A separate engine clone pinned to Purser `v0.1.225` (commit `37964a9528778ca1ad22203c5a879bda08cec78e`), never the active working tree.
 - Verified release or source-built binaries matching the pinned commit.
-- Separate per-arm target worktrees, `CLAUDE_CONFIG_DIR`, `PURSER_STATE_DIR`, and transcript directories.
+- Separate per-arm target worktrees, settings files, `PURSER_STATE_DIR`, and transcript directories.
 
 Both arms launch via `claude -p` (verified against Claude CLI `2.1.317`) with identical arguments and stdin prompt bytes:
 
@@ -98,7 +98,7 @@ claude -p \
   --model <exact-model-id> \
   --effort <fixed-effort> \
   --session-id <fresh-uuid> \
-  --setting-sources <validated-isolation-setting> \
+  --setting-sources project,local \
   --settings <arm-settings.json> \
   --plugin-dir <pinned-engine> \
   --output-format stream-json \
@@ -107,6 +107,8 @@ claude -p \
 ```
 
 The sole treatment difference between arms is `enabledPlugins["purser@inline"]` inside `<arm-settings.json>` (`true` for `on`, `false` for `off`). Do not pass `--bare` and do not use any safe-mode launch bypass (no `--bare` and no safe-mode flags/settings), as those alter baseline tools, hooks, and session behavior. Paired runs balance `on`-first and `off`-first execution order using a recorded randomization seed.
+
+Claude uses the user's default config directory for authentication while `project,local` sources exclude user settings; enabled non-inline Purser plugins from the user settings are explicitly disabled in both arm settings files. Parent Claude Code session variables are removed from the child environment, while provider variables and the per-run Purser state directory are preserved.
 
 ## 5. Cross-OS Requirements (Windows, macOS, Linux)
 

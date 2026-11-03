@@ -1,10 +1,10 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFile, mkdir, mkdtemp, rm, rmdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readdir, rm, rmdir, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { armSettings, campaignMetadata, ensureEngine, grade, retryIO, runProcess, terminalAttempts, usageFromTranscript } from '../run.mjs';
+import { armSettings, campaignMetadata, childEnvironment, ensureEngine, grade, retryIO, runProcess, terminalAttempts, usageFromTranscript } from '../run.mjs';
 
 const scratchRoot = fileURLToPath(new URL('../../.tmp/bench-test/', import.meta.url));
 await mkdir(scratchRoot, { recursive: true });
@@ -123,12 +123,26 @@ test('campaign ids cannot resolve to or escape the benchmark base directory', as
 });
 
 test('arm settings differ only at the Purser plugin switch', () => {
-  const on = armSettings('on'), off = armSettings('off');
+  const disabled = ['purser@purser-local', 'purser@other'];
+  const on = armSettings('on', disabled), off = armSettings('off', disabled);
   assert.deepEqual(Object.keys(on), Object.keys(off));
   const key = 'purser@inline';
-  assert.deepEqual(Object.keys(on.enabledPlugins), [key]);
+  assert.deepEqual(Object.keys(on.enabledPlugins), [...disabled, key]);
+  for (const disabledKey of disabled) {
+    assert.equal(on.enabledPlugins[disabledKey], false);
+    assert.equal(off.enabledPlugins[disabledKey], false);
+  }
   assert.equal(on.enabledPlugins[key], true);
   assert.equal(off.enabledPlugins[key], false);
+});
+
+test('child environment strips Claude parent-session variables and keeps provider variables', () => {
+  const env = childEnvironment({
+    CLAUDECODE: 'parent', CLAUDE_CODE_SESSION_ID: 'session', CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CLAUDE_EFFORT: 'high', CLAUDE_PID: '123', ANTHROPIC_API_KEY: 'untouched', KEEP: 'yes'
+  }, 'state-dir');
+  assert.deepEqual(env, { ANTHROPIC_API_KEY: 'untouched', KEEP: 'yes', PURSER_STATE_DIR: 'state-dir' });
+  assert.equal('CLAUDE_CONFIG_DIR' in childEnvironment({ KEEP: 'yes' }, 'state'), false);
 });
 
 test('duplicate message ids contribute once and sidechain usage is separate', () => {
@@ -252,6 +266,48 @@ test('fake Claude calibration artifacts are accepted by analyze allocate', async
   assert.equal(allocation.code, 0, allocation.stderr);
   assert.equal(JSON.parse(allocation.stdout).provenance.n_pairs, 16);
   assert.ok((await readFile(path.join(artifacts, 'allocation.json'), 'utf8')).includes('variance_components'));
+});
+
+test('authentication failure stops calibration and remains retryable on resume', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'bench-auth-'));
+  const campaign = `test-${process.pid}-${Date.now()}`;
+  const runner = fileURLToPath(new URL('../run.mjs', import.meta.url));
+  const repo = path.resolve(path.dirname(runner), '..');
+  const artifacts = path.join(repo, '.tmp', 'bench', campaign);
+  const userConfig = path.join(dir, 'user-config');
+  const capture = path.join(dir, 'capture.json');
+  t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
+  await mkdir(userConfig, { recursive: true });
+  await writeFile(path.join(userConfig, 'settings.json'), JSON.stringify({
+    enabledPlugins: { 'purser@purser-local': true, 'purser@inline': true, 'other-plugin': true }
+  }));
+  const fake = path.join(dir, 'fake-claude.mjs');
+  await writeFile(fake, `import fs from 'node:fs'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const args=process.argv.slice(2); const settings=JSON.parse(fs.readFileSync(args[args.indexOf('--settings')+1],'utf8')); const env={CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,PURSER_STATE_DIR:process.env.PURSER_STATE_DIR}; const parentPresent=Object.fromEntries(['CLAUDECODE','CLAUDE_CODE_SESSION_ID','CLAUDE_CODE_ENTRYPOINT','CLAUDE_CODE_MESSAGING_TEST','CLAUDE_EFFORT','CLAUDE_PID'].map(key=>[key,key in process.env])); fs.writeFileSync(process.env.BENCH_CAPTURE,JSON.stringify({args,env,parentPresent,anthropicKeyPreserved:process.env.ANTHROPIC_API_KEY==='kept',settings})); process.stdout.write(JSON.stringify({type:'result',is_error:true,terminal_reason:'api_error',result:'Not logged in · Please run /login'})+'\\n'); }`);
+  const run = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
+    cwd: repo, env: {
+      ...process.env, BENCH_CLAUDE: fake, BENCH_CAPTURE: capture, CLAUDE_CONFIG_DIR: userConfig,
+      GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true',
+      CLAUDECODE: 'parent', CLAUDE_CODE_SESSION_ID: 'parent-session', CLAUDE_CODE_ENTRYPOINT: 'parent-cli',
+      CLAUDE_CODE_MESSAGING_TEST: 'parent-message', CLAUDE_EFFORT: 'medium', CLAUDE_PID: '987', ANTHROPIC_API_KEY: 'kept'
+    }, input: '', deadlineSeconds: 2400
+  });
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /Claude authentication failed.*Run \/login.*resume the campaign/);
+  const launch = JSON.parse(await readFile(capture, 'utf8'));
+  assert.equal(launch.args[launch.args.indexOf('--setting-sources') + 1], 'project,local');
+  assert.equal(launch.args.includes(userConfig), false);
+  assert.equal(launch.env.CLAUDE_CONFIG_DIR, userConfig);
+  for (const key of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_MESSAGING_TEST', 'CLAUDE_EFFORT', 'CLAUDE_PID']) assert.equal(launch.parentPresent[key], false, key);
+  assert.equal(launch.anthropicKeyPreserved, true);
+  assert.equal(launch.settings.enabledPlugins['purser@purser-local'], false);
+  assert.equal(typeof launch.settings.enabledPlugins['purser@inline'], 'boolean');
+  const attemptFiles = (await readdir(artifacts)).filter(file => file !== 'campaign.json' && file.endsWith('.json'));
+  const records = await Promise.all(attemptFiles.map(async file => JSON.parse(await readFile(path.join(artifacts, file), 'utf8'))));
+  assert.equal(records.length, 1);
+  assert.equal(records[0].attempt_status, 'failed');
+  assert.equal(records[0].failure_reason, 'auth');
+  assert.equal(launch.settings.enabledPlugins['purser@inline'], records[0].arm === 'on');
+  assert.equal((await terminalAttempts(path.join(artifacts, 'attempts.jsonl'))).size, 0);
 });
 
 test('deadline kills the process tree', async t => {
