@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rm, stat, writeFile, appendFile } from 'node:fs/promises';
+import { inflateRawSync } from 'node:zlib';
+import { chmod, mkdir, readFile, readdir, rm, stat, writeFile, appendFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,6 +50,19 @@ function authFailure(events) {
 
 function permissionFailure(events) {
   return events.some(event => event.type === 'result' && Array.isArray(event.permission_denials) && event.permission_denials.length > 0);
+}
+
+function pluginContamination(events, arm) {
+  const purser = value => typeof value === 'string' ? value.startsWith('plugin:purser:') :
+    value && typeof value === 'object' && [value.name, value.id, value.key].some(name => typeof name === 'string' && name.startsWith('plugin:purser:'));
+  for (const event of events) {
+    for (const payload of [event, event.data, event.message].filter(value => value && typeof value === 'object')) {
+      const servers = Array.isArray(payload.mcp_servers) ? payload.mcp_servers : [];
+      const plugins = Array.isArray(payload.plugins) ? payload.plugins : [];
+      if (arm === 'off' && [...servers, ...plugins].some(purser)) return 'contamination';
+      if (arm === 'on' && servers.some(server => purser(server) && server.status !== 'connected')) return 'engine';
+    }
+  }
 }
 
 export function usageFromTranscript(input) {
@@ -172,23 +186,72 @@ export async function grade(target, m, campaignDir) {
   return { passed: structural && !check.timedOut && check.code === 0, ...(check.timedOut ? { attempt_status: 'grading_timeout' } : {}), check_exit_code: check.code, check_stdout: check.stdout, check_stderr: check.stderr };
 }
 
-export async function ensureEngine(dir, dryRun) {
-  const commit = PROTOCOL.pinned_commit;
-  if (dryRun) return { commit, dir, sha: commit };
-  if (!(await stat(dir).catch(() => null))) {
-    await mkdir(path.dirname(dir), { recursive: true });
-    const clone = await command('git', ['clone', '--no-checkout', ROOT, dir]);
-    if (clone.code !== 0) throw new Error(`engine clone failed: ${clone.stderr}`);
+export async function ensureEngine(dir, dryRun, { download = downloadArchive } = {}) {
+  const pinned = PROTOCOL.pinned_engine;
+  if (dryRun) return { commit: pinned.commit, dir, sha: pinned.archive_sha256 };
+  const version = pinned.tag.replace(/^v/, '');
+  const binary = path.join(dir, 'bin', `purser-hook-${goos()}-${goarch()}${process.platform === 'win32' ? '.exe' : ''}`);
+  const validate = async () => {
+    const plugin = JSON.parse(await retryIO(() => readFile(path.join(dir, '.claude-plugin', 'plugin.json'), 'utf8')).catch(() => { throw new Error('pinned engine plugin.json is missing'); }));
+    if (plugin.version !== version) throw new Error(`pinned engine version mismatch: expected ${version}, got ${plugin.version}`);
+    const binaryStat = await retryIO(() => stat(binary)).catch(() => null);
+    if (!binaryStat?.isFile()) throw new Error(`pinned engine host binary is missing: ${path.relative(dir, binary)}`);
+    if (process.platform !== 'win32' && !(binaryStat.mode & 0o111)) await retryIO(() => chmod(binary, binaryStat.mode | 0o111));
+  };
+  const marker = path.join(dir, '.bench-engine-sha256');
+  if ((await stat(dir).catch(() => null))?.isDirectory()) {
+    const installedSha = await retryIO(() => readFile(marker, 'utf8')).catch(() => '');
+    if (installedSha.trim() === pinned.archive_sha256) { await validate(); return { commit: pinned.commit, dir, sha: pinned.archive_sha256 }; }
+    await retryIO(() => rm(dir, { recursive: true, force: true }));
   }
-  const actual = await git(['rev-parse', 'HEAD'], dir);
-  if (actual !== commit) {
-    await git(['fetch', '--depth=1', 'origin', commit], dir);
+  const archive = Buffer.from(await download(pinned.archive_url));
+  const actualSha = sha(archive);
+  if (actualSha !== pinned.archive_sha256) throw new Error(`pinned engine archive sha256 mismatch: expected ${pinned.archive_sha256}, got ${actualSha}`);
+  await mkdir(dir, { recursive: true });
+  await extractZip(archive, dir);
+  await validate();
+  await retryIO(() => writeFile(marker, `${actualSha}\n`));
+  return { commit: pinned.commit, dir, sha: actualSha };
+}
+
+function goos() { return process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : process.platform; }
+function goarch() { return ({ x64: 'amd64', ia32: '386', arm: 'arm', arm64: 'arm64' })[process.arch] ?? process.arch; }
+
+async function downloadArchive(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`pinned engine download failed: HTTP ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
+}
+
+async function extractZip(archive, dest) {
+  let eocd = -1;
+  for (let i = archive.length - 22; i >= Math.max(0, archive.length - 65557); i--) {
+    if (archive.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
   }
-  await git(['checkout', '--detach', commit], dir);
-  const verified = await git(['rev-parse', 'HEAD'], dir);
-  if (verified !== commit) throw new Error(`pinned engine mismatch: ${verified}`);
-  if (!(await stat(path.join(dir, '.claude-plugin', 'plugin.json'))).isFile()) throw new Error('pinned engine plugin.json is missing');
-  return { commit: verified, dir, sha: verified };
+  if (eocd < 0) throw new Error('pinned engine archive is not a valid ZIP');
+  const entries = archive.readUInt16LE(eocd + 10), centralOffset = archive.readUInt32LE(eocd + 16);
+  let offset = centralOffset;
+  for (let i = 0; i < entries; i++) {
+    if (archive.readUInt32LE(offset) !== 0x02014b50) throw new Error('pinned engine archive has an invalid ZIP directory');
+    const flags = archive.readUInt16LE(offset + 8), method = archive.readUInt16LE(offset + 10), compressedSize = archive.readUInt32LE(offset + 20);
+    const nameLength = archive.readUInt16LE(offset + 28), extraLength = archive.readUInt16LE(offset + 30), commentLength = archive.readUInt16LE(offset + 32), localOffset = archive.readUInt32LE(offset + 42);
+    const name = archive.subarray(offset + 46, offset + 46 + nameLength).toString(flags & 0x800 ? 'utf8' : 'utf8').replaceAll('\\', '/');
+    offset += 46 + nameLength + extraLength + commentLength;
+    if (name.endsWith('/')) { await mkdir(path.join(dest, ...name.split('/').filter(Boolean)), { recursive: true }); continue; }
+    if (flags & 1) throw new Error('pinned engine archive contains encrypted files');
+    if (archive.readUInt32LE(localOffset) !== 0x04034b50) throw new Error('pinned engine archive has an invalid file entry');
+    const localNameLength = archive.readUInt16LE(localOffset + 26), localExtraLength = archive.readUInt16LE(localOffset + 28);
+    const start = localOffset + 30 + localNameLength + localExtraLength;
+    const compressed = archive.subarray(start, start + compressedSize);
+    const content = method === 0 ? compressed : method === 8 ? inflateRawSync(compressed) : null;
+    if (!content) throw new Error(`unsupported pinned engine ZIP compression: ${method}`);
+    const target = path.resolve(dest, ...name.split('/'));
+    if (target !== dest && !target.startsWith(dest + path.sep)) throw new Error('pinned engine archive contains an unsafe path');
+    await retryIO(() => mkdir(path.dirname(target), { recursive: true }));
+    await retryIO(() => writeFile(target, content));
+    const mode = archive.readUInt32LE(offset - (46 + nameLength + extraLength + commentLength) + 38) >>> 16;
+    if (mode & 0o111) await retryIO(() => chmod(target, mode & 0o777));
+  }
 }
 
 async function resolveClaude() {
@@ -253,11 +316,11 @@ function parseArgs(argv) {
   return opts;
 }
 
-async function preflight(campaignDir, dryRun) {
+async function preflight(campaignDir, dryRun, requireEngine = false) {
   const claude = await resolveClaude();
   const version = await command(claude.exe, [...claude.prefix, '--version']);
   if (version.code !== 0 || !version.stdout.trim().includes(PROTOCOL.cli.version)) throw new Error(`Claude CLI must be ${PROTOCOL.cli.version}; got ${version.stdout.trim() || version.stderr.trim()}`);
-  const engine = await ensureEngine(path.join(campaignDir, 'engine'), dryRun);
+  const engine = await ensureEngine(path.join(campaignDir, 'engine'), dryRun && !requireEngine);
   return { claude, version: version.stdout.trim(), engine };
 }
 
@@ -298,7 +361,7 @@ export async function terminalAttempts(ledger) {
     try { record = JSON.parse(line); }
     // Interrupted appends may precede records written by a later resume.
     catch { continue; }
-    if (['completed', 'failed', 'deadline', 'grading_timeout', 'dry_run'].includes(record.attempt_status) && !['auth', 'permission'].includes(record.failure_reason)) {
+    if (['completed', 'failed', 'deadline', 'grading_timeout', 'dry_run'].includes(record.attempt_status) && !['auth', 'permission', 'engine', 'contamination'].includes(record.failure_reason)) {
       terminal.add(JSON.stringify([record.task_id, record.repetition, record.arm]));
     }
   }
@@ -311,7 +374,7 @@ async function main() {
   const campaignDir = path.resolve(campaignBase, opts.campaign);
   if (path.dirname(campaignDir) !== campaignBase) throw new Error('campaign directory must stay inside .tmp/bench');
   await mkdir(campaignDir, { recursive: true });
-  const pf = await preflight(campaignDir, opts.dryRun);
+  const pf = await preflight(campaignDir, opts.dryRun, opts.action === 'preflight');
   const disabledPlugins = await userPurserPlugins();
   const dirs = await taskDirs(opts.tasks);
   if (opts.action === 'preflight') { console.log(json({ ok: true, cli: pf.version, engine_sha: pf.engine.sha })); return; }
@@ -374,23 +437,27 @@ async function main() {
         }
         const isAuthFailure = authFailure(parsed);
         const isPermissionFailure = permissionFailure(parsed);
+        const pluginFailure = pluginContamination(parsed, arm);
         let usage = { main: 'unknown', workers: 'unknown' }, accountingError;
         try {
           if (transcriptError) throw new Error(transcriptError);
           const result = usageFromTranscript(parsed); usage = { main: result.main, aggregate: result.aggregate, reconciliation_mismatch: result.reconciliation_mismatch, workers: result.workers.length ? result.workers : 'unknown' };
           if (result.reconciliation_mismatch === true) accountingError = 'main transcript usage does not match aggregate result usage';
         } catch (e) { accountingError = e.message; }
-        if (!opts.dryRun && !isAuthFailure && !isPermissionFailure && !run.timedOut && run.code === 0) outcome = await grade(target, m, campaignDir);
+        if (!opts.dryRun && !isAuthFailure && !isPermissionFailure && !pluginFailure && !run.timedOut && run.code === 0) outcome = await grade(target, m, campaignDir);
         // The contract measures launch through independent grading.
         const elapsed = Date.now() - started;
-        const isEnvironmentFailure = isAuthFailure || isPermissionFailure;
-        const result = { ...metadata, n_tasks: tasks.length, repetitions: opts.reps, n_pairs: pairs.length, n_on: pairs.length, n_off: pairs.length, task_id: m.id, task_class: m.class, repetition: rep + 1, arm, order, session_id: session, attempt_status: isEnvironmentFailure ? 'failed' : opts.dryRun ? 'dry_run' : run.timedOut ? 'deadline' : run.code === 0 ? 'completed' : 'failed', ...(isAuthFailure ? { failure_reason: 'auth' } : isPermissionFailure ? { failure_reason: 'permission' } : {}), exit_code: run.code, timed_out: run.timedOut, elapsed_ms: elapsed, verified_wall_time_ms: outcome.passed === true ? elapsed : m.deadline_seconds * 1000, usage, accounting_error: accountingError, prompt_sha: sha(prompt), settings_sha: sha(await readFile(configFile)), transcript_sha: sha(transcript), binary_sha: sha(await readFile(pf.claude.hashPath)), source_commit: m.source_commit, start_commit: m.start_commit, repository_head: repoHash, ...outcome, worker_usage: usage.workers };
+        const isEnvironmentFailure = isAuthFailure || isPermissionFailure || pluginFailure;
+        const failureReason = isAuthFailure ? 'auth' : isPermissionFailure ? 'permission' : pluginFailure;
+        const result = { ...metadata, n_tasks: tasks.length, repetitions: opts.reps, n_pairs: pairs.length, n_on: pairs.length, n_off: pairs.length, task_id: m.id, task_class: m.class, repetition: rep + 1, arm, order, session_id: session, attempt_status: isEnvironmentFailure ? 'failed' : opts.dryRun ? 'dry_run' : run.timedOut ? 'deadline' : run.code === 0 ? 'completed' : 'failed', ...(failureReason ? { failure_reason: failureReason } : {}), exit_code: run.code, timed_out: run.timedOut, elapsed_ms: elapsed, verified_wall_time_ms: outcome.passed === true ? elapsed : m.deadline_seconds * 1000, usage, accounting_error: accountingError, prompt_sha: sha(prompt), settings_sha: sha(await readFile(configFile)), transcript_sha: sha(transcript), binary_sha: sha(await readFile(pf.claude.hashPath)), source_commit: m.source_commit, start_commit: m.start_commit, repository_head: repoHash, ...outcome, worker_usage: usage.workers };
         await writeFile(path.join(campaignDir, `${runId}.json`), json(result));
         // Environment failures stay inspectable but must not enter the terminal analysis ledger.
         if (!isEnvironmentFailure) await appendFile(ledger, '\n' + JSON.stringify(result) + '\n');
         if (!opts.dryRun) await retryIO(() => rm(runDir, { recursive: true, force: true }));
         if (isAuthFailure) throw new Error('Claude authentication failed (Not logged in). Run /login in the default Claude config, then resume the campaign.');
         if (isPermissionFailure) throw new Error('Claude permission denied one or more tool requests. Check the per-run permission settings before resuming the campaign.');
+        if (pluginFailure === 'engine') throw new Error('Purser engine failed to connect in the on run. Check the pinned engine before resuming the campaign.');
+        if (pluginFailure === 'contamination') throw new Error('Purser plugin contamination detected in the off run. Check the per-run plugin settings before resuming the campaign.');
       }
     }
   }

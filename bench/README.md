@@ -85,10 +85,12 @@ Requiring $\sqrt{2 / (K - 1)} \le 50\%$ and rounding up to a balanced multiple o
 
 All runtime state and raw artifacts are written under git-ignored `.tmp/bench/<campaign>/`. Local raw output inside `bench/` is ignored via [`bench/.gitignore`](.gitignore).
 
+Each campaign provisions the pinned Purser engine from the versioned GitHub release ZIP, checks its SHA-256 against `protocol.json`, and verifies the plugin version and host executable before use.
+
 Each campaign provisions:
 
-- A separate engine clone pinned to Purser `v0.1.225` (commit `37964a9528778ca1ad22203c5a879bda08cec78e`), never the active working tree.
-- Verified release or source-built binaries matching the pinned commit.
+- A separate engine directory pinned to Purser `v0.1.225` (commit `37964a9528778ca1ad22203c5a879bda08cec78e`), never the active working tree.
+- A verified release archive containing the host-matched engine binary.
 - Separate per-arm target worktrees, settings files, `PURSER_STATE_DIR`, and transcript directories.
 
 Both arms launch via `claude -p` (verified against Claude CLI `2.1.317`) with identical arguments and stdin prompt bytes:

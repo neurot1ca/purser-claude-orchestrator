@@ -1,12 +1,14 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFile, mkdir, mkdtemp, readdir, rm, rmdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readdir, rm, rmdir, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { armSettings, campaignMetadata, childEnvironment, ensureEngine, grade, retryIO, runProcess, terminalAttempts, usageFromTranscript } from '../run.mjs';
 
 const scratchRoot = fileURLToPath(new URL('../../.tmp/bench-test/', import.meta.url));
+const protocol = JSON.parse(await readFile(fileURLToPath(new URL('../protocol.json', import.meta.url)), 'utf8'));
+const hostBinary = `bin/purser-hook-${process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : process.platform}-${({ x64: 'amd64', ia32: '386', arm: 'arm', arm64: 'arm64' })[process.arch] ?? process.arch}${process.platform === 'win32' ? '.exe' : ''}`;
 await mkdir(scratchRoot, { recursive: true });
 after(() => retryIO(() => rmdir(scratchRoot)).catch(error => {
   if (error.code !== 'ENOENT' && error.code !== 'ENOTEMPTY') throw error;
@@ -75,22 +77,37 @@ test('campaign reuse requires matching metadata and explicit resume preserves se
   assert.equal(await readFile(path.join(scratch, 'campaign.json'), 'utf8'), bytes);
 });
 
-test('engine checkout populates a no-checkout clone whose HEAD is already pinned', async t => {
-  const repo = fileURLToPath(new URL('../../', import.meta.url));
+test('engine archive sha mismatch refuses extraction', async t => {
   const scratch = await mkdtemp(path.join(scratchRoot, 'bench-engine-'));
   t.after(() => retryIO(() => rm(scratch, { recursive: true, force: true })));
-  const engine = path.join(scratch, 'engine');
-  const { pinned_commit } = JSON.parse(await readFile(path.join(repo, 'bench', 'protocol.json'), 'utf8'));
-  const options = { cwd: repo, shell: false, windowsHide: true, encoding: 'utf8' };
-  execFileSync('git', ['clone', '--quiet', '--no-checkout', repo, engine], options);
-  execFileSync('git', ['-C', engine, 'update-ref', '--no-deref', 'HEAD', pinned_commit], options);
-  const plugin = path.join(engine, '.claude-plugin', 'plugin.json');
-  await assert.rejects(readFile(plugin), { code: 'ENOENT' });
-  const result = await ensureEngine(engine, false);
-  assert.equal(result.sha, pinned_commit);
-  assert.equal((await readFile(path.join(engine, '.git', 'HEAD'), 'utf8')).trim(), pinned_commit);
-  assert.deepEqual(JSON.parse(await readFile(plugin, 'utf8')), JSON.parse(execFileSync('git', ['show', `${pinned_commit}:.claude-plugin/plugin.json`], options)));
+  let requested;
+  await assert.rejects(ensureEngine(path.join(scratch, 'engine'), false, { download: async url => { requested = url; return Buffer.from('not the pinned ZIP'); } }), /archive sha256 mismatch/);
+  assert.equal(requested, protocol.pinned_engine.archive_url);
+  await assert.rejects(readFile(path.join(scratch, 'engine', '.claude-plugin', 'plugin.json')), { code: 'ENOENT' });
 });
+
+test('engine with missing host binary refuses preflight validation', async t => {
+  const scratch = await mkdtemp(path.join(scratchRoot, 'bench-engine-missing-'));
+  t.after(() => retryIO(() => rm(scratch, { recursive: true, force: true })));
+  const engine = path.join(scratch, 'engine');
+  await mkdir(path.join(engine, '.claude-plugin'), { recursive: true });
+  await writeFile(path.join(engine, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: protocol.pinned_engine.tag.slice(1) }));
+  await writeFile(path.join(engine, '.bench-engine-sha256'), protocol.pinned_engine.archive_sha256);
+  await assert.rejects(ensureEngine(engine, false), /host binary is missing/);
+});
+
+async function installFixtureEngine(campaignDir, { binary = true } = {}) {
+  const engine = path.join(campaignDir, 'engine');
+  await mkdir(path.join(engine, '.claude-plugin'), { recursive: true });
+  await writeFile(path.join(engine, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: protocol.pinned_engine.tag.slice(1) }));
+  if (binary) {
+    const executable = path.join(engine, hostBinary);
+    await mkdir(path.dirname(executable), { recursive: true });
+    await writeFile(executable, 'fixture executable');
+    if (process.platform !== 'win32') await chmod(executable, 0o755);
+  }
+  await writeFile(path.join(engine, '.bench-engine-sha256'), protocol.pinned_engine.archive_sha256);
+}
 
 test('grading includes untracked production files and restores trusted checks', async t => {
   const repo = fileURLToPath(new URL('../../', import.meta.url));
@@ -212,6 +229,7 @@ test('preflight uses the injected fake Claude executable without network access'
   const repo = path.resolve(path.dirname(runner), '..');
   const artifacts = path.join(repo, '.tmp', 'bench', campaign);
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
+  await installFixtureEngine(artifacts);
   const fake = path.join(dir, 'fake-claude.mjs');
   await writeFile(fake, `process.stdout.write('Claude Code 2.1.317\\n');`);
   const result = await new Promise((resolve, reject) => {
@@ -263,6 +281,7 @@ test('fake Claude calibration artifacts are accepted by analyze allocate', async
   const repo = path.resolve(path.dirname(runner), '..');
   const artifacts = path.join(repo, '.tmp', 'bench', campaign);
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
+  await installFixtureEngine(artifacts);
   const fake = path.join(dir, 'fake-claude.mjs');
   await writeFile(fake, `import { randomUUID } from 'node:crypto'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const u={input_tokens:10,cache_read_input_tokens:2,cache_creation_input_tokens:1,output_tokens:4}; process.stdout.write(JSON.stringify({type:'assistant',message:{id:randomUUID(),role:'assistant',usage:u}})+'\\n'+JSON.stringify({type:'result',usage:u})+'\\n'); process.exitCode=1; }`);
   const campaignRun = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
@@ -294,6 +313,7 @@ test('authentication failure stops calibration and remains retryable on resume',
   const userConfig = path.join(dir, 'user-config');
   const capture = path.join(dir, 'capture.json');
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
+  await installFixtureEngine(artifacts);
   await mkdir(userConfig, { recursive: true });
   await writeFile(path.join(userConfig, 'settings.json'), JSON.stringify({
     enabledPlugins: { 'purser@purser-local': true, 'purser@inline': true, 'other-plugin': true }
@@ -335,6 +355,7 @@ test('permission denials stop calibration without a terminal ledger record', asy
   const artifacts = path.join(repo, '.tmp', 'bench', campaign);
   const fake = path.join(dir, 'fake-claude.mjs');
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
+  await installFixtureEngine(artifacts);
   await writeFile(fake, `if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else process.stdout.write(JSON.stringify({type:'result',permission_denials:[{tool_name:'Edit'}]})+'\\n');`);
   const run = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
     cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' },
@@ -349,6 +370,56 @@ test('permission denials stop calibration without a terminal ledger record', asy
   assert.equal(record.failure_reason, 'permission');
   assert.deepEqual(JSON.parse(await readFile(path.join(artifacts, 'config', attemptFiles[0].replace(/\.json$/, ''), 'settings.json'), 'utf8')).permissions, { defaultMode: 'bypassPermissions' });
   assert.equal((await terminalAttempts(path.join(artifacts, 'attempts.jsonl'))).size, 0);
+});
+
+test('Purser engine init failure aborts calibration without a terminal record', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'bench-engine-failure-'));
+  const campaign = `test-${process.pid}-${Date.now()}`;
+  const runner = fileURLToPath(new URL('../run.mjs', import.meta.url));
+  const repo = path.resolve(path.dirname(runner), '..');
+  const artifacts = path.join(repo, '.tmp', 'bench', campaign);
+  t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
+  await installFixtureEngine(artifacts);
+  const fake = path.join(dir, 'fake-claude.mjs');
+  await writeFile(fake, `import fs from 'node:fs'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(s.enabledPlugins['purser@inline']) process.stdout.write(JSON.stringify({type:'system',subtype:'init',mcp_servers:[{name:'plugin:purser:codex-main',status:'failed'}]})+'\\n'); else process.stdout.write(JSON.stringify({type:'result'})+'\\n'); process.exitCode=1; }`);
+  const run = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
+    cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
+  });
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /Purser engine failed to connect/);
+  const files = (await readdir(artifacts)).filter(file => file.endsWith('.json') && file !== 'campaign.json');
+  const records = await Promise.all(files.map(async file => JSON.parse(await readFile(path.join(artifacts, file), 'utf8'))));
+  const failed = records.find(record => record.failure_reason === 'engine');
+  assert.ok(failed);
+  assert.equal(failed.attempt_status, 'failed');
+  const ledger = (await readFile(path.join(artifacts, 'attempts.jsonl'), 'utf8').catch(error => error.code === 'ENOENT' ? '' : Promise.reject(error))).split(/\r?\n/).filter(Boolean).map(JSON.parse);
+  assert.ok(ledger.every(record => record.failure_reason !== 'engine'));
+  assert.equal((await terminalAttempts(path.join(artifacts, 'attempts.jsonl'))).has(JSON.stringify([failed.task_id, failed.repetition, failed.arm])), false);
+});
+
+test('Purser contamination in off init aborts calibration without a terminal record', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'bench-contamination-'));
+  const campaign = `test-${process.pid}-${Date.now()}`;
+  const runner = fileURLToPath(new URL('../run.mjs', import.meta.url));
+  const repo = path.resolve(path.dirname(runner), '..');
+  const artifacts = path.join(repo, '.tmp', 'bench', campaign);
+  t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
+  await installFixtureEngine(artifacts);
+  const fake = path.join(dir, 'fake-claude.mjs');
+  await writeFile(fake, `import fs from 'node:fs'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(!s.enabledPlugins['purser@inline']) process.stdout.write(JSON.stringify({type:'system',subtype:'init',plugins:[{name:'plugin:purser:codex-main'}]})+'\\n'); else process.stdout.write(JSON.stringify({type:'result'})+'\\n'); process.exitCode=1; }`);
+  const run = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
+    cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
+  });
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /Purser plugin contamination detected/);
+  const files = (await readdir(artifacts)).filter(file => file.endsWith('.json') && file !== 'campaign.json');
+  const records = await Promise.all(files.map(async file => JSON.parse(await readFile(path.join(artifacts, file), 'utf8'))));
+  const failed = records.find(record => record.failure_reason === 'contamination');
+  assert.ok(failed);
+  assert.equal(failed.attempt_status, 'failed');
+  const ledger = (await readFile(path.join(artifacts, 'attempts.jsonl'), 'utf8').catch(error => error.code === 'ENOENT' ? '' : Promise.reject(error))).split(/\r?\n/).filter(Boolean).map(JSON.parse);
+  assert.ok(ledger.every(record => record.failure_reason !== 'contamination'));
+  assert.equal((await terminalAttempts(path.join(artifacts, 'attempts.jsonl'))).has(JSON.stringify([failed.task_id, failed.repetition, failed.arm])), false);
 });
 
 test('deadline kills the process tree', async t => {
