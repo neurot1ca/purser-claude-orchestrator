@@ -126,6 +126,8 @@ test('arm settings differ only at the Purser plugin switch', () => {
   const disabled = ['purser@purser-local', 'purser@other'];
   const on = armSettings('on', disabled), off = armSettings('off', disabled);
   assert.deepEqual(Object.keys(on), Object.keys(off));
+  assert.deepEqual(on.permissions, { defaultMode: 'bypassPermissions' });
+  assert.deepEqual(off.permissions, { defaultMode: 'bypassPermissions' });
   const key = 'purser@inline';
   assert.deepEqual(Object.keys(on.enabledPlugins), [...disabled, key]);
   for (const disabledKey of disabled) {
@@ -165,9 +167,24 @@ test('result usage reconciles assistant message totals without being added to th
   assert.equal(result.reconciliation_mismatch, false);
   events.at(-1).usage.output_tokens++;
   const mismatch = usageFromTranscript(events);
-  assert.deepEqual(mismatch.main, expected);
+  assert.deepEqual(mismatch.main, { ...expected, output_tokens: 5 });
   assert.equal(mismatch.aggregate.output_tokens, 5);
-  assert.equal(mismatch.reconciliation_mismatch, true);
+  assert.equal(mismatch.reconciliation_mismatch, false);
+  events.at(-1).usage.cache_read_input_tokens++;
+  assert.equal(usageFromTranscript(events).reconciliation_mismatch, true);
+});
+
+test('repeated main message ids use growing usage snapshots once and reconcile to result totals', () => {
+  const first = { input_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 1, output_tokens: 87 };
+  const final = { ...first, output_tokens: 3426 };
+  const result = usageFromTranscript([
+    { type: 'assistant', message: { id: 'msg-1', role: 'assistant', usage: first } },
+    { type: 'assistant', message: { id: 'msg-1', role: 'assistant', usage: final } },
+    { type: 'result', usage: final }
+  ]);
+  assert.deepEqual(result.main, final);
+  assert.deepEqual(result.aggregate, final);
+  assert.equal(result.reconciliation_mismatch, false);
 });
 
 test('missing worker token categories are unknown, not zero', () => {
@@ -307,6 +324,30 @@ test('authentication failure stops calibration and remains retryable on resume',
   assert.equal(records[0].attempt_status, 'failed');
   assert.equal(records[0].failure_reason, 'auth');
   assert.equal(launch.settings.enabledPlugins['purser@inline'], records[0].arm === 'on');
+  assert.equal((await terminalAttempts(path.join(artifacts, 'attempts.jsonl'))).size, 0);
+});
+
+test('permission denials stop calibration without a terminal ledger record', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'bench-permission-'));
+  const campaign = `test-${process.pid}-${Date.now()}`;
+  const runner = fileURLToPath(new URL('../run.mjs', import.meta.url));
+  const repo = path.resolve(path.dirname(runner), '..');
+  const artifacts = path.join(repo, '.tmp', 'bench', campaign);
+  const fake = path.join(dir, 'fake-claude.mjs');
+  t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
+  await writeFile(fake, `if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else process.stdout.write(JSON.stringify({type:'result',permission_denials:[{tool_name:'Edit'}]})+'\\n');`);
+  const run = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
+    cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' },
+    input: '', deadlineSeconds: 2400
+  });
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /Claude permission denied.*before resuming the campaign/);
+  const attemptFiles = (await readdir(artifacts)).filter(file => file !== 'campaign.json' && file.endsWith('.json'));
+  assert.equal(attemptFiles.length, 1);
+  const record = JSON.parse(await readFile(path.join(artifacts, attemptFiles[0]), 'utf8'));
+  assert.equal(record.attempt_status, 'failed');
+  assert.equal(record.failure_reason, 'permission');
+  assert.deepEqual(JSON.parse(await readFile(path.join(artifacts, 'config', attemptFiles[0].replace(/\.json$/, ''), 'settings.json'), 'utf8')).permissions, { defaultMode: 'bypassPermissions' });
   assert.equal((await terminalAttempts(path.join(artifacts, 'attempts.jsonl'))).size, 0);
 });
 

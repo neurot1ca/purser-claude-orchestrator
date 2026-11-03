@@ -24,7 +24,7 @@ export async function retryIO(fn, attempts = RETRIES) {
 
 export function armSettings(arm, disabledPlugins = []) {
   if (!['on', 'off'].includes(arm)) throw new Error(`invalid arm: ${arm}`);
-  return { enabledPlugins: { ...Object.fromEntries(disabledPlugins.map(key => [key, false])), [PROTOCOL.pinned_engine.treatment_plugin_key]: arm === 'on' } };
+  return { permissions: { defaultMode: 'bypassPermissions' }, enabledPlugins: { ...Object.fromEntries(disabledPlugins.map(key => [key, false])), [PROTOCOL.pinned_engine.treatment_plugin_key]: arm === 'on' } };
 }
 
 export function childEnvironment(env, stateDir) {
@@ -47,13 +47,17 @@ function authFailure(events) {
   ));
 }
 
+function permissionFailure(events) {
+  return events.some(event => event.type === 'result' && Array.isArray(event.permission_denials) && event.permission_denials.length > 0);
+}
+
 export function usageFromTranscript(input) {
   const events = typeof input === 'string'
     ? input.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
     : input;
   const main = Object.fromEntries(PROTOCOL.endpoints[0].token_categories.map(k => [k, 0]));
-  const seen = new Set(), workers = new Map();
-  let mainMessages = 0, aggregate;
+  const messages = new Map(), workerMessages = new Set(), workers = new Map();
+  let aggregate;
   for (const event of events) {
     const data = event.message ?? event;
     const usage = data.usage ?? data.message?.usage;
@@ -68,9 +72,9 @@ export function usageFromTranscript(input) {
     if (!side && event.type !== 'assistant' && data.role !== 'assistant') continue;
     const id = data.id ?? data.message_id ?? (side ? event.request_id ?? event.id : undefined);
     if (!side && !id) throw new Error('main assistant message id is missing');
-    if (id && seen.has(id)) continue;
-    if (id) seen.add(id);
     if (side) {
+      if (id && workerMessages.has(id)) continue;
+      if (id) workerMessages.add(id);
       const key = `${usage.provider ?? data.provider ?? 'unknown'}|${usage.model ?? data.model ?? 'unknown'}|${data.role ?? event.role ?? 'worker'}`;
       const current = workers.get(key) ?? { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0, complete: true };
       for (const category of Object.keys(main)) {
@@ -79,14 +83,18 @@ export function usageFromTranscript(input) {
       }
       workers.set(key, current); continue;
     }
-    mainMessages++;
+    const messageUsage = messages.get(id) ?? Object.fromEntries(Object.keys(main).map(category => [category, 0]));
     for (const category of Object.keys(main)) {
       if (!Number.isFinite(usage[category])) throw new Error(`incomplete main usage: ${category}`);
-      main[category] += usage[category];
+      messageUsage[category] = Math.max(messageUsage[category], usage[category]);
     }
+    messages.set(id, messageUsage);
   }
-  if (!mainMessages) throw new Error('main transcript usage is missing');
-  return { main, aggregate: aggregate ?? 'unknown', reconciliation_mismatch: aggregate ? Object.keys(main).some(key => main[key] !== aggregate[key]) : 'unknown', workers: [...workers].map(([key, value]) => {
+  if (!messages.size) throw new Error('main transcript usage is missing');
+  for (const usage of messages.values()) for (const category of Object.keys(main)) main[category] += usage[category];
+  // The result event is authoritative for total output; assistant events can be partial snapshots.
+  if (aggregate && Number.isFinite(aggregate.output_tokens)) main.output_tokens = aggregate.output_tokens;
+  return { main, aggregate: aggregate ?? 'unknown', reconciliation_mismatch: aggregate ? !Number.isFinite(aggregate.output_tokens) || Object.keys(main).filter(key => key !== 'output_tokens').some(key => main[key] !== aggregate[key]) : 'unknown', workers: [...workers].map(([key, value]) => {
     const [provider, model, role] = key.split('|');
     return { provider, model, role, usage: value.complete ? value : 'unknown' };
   }) };
@@ -290,7 +298,7 @@ export async function terminalAttempts(ledger) {
     try { record = JSON.parse(line); }
     // Interrupted appends may precede records written by a later resume.
     catch { continue; }
-    if (['completed', 'failed', 'deadline', 'grading_timeout', 'dry_run'].includes(record.attempt_status) && record.failure_reason !== 'auth') {
+    if (['completed', 'failed', 'deadline', 'grading_timeout', 'dry_run'].includes(record.attempt_status) && !['auth', 'permission'].includes(record.failure_reason)) {
       terminal.add(JSON.stringify([record.task_id, record.repetition, record.arm]));
     }
   }
@@ -365,21 +373,24 @@ async function main() {
           catch { transcriptError = 'malformed stream-json transcript'; break; }
         }
         const isAuthFailure = authFailure(parsed);
+        const isPermissionFailure = permissionFailure(parsed);
         let usage = { main: 'unknown', workers: 'unknown' }, accountingError;
         try {
           if (transcriptError) throw new Error(transcriptError);
           const result = usageFromTranscript(parsed); usage = { main: result.main, aggregate: result.aggregate, reconciliation_mismatch: result.reconciliation_mismatch, workers: result.workers.length ? result.workers : 'unknown' };
           if (result.reconciliation_mismatch === true) accountingError = 'main transcript usage does not match aggregate result usage';
         } catch (e) { accountingError = e.message; }
-        if (!opts.dryRun && !isAuthFailure && !run.timedOut && run.code === 0) outcome = await grade(target, m, campaignDir);
+        if (!opts.dryRun && !isAuthFailure && !isPermissionFailure && !run.timedOut && run.code === 0) outcome = await grade(target, m, campaignDir);
         // The contract measures launch through independent grading.
         const elapsed = Date.now() - started;
-        const result = { ...metadata, n_tasks: tasks.length, repetitions: opts.reps, n_pairs: pairs.length, n_on: pairs.length, n_off: pairs.length, task_id: m.id, task_class: m.class, repetition: rep + 1, arm, order, session_id: session, attempt_status: isAuthFailure ? 'failed' : opts.dryRun ? 'dry_run' : run.timedOut ? 'deadline' : run.code === 0 ? 'completed' : 'failed', ...(isAuthFailure ? { failure_reason: 'auth' } : {}), exit_code: run.code, timed_out: run.timedOut, elapsed_ms: elapsed, verified_wall_time_ms: outcome.passed === true ? elapsed : m.deadline_seconds * 1000, usage, accounting_error: accountingError, prompt_sha: sha(prompt), settings_sha: sha(await readFile(configFile)), transcript_sha: sha(transcript), binary_sha: sha(await readFile(pf.claude.hashPath)), source_commit: m.source_commit, start_commit: m.start_commit, repository_head: repoHash, ...outcome, worker_usage: usage.workers };
+        const isEnvironmentFailure = isAuthFailure || isPermissionFailure;
+        const result = { ...metadata, n_tasks: tasks.length, repetitions: opts.reps, n_pairs: pairs.length, n_on: pairs.length, n_off: pairs.length, task_id: m.id, task_class: m.class, repetition: rep + 1, arm, order, session_id: session, attempt_status: isEnvironmentFailure ? 'failed' : opts.dryRun ? 'dry_run' : run.timedOut ? 'deadline' : run.code === 0 ? 'completed' : 'failed', ...(isAuthFailure ? { failure_reason: 'auth' } : isPermissionFailure ? { failure_reason: 'permission' } : {}), exit_code: run.code, timed_out: run.timedOut, elapsed_ms: elapsed, verified_wall_time_ms: outcome.passed === true ? elapsed : m.deadline_seconds * 1000, usage, accounting_error: accountingError, prompt_sha: sha(prompt), settings_sha: sha(await readFile(configFile)), transcript_sha: sha(transcript), binary_sha: sha(await readFile(pf.claude.hashPath)), source_commit: m.source_commit, start_commit: m.start_commit, repository_head: repoHash, ...outcome, worker_usage: usage.workers };
         await writeFile(path.join(campaignDir, `${runId}.json`), json(result));
-        // Auth failures stay inspectable but must not enter the terminal analysis ledger.
-        if (!isAuthFailure) await appendFile(ledger, '\n' + JSON.stringify(result) + '\n');
+        // Environment failures stay inspectable but must not enter the terminal analysis ledger.
+        if (!isEnvironmentFailure) await appendFile(ledger, '\n' + JSON.stringify(result) + '\n');
         if (!opts.dryRun) await retryIO(() => rm(runDir, { recursive: true, force: true }));
         if (isAuthFailure) throw new Error('Claude authentication failed (Not logged in). Run /login in the default Claude config, then resume the campaign.');
+        if (isPermissionFailure) throw new Error('Claude permission denied one or more tool requests. Check the per-run permission settings before resuming the campaign.');
       }
     }
   }

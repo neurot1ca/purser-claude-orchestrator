@@ -106,9 +106,11 @@ claude -p \
   --include-hook-events
 ```
 
-The sole treatment difference between arms is `enabledPlugins["purser@inline"]` inside `<arm-settings.json>` (`true` for `on`, `false` for `off`). Do not pass `--bare` and do not use any safe-mode launch bypass (no `--bare` and no safe-mode flags/settings), as those alter baseline tools, hooks, and session behavior. Paired runs balance `on`-first and `off`-first execution order using a recorded randomization seed.
+Both arm settings use `permissions.defaultMode: "bypassPermissions"`; the sole treatment difference is `enabledPlugins["purser@inline"]` (`true` for `on`, `false` for `off`). Do not pass `--bare` or `--safe-mode`, as those alter baseline tools, hooks, and session behavior. Paired runs balance `on`-first and `off`-first execution order using a recorded randomization seed.
 
 Claude uses the user's default config directory for authentication while `project,local` sources exclude user settings; enabled non-inline Purser plugins from the user settings are explicitly disabled in both arm settings files. Parent Claude Code session variables are removed from the child environment, while provider variables and the per-run Purser state directory are preserved.
+
+Main assistant usage snapshots with repeated message IDs are counted once using the maximum observed value per category; the final `result` usage supplies authoritative main-session output tokens because assistant snapshots can report partial output. Input and cache categories remain reconciled against the result usage, and worker accounting remains separate.
 
 ## 5. Cross-OS Requirements (Windows, macOS, Linux)
 
