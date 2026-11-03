@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.227 — 2026-11-03
+- **Added:** Cursor can be the Reviewer once a live check confirms it is confined to reading.
+- **Changed:** from 200K tokens the idle auto-compact timer leaves an idle conversation to Claude Code's native idle compaction, so the two no longer both compact.
+- **Fixed:** a recorded agy or other supported coder thread stays replyable after a coder role switch.
+
 ## 0.1.226 — 2026-11-02
 
 - **Fixed:** `plan accept` takes a milestone write path that ends in a directory glob such as `dir/**`; other globs are still refused.
