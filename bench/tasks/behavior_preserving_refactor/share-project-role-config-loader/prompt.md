@@ -8,9 +8,11 @@ Several parts of the application load coder configuration without the repository
 
 Use repository-aware configuration loading in the existing paths that produce gear output, determine coder effort, select the host job's configured coder, perform readiness review, validate a start request's configured agent, and discover model information for a repository.
 
-Resolve and pass the repository associated with each operation, including the repository resolved from a start request before choosing its configured agent. Preserve explicit agent choices, environment overrides, fixed-agent behavior, and the existing global configuration defaults and error handling. Model discovery that has no repository context must continue to load the non-project configuration.
+Resolve and pass the repository associated with each operation, including the repository resolved from a start request before choosing its configured agent. Preserve explicit agent choices, environment overrides, fixed-agent behavior, and the existing global configuration defaults. For gear output, when `--cwd` is not inside a Git repository, treat its absolute path as the repository so that directory's project role overrides apply to the gear output. Model discovery that has no repository context must continue to load the non-project configuration.
 
 ## Interface
+
+The trusted tests require these repository-aware signatures: `gearConfig(repository string) (map[string]any, error)` in `gear.go`, `readinessCoderConfig(repository string) (map[string]any, error)` in `readiness_host.go`, the `StartValidationOptions.ConfiguredAgent` callback of type `func(repository string) (string, error)` in `go/internal/jobs/start_validate.go`, and the package-level `loadConfig` seam of type `func(repository string) (loadedConfig, error)` in `models.go`. Pass an empty repository string to `loadConfig` for discovery without repository context.
 
 Call `policy.LoadCoderConfigForRepository(` in each of these files:
 

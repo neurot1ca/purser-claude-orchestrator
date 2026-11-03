@@ -4,7 +4,7 @@ import { appendFile, chmod, mkdir, mkdtemp, readdir, rm, rmdir, readFile, writeF
 import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { armSettings, campaignMetadata, childEnvironment, cleanupRunDir, ensureEngine, grade, retryIO, runProcess, terminalAttempts, usageFromTranscript } from '../run.mjs';
+import { armSettings, campaignMetadata, childEnvironment, cleanupRunDir, ensureEngine, goCheckContract, grade, promptNeedsIdentifiers, retryIO, runProcess, terminalAttempts, undefinedGoIdentifiers, usageFromTranscript } from '../run.mjs';
 
 const scratchRoot = fileURLToPath(new URL('../../.tmp/bench-test/', import.meta.url));
 const protocol = JSON.parse(await readFile(fileURLToPath(new URL('../protocol.json', import.meta.url)), 'utf8'));
@@ -161,6 +161,37 @@ test('validate with no matching tasks exits nonzero without starting external to
   const result = await runProcess(process.execPath, [runner, 'validate', '--tasks', 'no-such-task-*'], { input: '', deadlineSeconds: 10 });
   assert.equal(result.code, 1);
   assert.match(result.stderr, /no task manifests matched/);
+});
+
+test('Go contract audit extracts missing identifiers and requires prompt mentions', () => {
+  const identifiers = undefinedGoIdentifiers([
+    'go/internal/fsretry/replace_test.go:15:2: undefined: rename',
+    'go/internal/enforce/test.go:15:2: undefined: fsretry.Replace',
+    'go/internal/fsretry/replace_test.go:16:4: value has no field or method ReplaceWith',
+    'some unrelated compiler diagnostic'
+  ].join('\n'));
+  assert.deepEqual(identifiers, ['rename', 'Replace', 'ReplaceWith']);
+  assert.deepEqual(promptNeedsIdentifiers(identifiers, 'Use rename, `Replace`, and `ReplaceWith` here.'), []);
+  assert.deepEqual(promptNeedsIdentifiers(identifiers, 'Use `rename` here.'), ['Replace', 'ReplaceWith']);
+});
+
+test('Go contract audit fails unrecognized compile failures and timeouts with the output tail', () => {
+  const stderr = Array.from({ length: 25 }, (_, i) => `diagnostic ${i}`).join('\n');
+  const result = goCheckContract({ code: 1, stdout: '', stderr }, '');
+  assert.deepEqual(result.needed, []);
+  assert.match(result.detail, /^Go contract compile exited 1:\ndiagnostic 5\n/);
+  assert.ok(result.detail.endsWith('diagnostic 24'));
+  assert.match(goCheckContract({ code: null, timedOut: true, stdout: '', stderr: 'setup stalled' }, '').detail, /timed out:\nsetup stalled/);
+});
+
+test('Go contract audit passes a successful compile with no undefined identifiers', () => {
+  assert.deepEqual(goCheckContract({ code: 0, stdout: 'ok package [no tests to run]', stderr: '' }, ''), { needed: [], detail: '' });
+});
+
+test('Go contract audit requires prompted identifiers for changed call signatures', () => {
+  const compiled = { code: 1, stdout: '', stderr: 'test.go:1:1: too many arguments in call to gearConfig' };
+  assert.deepEqual(goCheckContract(compiled, '`gearConfig(repository string)`'), { needed: ['gearConfig'], detail: '' });
+  assert.match(goCheckContract(compiled, '').detail, /prompt omits.*gearConfig/);
 });
 
 test('arm settings differ only at the Purser plugin switch', () => {

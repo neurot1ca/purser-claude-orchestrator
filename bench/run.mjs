@@ -394,6 +394,29 @@ export async function terminalAttempts(ledger) {
   return terminal;
 }
 
+export function undefinedGoIdentifiers(output) {
+  return [...new Set([
+    ...[...output.matchAll(/undefined:\s+(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)/g)].map(match => match[1]),
+    ...[...output.matchAll(/has no field or method\s+([A-Za-z_]\w*)/g)].map(match => match[1]),
+    ...[...output.matchAll(/(?:too many|not enough) arguments in call to ([A-Za-z_]\w*)/g)].map(match => match[1])
+  ])];
+}
+
+export function promptNeedsIdentifiers(identifiers, prompt) {
+  return identifiers.filter(symbol => !new RegExp(`\\b${symbol}\\b`).test(prompt));
+}
+
+export function goCheckContract(compiled, prompt) {
+  const output = `${compiled.stdout}\n${compiled.stderr}`.trim();
+  const needed = undefinedGoIdentifiers(output);
+  const uncovered = promptNeedsIdentifiers(needed, prompt);
+  let detail = uncovered.length ? `prompt omits trusted Go check identifier(s): ${uncovered.join(', ')}` : '';
+  if (compiled.timedOut || (compiled.code !== 0 && !needed.length)) {
+    detail = `Go contract compile ${compiled.timedOut ? 'timed out' : `exited ${compiled.code}`}:\n${output.split(/\r?\n/).slice(-20).join('\n')}`;
+  }
+  return { needed, detail };
+}
+
 export async function validateReferences(dirs) {
   const workspace = path.join(ROOT, '.tmp', 'bench', `validate-${randomUUID()}`);
   await mkdir(workspace, { recursive: true });
@@ -407,11 +430,39 @@ export async function validateReferences(dirs) {
         const clone = await command('git', ['-c', 'core.longpaths=true', 'clone', '--quiet', '--no-hardlinks', ROOT, target]);
         if (clone.code) throw new Error(clone.stderr);
         await git(['checkout', '--quiet', '--detach', m.start_commit], target);
+        let contractFailure = false;
+        if (m.check.command?.[0] === 'go' && (m.check.files ?? []).length) {
+          for (const file of m.check.files) {
+            const shown = await command('git', ['-c', 'core.longpaths=true', 'show', `${m.source_commit}:${file}`], { cwd: ROOT });
+            if (shown.code) throw new Error(`cannot retrieve trusted check ${file}: ${shown.stderr}`);
+            const dest = path.join(target, file);
+            await mkdir(path.dirname(dest), { recursive: true });
+            await writeFile(dest, shown.stdout);
+          }
+          const packages = [];
+          for (const arg of m.check.command.slice(2)) {
+            if (arg.startsWith('-')) break;
+            packages.push(arg);
+          }
+          const compiled = await runProcess('go', ['test', ...packages, '-run=XXX_NONE'], {
+            cwd: target, env: gitEnvironment(process.env), input: '', deadlineSeconds: m.deadline_seconds
+          });
+          const prompt = await readFile(path.join(dir, m.prompt_file), 'utf8');
+          const contract = goCheckContract(compiled, prompt);
+          const { needed } = contract;
+          for (const symbol of needed) console.log(`  needs: ${symbol}`);
+          if (contract.detail) {
+            contractFailure = true;
+            detail = contract.detail;
+          }
+        } else if (m.check.files?.length) {
+          console.log(`NOTE ${m.id}: non-Go trusted checks skipped by prompt contract compile audit`);
+        }
         const applied = await command('git', ['-c', 'core.longpaths=true', 'apply', '--whitespace=nowarn', path.join(dir, 'reference.patch')], { cwd: target });
         if (applied.code) throw new Error(`reference patch rejected: ${applied.stderr}`);
         const result = await grade(target, m, workspace);
-        passed = result.passed;
-        if (!passed) detail = [result.check_stderr, result.check_stdout].filter(Boolean).join('\n').trim() || `check exited ${result.check_exit_code}`;
+        passed = result.passed && !contractFailure;
+        if (!result.passed) detail = [detail, result.check_stderr, result.check_stdout].filter(Boolean).join('\n').trim() || `check exited ${result.check_exit_code}`;
       } catch (error) { detail = error.message; }
       if (!passed) failures++;
       console.log(`${passed ? 'PASS' : 'FAIL'} ${m.id}${detail ? `: ${detail}` : ''}`);

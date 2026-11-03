@@ -39,7 +39,7 @@ A confirmatory savings claim on endpoint $m$ requires $L_m > 0$. Failed runs rem
 
 ## 3. Task Bank, Calibration, and $(K, R)$ Selection
 
-Before calibration or confirmation, run `node bench/run.mjs validate` and require every task reference to pass. `validate --tasks <glob>` checks a selected subset without starting Claude or downloading the pinned engine.
+Before calibration or confirmation, run `node bench/run.mjs validate` and require every task reference to pass. `validate --tasks <glob>` checks a selected subset without starting Claude or downloading the pinned engine. For Go checks, validation also compiles trusted check files over a clean `start_commit` checkout without the reference patch and requires the prompt to name identifiers needed by undefined-symbol or call-signature diagnostics. Unrecognized compile failures and timeouts fail with the compiler output tail; non-Go checks are skipped with a note.
 
 ### Four Task Classes and Initial 20-Task Bank
 
