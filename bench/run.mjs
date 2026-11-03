@@ -23,6 +23,23 @@ export async function retryIO(fn, attempts = RETRIES) {
   }
 }
 
+export async function cleanupRunDir(dir, { durationMs = 60_000, remove = () => rm(dir, { recursive: true, force: true }) } = {}) {
+  const deadline = Date.now() + durationMs;
+  let delay = 50, lastError;
+  while (true) {
+    try { await remove(); return { pending: false }; }
+    catch (error) {
+      lastError = error;
+      if (!['EBUSY', 'EPERM', 'EACCES'].includes(error.code) || Date.now() >= deadline) {
+        console.warn(`Warning: cleanup pending for ${dir}: ${error.message}`);
+        return { pending: true, error: lastError };
+      }
+      await wait(Math.min(delay, Math.max(0, deadline - Date.now())));
+      delay = Math.min(delay * 2, 1000);
+    }
+  }
+}
+
 export function armSettings(arm, disabledPlugins = []) {
   if (!['on', 'off'].includes(arm)) throw new Error(`invalid arm: ${arm}`);
   return { permissions: { defaultMode: 'bypassPermissions' }, enabledPlugins: { ...Object.fromEntries(disabledPlugins.map(key => [key, false])), [PROTOCOL.pinned_engine.treatment_plugin_key]: arm === 'on' } };
@@ -30,6 +47,11 @@ export function armSettings(arm, disabledPlugins = []) {
 
 export function childEnvironment(env, stateDir) {
   return { ...Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'CLAUDECODE' && !key.startsWith('CLAUDE_CODE_') && key !== 'CLAUDE_EFFORT' && key !== 'CLAUDE_PID')), PURSER_STATE_DIR: stateDir };
+}
+
+function gitEnvironment(env) {
+  const count = Number(env.GIT_CONFIG_COUNT || 0);
+  return { ...env, GIT_CONFIG_COUNT: String(count + 1), [`GIT_CONFIG_KEY_${count}`]: 'core.longpaths', [`GIT_CONFIG_VALUE_${count}`]: 'true' };
 }
 
 async function userPurserPlugins() {
@@ -126,7 +148,7 @@ function command(exe, args, options = {}) {
   });
 }
 
-export async function runProcess(exe, args, { cwd, env, input, deadlineSeconds }) {
+export async function runProcess(exe, args, { cwd, env, input, deadlineSeconds, waitForTree = false }) {
   return new Promise((resolve, reject) => {
     const detached = process.platform !== 'win32';
     const child = spawn(exe, args, { cwd, env, shell: false, detached, windowsHide: process.platform === 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -139,8 +161,11 @@ export async function runProcess(exe, args, { cwd, env, input, deadlineSeconds }
       else { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }
     };
     const timer = setTimeout(() => { timedOut = true; void killTree(); }, deadlineSeconds * 1000);
-    child.once('close', (code, signal) => {
+    child.once('close', async (code, signal) => {
       clearTimeout(timer);
+      // On Windows, taskkill can still enumerate descendants after the direct
+      // child closes. POSIX children share the detached process group.
+      if (waitForTree) await killTree();
       resolve({ code, signal, timedOut, stdout: Buffer.concat(chunks.stdout).toString('utf8'), stderr: Buffer.concat(chunks.stderr).toString('utf8') });
     });
     child.stdin.end(input);
@@ -148,7 +173,7 @@ export async function runProcess(exe, args, { cwd, env, input, deadlineSeconds }
 }
 
 async function git(args, cwd = ROOT) {
-  const result = await command('git', args, { cwd });
+  const result = await command('git', ['-c', 'core.longpaths=true', ...args], { cwd });
   if (result.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
   return result.stdout.trim();
 }
@@ -156,19 +181,19 @@ async function git(args, cwd = ROOT) {
 export async function grade(target, m, campaignDir) {
   const verify = path.join(campaignDir, 'grading', `${m.id}-${randomUUID()}`);
   await mkdir(path.dirname(verify), { recursive: true });
-  const clone = await command('git', ['clone', '--quiet', '--no-hardlinks', ROOT, verify]);
+  const clone = await command('git', ['-c', 'core.longpaths=true', 'clone', '--quiet', '--no-hardlinks', ROOT, verify]);
   if (clone.code) throw new Error(`grading clone failed: ${clone.stderr}`);
   await git(['checkout', '--detach', m.start_commit], verify);
   const excluded = (m.check.files ?? []).map(file => `:(exclude)${file}`);
   await git(['add', '-A', '-N'], target);
-  const diff = await command('git', ['diff', '--binary', m.start_commit, '--', '.', ...excluded], { cwd: target });
+  const diff = await command('git', ['-c', 'core.longpaths=true', 'diff', '--binary', m.start_commit, '--', '.', ...excluded], { cwd: target });
   if (diff.code) throw new Error(`production diff failed: ${diff.stderr}`);
   if (diff.stdout) {
-    const applied = await command('git', ['apply', '--whitespace=nowarn', '-'], { cwd: verify, input: diff.stdout });
+    const applied = await command('git', ['-c', 'core.longpaths=true', 'apply', '--whitespace=nowarn', '-'], { cwd: verify, input: diff.stdout });
     if (applied.code) throw new Error(`production diff rejected: ${applied.stderr}`);
   }
   for (const file of m.check.files ?? []) {
-    const shown = await command('git', ['show', `${m.source_commit}:${file}`], { cwd: ROOT });
+    const shown = await command('git', ['-c', 'core.longpaths=true', 'show', `${m.source_commit}:${file}`], { cwd: ROOT });
     if (shown.code) throw new Error(`cannot retrieve trusted check ${file}: ${shown.stderr}`);
     const dest = path.join(verify, file);
     await mkdir(path.dirname(dest), { recursive: true });
@@ -181,8 +206,8 @@ export async function grade(target, m, campaignDir) {
     if (assertion.must_not_contain != null && content.includes(assertion.must_not_contain)) structural = false;
   }
   let check = { code: 1, stdout: '', stderr: 'structural assertion failed' };
-  if (structural) check = await runProcess(m.check.command[0], m.check.command.slice(1), { cwd: verify, input: '', deadlineSeconds: m.deadline_seconds });
-  await retryIO(() => rm(verify, { recursive: true, force: true }));
+  if (structural) check = await runProcess(m.check.command[0], m.check.command.slice(1), { cwd: verify, env: gitEnvironment(process.env), input: '', deadlineSeconds: m.deadline_seconds, waitForTree: true });
+  await cleanupRunDir(verify);
   return { passed: structural && !check.timedOut && check.code === 0, ...(check.timedOut ? { attempt_status: 'grading_timeout' } : {}), check_exit_code: check.code, check_stdout: check.stdout, check_stderr: check.stderr };
 }
 
@@ -301,7 +326,7 @@ function globMatch(value, pattern) {
 }
 function parseArgs(argv) {
   const [action, ...rest] = argv;
-  if (!['preflight', 'calibrate', 'run'].includes(action)) throw new Error('usage: node bench/run.mjs preflight|calibrate|run --campaign <id> [--tasks <glob>] [--reps N] [--dry-run] [--resume]');
+  if (!['preflight', 'calibrate', 'run', 'validate'].includes(action)) throw new Error('usage: node bench/run.mjs preflight|calibrate|run --campaign <id> [--tasks <glob>] [--reps N] [--dry-run] [--resume] | validate [--tasks <glob>]');
   const opts = { action, reps: action === 'calibrate' ? 2 : 1, dryRun: false };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
@@ -310,6 +335,7 @@ function parseArgs(argv) {
     else if (['--campaign', '--tasks', '--reps'].includes(a)) opts[a.slice(2)] = rest[++i];
     else throw new Error(`unknown argument: ${a}`);
   }
+  if (action === 'validate') return opts;
   if (!opts.campaign || opts.campaign.startsWith('.') || !/^[A-Za-z0-9._-]+$/.test(opts.campaign)) throw new Error('--campaign is required and must be a safe id');
   opts.reps = Number(opts.reps);
   if (!Number.isInteger(opts.reps) || opts.reps < 1) throw new Error('--reps must be a positive integer');
@@ -368,8 +394,45 @@ export async function terminalAttempts(ledger) {
   return terminal;
 }
 
+export async function validateReferences(dirs) {
+  const workspace = path.join(ROOT, '.tmp', 'bench', `validate-${randomUUID()}`);
+  await mkdir(workspace, { recursive: true });
+  let failures = 0;
+  try {
+    for (const dir of dirs) {
+      const m = JSON.parse(await readFile(path.join(dir, 'task.json'), 'utf8'));
+      const target = path.join(workspace, m.id);
+      let passed = false, detail = '';
+      try {
+        const clone = await command('git', ['-c', 'core.longpaths=true', 'clone', '--quiet', '--no-hardlinks', ROOT, target]);
+        if (clone.code) throw new Error(clone.stderr);
+        await git(['checkout', '--quiet', '--detach', m.start_commit], target);
+        const applied = await command('git', ['-c', 'core.longpaths=true', 'apply', '--whitespace=nowarn', path.join(dir, 'reference.patch')], { cwd: target });
+        if (applied.code) throw new Error(`reference patch rejected: ${applied.stderr}`);
+        const result = await grade(target, m, workspace);
+        passed = result.passed;
+        if (!passed) detail = [result.check_stderr, result.check_stdout].filter(Boolean).join('\n').trim() || `check exited ${result.check_exit_code}`;
+      } catch (error) { detail = error.message; }
+      if (!passed) failures++;
+      console.log(`${passed ? 'PASS' : 'FAIL'} ${m.id}${detail ? `: ${detail}` : ''}`);
+      await cleanupRunDir(target, { durationMs: 5_000 });
+    }
+  } finally {
+    await cleanupRunDir(workspace, { durationMs: 5_000 });
+  }
+  console.log(`${dirs.length - failures}/${dirs.length} references passed`);
+  return { failures };
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.action === 'validate') {
+    const dirs = await taskDirs(opts.tasks);
+    if (!dirs.length) throw new Error('no task manifests matched');
+    const result = await validateReferences(dirs);
+    process.exitCode = result.failures ? 1 : 0;
+    return;
+  }
   const campaignBase = path.resolve(ROOT, '.tmp', 'bench');
   const campaignDir = path.resolve(campaignBase, opts.campaign);
   if (path.dirname(campaignDir) !== campaignBase) throw new Error('campaign directory must stay inside .tmp/bench');
@@ -390,7 +453,7 @@ async function main() {
   const ledger = path.join(campaignDir, 'attempts.jsonl');
   const suiteParts = await Promise.all(tasks.map(async t => {
     const checkFiles = await Promise.all((t.manifest.check.files ?? []).map(async file => {
-      const result = await command('git', ['show', `${t.manifest.source_commit}:${file}`], { cwd: ROOT });
+      const result = await command('git', ['-c', 'core.longpaths=true', 'show', `${t.manifest.source_commit}:${file}`], { cwd: ROOT });
       if (result.code) throw new Error(`cannot hash trusted check ${file}: ${result.stderr}`);
       return { path: file, sha: sha(result.stdout) };
     }));
@@ -417,7 +480,7 @@ async function main() {
         const configFile = path.join(configDir, 'settings.json'); await writeFile(configFile, json(armSettings(arm, disabledPlugins)));
         const target = path.join(runDir, 'repo');
         if (!opts.dryRun) {
-          await command('git', ['clone', '--quiet', '--no-hardlinks', ROOT, target]).then(r => { if (r.code) throw Error(r.stderr); });
+          await command('git', ['-c', 'core.longpaths=true', 'clone', '--quiet', '--no-hardlinks', ROOT, target]).then(r => { if (r.code) throw Error(r.stderr); });
           await git(['checkout', '--detach', m.start_commit], target);
           await git(['clean', '-ffdqx'], target);
         }
@@ -426,7 +489,7 @@ async function main() {
         const args = [...pf.claude.prefix, '-p', '--model', metadata.model, '--effort', metadata.effort, '--session-id', session, '--setting-sources', 'project,local', '--settings', configFile, '--plugin-dir', pf.engine.dir, '--output-format', 'stream-json', '--verbose', '--include-hook-events'];
         const started = Date.now();
         let run = { code: 0, timedOut: false, stdout: '', stderr: '' }, outcome = { passed: null };
-        if (!opts.dryRun) run = await runProcess(pf.claude.exe, args, { cwd: target, input: prompt, deadlineSeconds: m.deadline_seconds, env: childEnvironment(process.env, stateDir) });
+        if (!opts.dryRun) run = await runProcess(pf.claude.exe, args, { cwd: target, input: prompt, deadlineSeconds: m.deadline_seconds, env: childEnvironment(process.env, stateDir), waitForTree: !process.env.BENCH_CLAUDE });
         await writeFile(path.join(transcriptDir, 'stdout.jsonl'), run.stdout);
         await writeFile(path.join(transcriptDir, 'stderr.log'), run.stderr);
         const transcript = await retryIO(() => readFile(path.join(transcriptDir, 'stdout.jsonl'), 'utf8'));
@@ -450,14 +513,34 @@ async function main() {
         const isEnvironmentFailure = isAuthFailure || isPermissionFailure || pluginFailure;
         const failureReason = isAuthFailure ? 'auth' : isPermissionFailure ? 'permission' : pluginFailure;
         const result = { ...metadata, n_tasks: tasks.length, repetitions: opts.reps, n_pairs: pairs.length, n_on: pairs.length, n_off: pairs.length, task_id: m.id, task_class: m.class, repetition: rep + 1, arm, order, session_id: session, attempt_status: isEnvironmentFailure ? 'failed' : opts.dryRun ? 'dry_run' : run.timedOut ? 'deadline' : run.code === 0 ? 'completed' : 'failed', ...(failureReason ? { failure_reason: failureReason } : {}), exit_code: run.code, timed_out: run.timedOut, elapsed_ms: elapsed, verified_wall_time_ms: outcome.passed === true ? elapsed : m.deadline_seconds * 1000, usage, accounting_error: accountingError, prompt_sha: sha(prompt), settings_sha: sha(await readFile(configFile)), transcript_sha: sha(transcript), binary_sha: sha(await readFile(pf.claude.hashPath)), source_commit: m.source_commit, start_commit: m.start_commit, repository_head: repoHash, ...outcome, worker_usage: usage.workers };
+        const runDirRemoval = opts.dryRun ? { pending: false } : await cleanupRunDir(runDir);
+        if (runDirRemoval.pending) result.cleanup_pending = true;
         await writeFile(path.join(campaignDir, `${runId}.json`), json(result));
         // Environment failures stay inspectable but must not enter the terminal analysis ledger.
         if (!isEnvironmentFailure) await appendFile(ledger, '\n' + JSON.stringify(result) + '\n');
-        if (!opts.dryRun) await retryIO(() => rm(runDir, { recursive: true, force: true }));
         if (isAuthFailure) throw new Error('Claude authentication failed (Not logged in). Run /login in the default Claude config, then resume the campaign.');
         if (isPermissionFailure) throw new Error('Claude permission denied one or more tool requests. Check the per-run permission settings before resuming the campaign.');
         if (pluginFailure === 'engine') throw new Error('Purser engine failed to connect in the on run. Check the pinned engine before resuming the campaign.');
         if (pluginFailure === 'contamination') throw new Error('Purser plugin contamination detected in the off run. Check the per-run plugin settings before resuming the campaign.');
+      }
+    }
+  }
+  // Retry any run directories that were still held after their bounded wait.
+  for (const parent of ['targets', 'grading']) {
+    for (const entry of await readdir(path.join(campaignDir, parent), { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(campaignDir, parent, entry.name);
+      const cleanup = await cleanupRunDir(dir, { durationMs: 5_000 });
+      if (parent === 'targets' && !cleanup.pending) {
+        for (const artifact of await readdir(campaignDir)) {
+          if (!artifact.endsWith('.json') || artifact === 'campaign.json') continue;
+          const file = path.join(campaignDir, artifact);
+          const record = JSON.parse(await readFile(file, 'utf8').catch(() => 'null'));
+          if (record?.cleanup_pending && artifact.startsWith(entry.name)) {
+            record.cleanup_pending = false;
+            await writeFile(file, json(record));
+          }
+        }
       }
     }
   }

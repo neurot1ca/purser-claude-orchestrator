@@ -14,3 +14,7 @@ Consolidate atomic replacement behavior across the affected Go packages while pr
 - In `go/internal/contextio/context.go`, call `fsretry.Replace(`.
 - In `go/internal/jobs/store.go`, call `fsretry.ReplaceWith(` and remove `func transientReplace(`.
 - In `go/internal/enforce/observations.go`, call `fsretry.ReplaceWith(`.
+
+## Test seam compatibility
+
+The trusted checks use the package test seams `now` and `sleep` in `go/internal/fsretry/replace_test.go`. Preserve or provide those package-level seams so the trusted checks compile; they let tests control elapsed time and backoff without waiting.

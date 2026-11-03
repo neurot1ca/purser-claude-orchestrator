@@ -39,6 +39,8 @@ A confirmatory savings claim on endpoint $m$ requires $L_m > 0$. Failed runs rem
 
 ## 3. Task Bank, Calibration, and $(K, R)$ Selection
 
+Before calibration or confirmation, run `node bench/run.mjs validate` and require every task reference to pass. `validate --tasks <glob>` checks a selected subset without starting Claude or downloading the pinned engine.
+
 ### Four Task Classes and Initial 20-Task Bank
 
 Tasks are balanced across four coding classes:

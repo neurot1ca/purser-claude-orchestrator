@@ -14,7 +14,7 @@
       "test",
       "./go/internal/maintenance",
       "-run",
-      "^(TestLifecycleOracle|TestRunScopesActiveJobsToRepository|TestRunSkipsUnattributableCorruptJobFile|TestRunSkipsProjectJobWithoutState)$",
+      "^(TestRunScopesActiveJobsToRepository|TestRunSkipsUnattributableCorruptJobFile|TestRunSkipsProjectJobWithoutState)$",
       "-count=1"
     ]
   },

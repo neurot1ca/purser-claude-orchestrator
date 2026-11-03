@@ -4,7 +4,7 @@ import { appendFile, chmod, mkdir, mkdtemp, readdir, rm, rmdir, readFile, writeF
 import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { armSettings, campaignMetadata, childEnvironment, ensureEngine, grade, retryIO, runProcess, terminalAttempts, usageFromTranscript } from '../run.mjs';
+import { armSettings, campaignMetadata, childEnvironment, cleanupRunDir, ensureEngine, grade, retryIO, runProcess, terminalAttempts, usageFromTranscript } from '../run.mjs';
 
 const scratchRoot = fileURLToPath(new URL('../../.tmp/bench-test/', import.meta.url));
 const protocol = JSON.parse(await readFile(fileURLToPath(new URL('../protocol.json', import.meta.url)), 'utf8'));
@@ -137,6 +137,30 @@ test('campaign ids cannot resolve to or escape the benchmark base directory', as
     assert.equal(result.code, 1, campaign);
     assert.match(result.stderr, /--campaign is required and must be a safe id/, campaign);
   }
+});
+
+test('run cleanup retries transient locks and reports persistent locks without throwing', async () => {
+  let attempts = 0;
+  const removed = await cleanupRunDir('fixture', { durationMs: 100, remove: async () => {
+    if (++attempts < 3) throw Object.assign(new Error('locked'), { code: 'EBUSY' });
+  } });
+  assert.deepEqual(removed, { pending: false });
+  assert.equal(attempts, 3);
+  const warning = console.warn;
+  let warned = '';
+  console.warn = message => { warned = message; };
+  try {
+    const pending = await cleanupRunDir('fixture', { durationMs: 0, remove: async () => { throw Object.assign(new Error('locked'), { code: 'EPERM' }); } });
+    assert.equal(pending.pending, true);
+    assert.match(warned, /cleanup pending/);
+  } finally { console.warn = warning; }
+});
+
+test('validate with no matching tasks exits nonzero without starting external tools', async () => {
+  const runner = fileURLToPath(new URL('../run.mjs', import.meta.url));
+  const result = await runProcess(process.execPath, [runner, 'validate', '--tasks', 'no-such-task-*'], { input: '', deadlineSeconds: 10 });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /no task manifests matched/);
 });
 
 test('arm settings differ only at the Purser plugin switch', () => {
