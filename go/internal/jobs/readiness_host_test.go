@@ -53,7 +53,7 @@ func init() {
 			_ = os.WriteFile(marker, []byte("called"), 0600)
 		}
 		if os.Getenv("PURser_READINESS_SLEEP") == "1" {
-			time.Sleep(2 * time.Second)
+			time.Sleep(3 * time.Second)
 		}
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"conversation_id": "readiness-mock", "status": "success", "response": "{}",
@@ -145,7 +145,7 @@ func TestReadinessCheckerTimeoutIsUnknown(t *testing.T) {
 	got, err := review.RunReadiness(t.Context(), "", review.ReadinessRequest{
 		Grounded: true, Objective: "test", AcceptanceCriteria: "must work", AttributedDiff: "+++ b/a\n@@ -0,0 +1 @@\n+x\n",
 		Agent: "agy", Model: "gemini-2.5-pro", RepoRoot: t.TempDir(), Executable: checker,
-	}, 300*time.Millisecond)
+	}, 2500*time.Millisecond)
 	if err == nil || got.Verdict != "UNKNOWN" {
 		t.Fatalf("timeout got verdict=%s err=%v, want UNKNOWN with an error", got.Verdict, err)
 	}

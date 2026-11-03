@@ -161,7 +161,11 @@ func TestNativeCursorReviewerGateAndEnabledResult(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.HasPrefix(filepath.Base(cwd), "reviewer1-") || filepath.Dir(cwd) != parent {
+		resolvedParent, err := resolveReviewerPath(filepath.Dir(cwd))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(filepath.Base(cwd), "reviewer1-") || resolvedParent != parent {
 			t.Fatalf("production launch cwd = %q, want isolated reviewer1- directory under %q", cwd, parent)
 		}
 		if err := RefuseWorkingDirectory(cwd, root); err != nil {

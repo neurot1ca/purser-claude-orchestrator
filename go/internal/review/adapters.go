@@ -376,9 +376,9 @@ func resolveReviewerPath(path string) (string, error) {
 		return "", err
 	}
 	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
-		return resolved, nil
+		absolute = resolved
 	}
-	return absolute, nil
+	return resolveReviewerPathAliases(absolute), nil
 }
 func flagValue(command []string, name string) string {
 	for i, arg := range command {
