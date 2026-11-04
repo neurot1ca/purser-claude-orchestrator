@@ -623,7 +623,7 @@ async function main() {
     campaign_id: opts.campaign, action: opts.action, platform: process.platform, engine_sha: pf.engine.sha,
     harness_sha: sha(await readFile(fileURLToPath(import.meta.url))), suite_hash: suiteHash,
     model: process.env.BENCH_MODEL || 'sonnet', effort: process.env.BENCH_EFFORT || 'high',
-    dry_run: opts.dryRun, repetitions: opts.reps, n_pairs: pairs.length
+    dry_run: opts.dryRun, n_tasks: tasks.length, repetitions: opts.reps, n_pairs: pairs.length, n_on: pairs.length, n_off: pairs.length
   }, opts.resume);
   const { seed, schedule: orders } = metadata;
   const terminal = opts.resume ? await terminalAttempts(ledger) : new Set();
