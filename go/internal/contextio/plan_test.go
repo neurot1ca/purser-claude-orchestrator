@@ -365,6 +365,74 @@ func TestPlanPartialAcceptanceIgnoresUnacceptedWriteScope(t *testing.T) {
 	}
 }
 
+func TestAcceptPlanExtendsPartialAcceptancePreservingProgress(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	content := "## Milestones\n### M1 - first\n**Dependency:** none\n**Write paths:**\n- src/a.go\n- /outside/file.go\n### M2 - second\n**Dependency:** none\n**Write paths:** src/b.go\n"
+	if err := os.WriteFile(artifact, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := AcceptPlan(root, repo, "extend", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = UpdatePlan(root, repo, "extend", state.Revision, "complete-milestone", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := *state
+	state, err = AcceptPlan(root, repo, "extend", filepath.Join(filepath.Dir(artifact), ".", filepath.Base(artifact)), []int{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(state.AcceptedMilestones, []int{1, 2}) || !reflect.DeepEqual(state.CompletedMilestones, before.CompletedMilestones) || state.CurrentMilestone != 2 || state.PendingNextAction != "dispatch" {
+		t.Fatalf("extension lost acceptance or progress: before=%+v after=%+v", before, state)
+	}
+	if state.Revision != before.Revision+1 || state.BaseHead != before.BaseHead || !reflect.DeepEqual(state.Warnings, before.Warnings) || len(state.Milestones) != 2 {
+		t.Fatalf("extension did not preserve state or refresh metadata: before=%+v after=%+v", before, state)
+	}
+	if len(state.ReadyMilestones) != 1 || state.ReadyMilestones[0].ID != "M2" || !samePlanPath(strings.TrimSuffix(state.ReadyMilestones[0].ArtifactRef, "#M2"), state.ArtifactPath) || state.ReadyMilestones[0].Orch != "ORCH|task=extend-m2of2|phase=implementation|route=subtle|reason=new_task|scope=src/b.go" {
+		t.Fatalf("extension readiness = %+v", state.ReadyMilestones)
+	}
+}
+
+func TestAcceptPlanIdenticalSetIsIdempotent(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	state, err := AcceptPlan(root, repo, "same", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := AcceptPlan(root, repo, "same", artifact, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repeated, state) {
+		t.Fatalf("identical acceptance changed state: before=%+v after=%+v", state, repeated)
+	}
+}
+
+func TestAcceptPlanRejectsDifferentArtifactForExistingTask(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if _, err := AcceptPlan(root, repo, "different", artifact, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifact, []byte(readyPlanArtifact+"changed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "different", artifact, []int{1, 2}); err == nil || !strings.Contains(err.Error(), "different artifact") {
+		t.Fatalf("different artifact error = %v", err)
+	}
+}
+
+func TestAcceptPlanRejectsDroppingAcceptedMilestones(t *testing.T) {
+	root, repo, artifact := planFixture(t)
+	if _, err := AcceptPlan(root, repo, "drop", artifact, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcceptPlan(root, repo, "drop", artifact, []int{1}); err == nil || !strings.Contains(err.Error(), "cannot drop accepted milestones") {
+		t.Fatalf("dropping milestone error = %v", err)
+	}
+}
+
 func TestPlanMilestoneSectionIgnoresUnrequestedWriteScope(t *testing.T) {
 	data := []byte("## Milestones\n### M1\n**Dependency:** none\n**Write paths:** src/a.go\n### M2\n**Dependency:** none\n**Write paths:** ~/.claude/second-brain/config.json\n")
 	section, ids, err := PlanMilestoneSection(data, "M1")

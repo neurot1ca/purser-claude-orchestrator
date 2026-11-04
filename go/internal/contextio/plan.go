@@ -701,6 +701,7 @@ func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (_ 
 			return nil, err
 		}
 		active := states[:0]
+		var existingPlan *PlanState
 		for _, existing := range states {
 			refreshPlanStale(existing, canonical)
 			if existing.Stale {
@@ -708,10 +709,60 @@ func AcceptPlan(root, repository, taskID, artifact string, milestones []int) (_ 
 			}
 			active = append(active, existing)
 			if existing.TaskID == taskID {
-				return nil, fmt.Errorf("active plan task id %q already exists", taskID)
+				existingPlan = existing
 			}
 		}
 		states = active
+		if existingPlan != nil {
+			if existingPlan.ArtifactDigest != hex.EncodeToString(digest[:]) || !samePlanPath(existingPlan.ArtifactPath, artifactPath) {
+				return nil, fmt.Errorf("active plan task id %q exists with a different artifact", taskID)
+			}
+			for _, milestone := range existingPlan.AcceptedMilestones {
+				if !containsMilestone(accepted, milestone) {
+					return nil, fmt.Errorf("cannot drop accepted milestones from active plan task id %q", taskID)
+				}
+			}
+			if reflect.DeepEqual(existingPlan.AcceptedMilestones, accepted) {
+				return existingPlan, nil
+			}
+			union := append([]int(nil), accepted...)
+			metadata, err := parsePlanMilestones(data, union)
+			if err != nil {
+				return nil, err
+			}
+			for i := range metadata {
+				found := false
+				for _, previous := range existingPlan.Milestones {
+					if metadata[i].ID == previous.ID {
+						metadata[i].ValidationState = previous.ValidationState
+						found = true
+						break
+					}
+				}
+				if !found {
+					for _, dropped := range metadata[i].DroppedWritePaths {
+						existingPlan.Warnings = append(existingPlan.Warnings, fmt.Sprintf("Dropped out-of-repository write path for %s: %s", metadata[i].ID, dropped))
+					}
+				}
+				metadata[i].DroppedWritePaths = nil
+			}
+			existingPlan.AcceptedMilestones = union
+			existingPlan.Milestones = metadata
+			existingPlan.CurrentMilestone = 0
+			for _, n := range existingPlan.AcceptedMilestones {
+				if !containsMilestone(existingPlan.CompletedMilestones, n) {
+					existingPlan.CurrentMilestone = n
+					break
+				}
+			}
+			existingPlan.PendingNextAction = pendingAction(existingPlan)
+			existingPlan.Revision++
+			existingPlan.ReadyMilestones = readyMilestones(root, existingPlan, states)
+			if err := writePlans(path, states); err != nil {
+				return nil, err
+			}
+			return existingPlan, nil
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	} else {

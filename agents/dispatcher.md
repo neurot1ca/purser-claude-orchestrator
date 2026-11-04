@@ -2,6 +2,7 @@
 name: dispatcher
 description: Run one Purser delegated-job lifecycle and report its evidence for main-Claude acceptance.
 model: haiku
+effort: low
 background: true
 tools:
   - mcp__plugin_purser_codex-main__codex_start
