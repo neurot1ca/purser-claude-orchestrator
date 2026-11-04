@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
-import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile, appendFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, realpath, readdir, rename, rm, stat, writeFile, appendFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,22 @@ const RETRIES = 6;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const sha = value => createHash('sha256').update(value).digest('hex');
 const json = value => JSON.stringify(value, null, 2) + '\n';
+const PURSER_GUIDANCE = 'Purser is installed for this project. Delegate repository code changes (features, fixes, refactors, tests) to the configured coder through the `purser:dispatcher` agent or `codex_start`; Purser\'s refusal messages explain the required first prompt line. Make trivial edits, such as a typo or a one-line change, yourself. Review each result, then accept and apply it with `codex_apply`.';
+// initsetup's Codex defaults and explicit Codex reviewer selection (policy reads reviewer.selected).
+const ON_ARM_ROLES = `schema_version = 1
+
+[roles]
+orchestrator = "claude-code"
+coder = "codex"
+reviewer = "codex"
+
+[reviewer]
+selected = { agent = "codex", model = "gpt-6-luna", effort = "medium" }
+
+[coding]
+coder_agent = "codex"
+routes = { mechanical = { model = "gpt-6-luna", effort = "high" }, subtle = { model = "gpt-6-luna", effort = "high" }, normal = { model = "gpt-6.1-sol", effort = "medium" }, consequential = { model = "gpt-6.1-sol", effort = "high" }, escalated = { model = "gpt-6.1-sol", effort = "xhigh" }, operation = { model = "gpt-6-luna", effort = "high" }, plan_standard = { model = "gpt-6.1-sol", effort = "high" } }
+`;
 
 export async function retryIO(fn, attempts = RETRIES) {
   for (let i = 0; ; i++) {
@@ -21,6 +37,47 @@ export async function retryIO(fn, attempts = RETRIES) {
       await wait(Math.min(50 * 2 ** i, 1000));
     }
   }
+}
+
+export function projectKeyForPath(repository, platform = process.platform) {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  let canonical = pathApi.normalize(repository);
+  if (platform === 'win32' && canonical.startsWith('\\\\?\\UNC\\')) canonical = `\\\\${canonical.slice(8)}`;
+  else if (platform === 'win32' && canonical.startsWith('\\\\?\\')) canonical = canonical.slice(4);
+  if (canonical !== pathApi.parse(canonical).root) canonical = canonical.replace(/[\\/]+$/, '');
+  return sha(platform === 'win32' ? canonical.toLowerCase() : canonical).slice(0, 16);
+}
+
+export async function writeOnArmRoles(stateRoot, repository) {
+  const canonical = await retryIO(() => realpath(repository)).catch(() => repository);
+  const projectKey = projectKeyForPath(canonical);
+  const rolesPath = path.join(stateRoot, 'projects', projectKey, 'roles.toml');
+  await retryIO(() => mkdir(path.dirname(rolesPath), { recursive: true }));
+  await retryIO(() => writeFile(rolesPath, ON_ARM_ROLES));
+  return { projectKey, rolesPath };
+}
+
+export async function hasPurserGuidance(repository, session, streamEvents, configDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(homedir(), '.claude'))) {
+  const projectsDir = path.join(configDir, 'projects');
+  const projectDir = repository.replace(/[^A-Za-z0-9]/g, '-');
+  const filename = `${session}.jsonl`;
+  async function sessionLogHasGuidance(file) {
+    const log = await retryIO(() => readFile(file, 'utf8')).catch(() => '');
+    return log.split(/\r?\n/).filter(Boolean).some(line => {
+      let entry;
+      try { entry = JSON.parse(line); } catch { return false; }
+      const attachment = entry?.type === 'attachment' ? entry.attachment : null;
+      return attachment?.type === 'hook_additional_context' && attachment.hookEvent === 'SessionStart' &&
+        Array.isArray(attachment.content) && attachment.content.some(content => typeof content === 'string' && content.includes(PURSER_GUIDANCE));
+    });
+  }
+  if (await sessionLogHasGuidance(path.join(projectsDir, projectDir, filename))) return true;
+  // Claude can shorten or otherwise canonicalize the project directory name.
+  for (const entry of await retryIO(() => readdir(projectsDir, { withFileTypes: true })).catch(() => [])) {
+    if (entry.isDirectory() && entry.name !== projectDir && await sessionLogHasGuidance(path.join(projectsDir, entry.name, filename))) return true;
+  }
+  return streamEvents.some(event => event?.type === 'system' && event.subtype === 'hook_response' &&
+    event.hook_event === 'SessionStart' && typeof event.stdout === 'string' && event.stdout.includes(PURSER_GUIDANCE));
 }
 
 export async function cleanupRunDir(dir, { durationMs = 60_000, remove = () => rm(dir, { recursive: true, force: true }) } = {}) {
@@ -488,7 +545,7 @@ export async function terminalAttempts(ledger) {
     try { record = JSON.parse(line); }
     // Interrupted appends may precede records written by a later resume.
     catch { continue; }
-    if (['completed', 'failed', 'deadline', 'grading_timeout', 'dry_run'].includes(record.attempt_status) && !['auth', 'permission', 'engine', 'contamination'].includes(record.failure_reason)) {
+    if (['completed', 'failed', 'deadline', 'grading_timeout', 'dry_run'].includes(record.attempt_status) && !['auth', 'permission', 'engine', 'contamination', 'purser_not_initialized'].includes(record.failure_reason)) {
       terminal.add(JSON.stringify([record.task_id, record.repetition, record.arm]));
     }
   }
@@ -642,6 +699,7 @@ async function main() {
           await git(['checkout', '--detach', m.start_commit], target);
           await git(['clean', '-ffdqx'], target);
         }
+        if (arm === 'on' && !opts.dryRun) await writeOnArmRoles(stateDir, target);
         const prompt = await readFile(path.join(task.dir, m.prompt_file));
         const session = randomUUID();
         const args = [...pf.claude.prefix, '-p', '--model', metadata.model, '--effort', metadata.effort, '--session-id', session, '--setting-sources', 'project,local', '--settings', configFile, '--plugin-dir', pf.engine.dir, '--output-format', 'stream-json', '--verbose', '--include-hook-events'];
@@ -659,13 +717,14 @@ async function main() {
         const isAuthFailure = authFailure(parsed);
         const isPermissionFailure = permissionFailure(parsed);
         const pluginFailure = pluginContamination(parsed, arm);
+        const purserNotInitialized = arm === 'on' && !opts.dryRun && !isAuthFailure && !isPermissionFailure && !pluginFailure && !await hasPurserGuidance(target, session, parsed);
         const accounting = transcriptError ? { usage: { main: 'unknown', workers: 'unknown' }, accounting_error: transcriptError } : accountTranscript(transcript);
         const { usage } = accounting, accountingError = accounting.accounting_error;
-        if (!opts.dryRun && !isAuthFailure && !isPermissionFailure && !pluginFailure && !run.timedOut && run.code === 0) outcome = await grade(target, m, campaignDir);
+        if (!opts.dryRun && !isAuthFailure && !isPermissionFailure && !pluginFailure && !purserNotInitialized && !run.timedOut && run.code === 0) outcome = await grade(target, m, campaignDir);
         // The contract measures launch through independent grading.
         const elapsed = Date.now() - started;
-        const isEnvironmentFailure = isAuthFailure || isPermissionFailure || pluginFailure;
-        const failureReason = isAuthFailure ? 'auth' : isPermissionFailure ? 'permission' : pluginFailure;
+        const isEnvironmentFailure = isAuthFailure || isPermissionFailure || pluginFailure || purserNotInitialized;
+        const failureReason = isAuthFailure ? 'auth' : isPermissionFailure ? 'permission' : pluginFailure || (purserNotInitialized ? 'purser_not_initialized' : undefined);
         const result = { ...metadata, n_tasks: tasks.length, repetitions: opts.reps, n_pairs: pairs.length, n_on: pairs.length, n_off: pairs.length, task_id: m.id, task_class: m.class, repetition: rep + 1, arm, order, session_id: session, attempt_status: isEnvironmentFailure ? 'failed' : opts.dryRun ? 'dry_run' : run.timedOut ? 'deadline' : run.code === 0 ? 'completed' : 'failed', ...(failureReason ? { failure_reason: failureReason } : {}), exit_code: run.code, timed_out: run.timedOut, elapsed_ms: elapsed, verified_wall_time_ms: outcome.passed === true ? elapsed : m.deadline_seconds * 1000, usage, accounting_error: accountingError, prompt_sha: sha(prompt), settings_sha: sha(await readFile(configFile)), transcript_sha: sha(transcript), binary_sha: sha(await readFile(pf.claude.hashPath)), source_commit: m.source_commit, start_commit: m.start_commit, repository_head: repoHash, ...outcome, worker_usage: usage.workers };
         const runDirRemoval = opts.dryRun ? { pending: false } : await cleanupRunDir(runDir);
         if (runDirRemoval.pending) result.cleanup_pending = true;
@@ -676,6 +735,7 @@ async function main() {
         if (isPermissionFailure) throw new Error('Claude permission denied one or more tool requests. Check the per-run permission settings before resuming the campaign.');
         if (pluginFailure === 'engine') throw new Error('Purser engine failed to connect in the on run. Check the pinned engine before resuming the campaign.');
         if (pluginFailure === 'contamination') throw new Error('Purser plugin contamination detected in the off run. Check the per-run plugin settings before resuming the campaign.');
+        if (purserNotInitialized) throw new Error('Purser SessionStart initialization guidance was missing from the Claude session log and hook stream; the run was excluded from analysis.');
       }
     }
   }

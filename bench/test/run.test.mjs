@@ -1,19 +1,83 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFile, chmod, mkdir, mkdtemp, readdir, rm, rmdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readdir, rename, rm, rmdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { armSettings, campaignMetadata, childEnvironment, cleanupRunDir, ensureEngine, goCheckContract, grade, promptNeedsIdentifiers, reaccountCampaign, retryIO, runProcess, terminalAttempts, undefinedGoIdentifiers, usageFromTranscript } from '../run.mjs';
+import { armSettings, campaignMetadata, childEnvironment, cleanupRunDir, ensureEngine, goCheckContract, grade, hasPurserGuidance, projectKeyForPath, promptNeedsIdentifiers, reaccountCampaign, retryIO, runProcess, terminalAttempts, undefinedGoIdentifiers, usageFromTranscript, writeOnArmRoles } from '../run.mjs';
 
 const scratchRoot = fileURLToPath(new URL('../../.tmp/bench-test/', import.meta.url));
 const protocol = JSON.parse(await readFile(fileURLToPath(new URL('../protocol.json', import.meta.url)), 'utf8'));
+const purserGuidance = 'Purser is installed for this project. Delegate repository code changes (features, fixes, refactors, tests) to the configured coder through the `purser:dispatcher` agent or `codex_start`; Purser\'s refusal messages explain the required first prompt line. Make trivial edits, such as a typo or a one-line change, yourself. Review each result, then accept and apply it with `codex_apply`.';
 const hostBinary = `bin/purser-hook-${process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : process.platform}-${({ x64: 'amd64', ia32: '386', arm: 'arm', arm64: 'arm64' })[process.arch] ?? process.arch}${process.platform === 'win32' ? '.exe' : ''}`;
 await mkdir(scratchRoot, { recursive: true });
 after(() => retryIO(() => rmdir(scratchRoot)).catch(error => {
   if (error.code !== 'ENOENT' && error.code !== 'ENOTEMPTY') throw error;
 }));
+
+test('project key matches the Go projectkey.For known outputs and platform canonicalization', () => {
+  // These are projectkey.For outputs for the canonical paths shown.
+  assert.equal(projectKeyForPath('/tmp/Purser/Project/', 'linux'), '0e9959bddc343947');
+  assert.equal(projectKeyForPath('C:\\Repo\\..\\Repo\\', 'win32'), 'c4866a467d261ea3');
+  assert.equal(projectKeyForPath('c:/REPO/', 'win32'), 'c4866a467d261ea3');
+  assert.equal(projectKeyForPath('\\\\?\\C:\\Repo\\', 'win32'), 'c4866a467d261ea3');
+});
+
+test('on-arm roles are written under the target project key with Codex defaults', async t => {
+  const scratch = await mkdtemp(path.join(scratchRoot, 'bench-on-roles-'));
+  t.after(() => retryIO(() => rm(scratch, { recursive: true, force: true })));
+  const state = path.join(scratch, 'state');
+  const target = path.join(scratch, 'target');
+  await mkdir(target, { recursive: true });
+
+  const { projectKey, rolesPath } = await writeOnArmRoles(state, target);
+  assert.equal(projectKey, projectKeyForPath(target));
+  assert.equal(rolesPath, path.join(state, 'projects', projectKey, 'roles.toml'));
+  const roles = await readFile(rolesPath, 'utf8');
+  assert.match(roles, /^schema_version = 1$/m);
+  assert.match(roles, /\[roles\]\norchestrator = "claude-code"\ncoder = "codex"\nreviewer = "codex"\n/);
+  // initsetup.editReviewerConfig writes this selection; policy.LoadCoderConfig reads it.
+  assert.match(roles, /\[reviewer\]\nselected = \{ agent = "codex", model = "gpt-6-luna", effort = "medium" \}/);
+  assert.match(roles, /\[coding\]\ncoder_agent = "codex"\nroutes = /);
+  const defaults = JSON.parse(execFileSync('git', ['show', `${protocol.pinned_engine.commit}:.claude/hooks/orchestrator/config.json`], { encoding: 'utf8', windowsHide: true }));
+  const routes = Object.fromEntries([...roles.split('[coding]\n')[1].matchAll(/(\w+) = \{ model = "([^"]+)", effort = "([^"]+)" \}/g)]
+    .map(([, name, model, effort]) => [name, { model, effort }]));
+  assert.deepEqual(routes, Object.fromEntries(defaults.required_routes.map(name => [name, defaults.routes[name]])));
+});
+
+test('initialization reads the SessionStart attachment and finds alternate CLI project names by session id', async t => {
+  const configDir = await mkdtemp(path.join(scratchRoot, 'bench-session-log-'));
+  t.after(() => retryIO(() => rm(configDir, { recursive: true, force: true })));
+  const target = path.join(configDir, 'target repo');
+  const projectDir = path.join(configDir, 'projects', target.replace(/[^A-Za-z0-9]/g, '-'));
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(path.join(projectDir, 'session.jsonl'), JSON.stringify({ type: 'attachment', attachment: {
+    type: 'hook_additional_context', hookEvent: 'SessionStart', content: ['Reply in the language the user writes in.', purserGuidance]
+  } }) + '\n');
+  assert.equal(await hasPurserGuidance(target, 'session', [], configDir), true);
+  await rename(projectDir, path.join(configDir, 'projects', 'shortened-cwd-hash'));
+  assert.equal(await hasPurserGuidance(target, 'session', [], configDir), true);
+  assert.equal(await hasPurserGuidance(target, 'other-session', [], configDir), false);
+});
+
+test('initialization rejects quoted guidance and unrelated hooks but accepts a parsed SessionStart hook response', async t => {
+  const configDir = await mkdtemp(path.join(scratchRoot, 'bench-session-context-'));
+  t.after(() => retryIO(() => rm(configDir, { recursive: true, force: true })));
+  const target = path.join(configDir, 'repo');
+  const projectDir = path.join(configDir, 'projects', target.replace(/[^A-Za-z0-9]/g, '-'));
+  await mkdir(projectDir, { recursive: true });
+  const quoted = { type: 'assistant', message: { content: purserGuidance } };
+  const wrongHook = { type: 'attachment', attachment: { type: 'hook_additional_context', hookEvent: 'Stop', content: [purserGuidance] } };
+  const wrongType = { type: 'attachment', attachment: { type: 'file', hookEvent: 'SessionStart', content: [purserGuidance] } };
+  await writeFile(path.join(projectDir, 'session.jsonl'), [quoted, wrongHook, wrongType].map(JSON.stringify).join('\n') + '\n{incomplete');
+  assert.equal(await hasPurserGuidance(target, 'session', [quoted], configDir), false);
+  const response = { type: 'system', subtype: 'hook_response', hook_event: 'SessionStart', stdout: JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: purserGuidance }
+  }) };
+  assert.equal(await hasPurserGuidance(target, 'session', [{ ...response, hook_event: 'Stop' }], configDir), false);
+  assert.equal(await hasPurserGuidance(target, 'session', [response], configDir), true);
+});
 
 test('resume skips terminal arms, keeps partial pairs pending, and ignores interrupted ledger tails', async t => {
   const scratch = await mkdtemp(path.join(scratchRoot, 'bench-ledger-'));
@@ -23,12 +87,14 @@ test('resume skips terminal arms, keeps partial pairs pending, and ignores inter
     { task_id: 'done', repetition: 1, arm: 'on', attempt_status: 'completed' },
     { task_id: 'done', repetition: 1, arm: 'off', attempt_status: 'failed' },
     { task_id: 'partial', repetition: 2, arm: 'on', attempt_status: 'grading_timeout' },
-    { task_id: 'partial', repetition: 2, arm: 'off', attempt_status: 'running' }
+    { task_id: 'partial', repetition: 2, arm: 'off', attempt_status: 'running' },
+    { task_id: 'uninitialized', repetition: 1, arm: 'on', attempt_status: 'failed', failure_reason: 'purser_not_initialized' }
   ];
   const prefix = records.map(record => JSON.stringify(record)).join('\n') + '\n';
   await writeFile(ledger, prefix + '{"task_id":"partial","repetition":2,"arm":"off"');
   const terminal = await terminalAttempts(ledger);
   assert.equal(terminal.size, 3);
+  assert.equal(terminal.has(JSON.stringify(['uninitialized', 1, 'on'])), false);
   assert.ok(['on', 'off'].every(arm => terminal.has(JSON.stringify(['done', 1, arm]))));
   assert.deepEqual(['on', 'off'].filter(arm => !terminal.has(JSON.stringify(['partial', 2, arm]))), ['off']);
   await appendFile(ledger, '\n' + JSON.stringify({ task_id: 'partial', repetition: 2, arm: 'off', attempt_status: 'deadline' }) + '\n');
@@ -417,9 +483,9 @@ test('fake Claude calibration artifacts are accepted by analyze allocate', async
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
   await installFixtureEngine(artifacts);
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `import { randomUUID } from 'node:crypto'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const u={input_tokens:10,cache_read_input_tokens:2,cache_creation_input_tokens:1,output_tokens:4}; process.stdout.write(JSON.stringify({type:'assistant',message:{id:randomUUID(),role:'assistant',usage:u}})+'\\n'+JSON.stringify({type:'result',usage:u})+'\\n'); process.exitCode=1; }`);
+  await writeFile(fake, `import { randomUUID } from 'node:crypto'; import fs from 'node:fs'; import path from 'node:path'; const guidance=${JSON.stringify(purserGuidance)}; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(s.enabledPlugins['purser@inline']) { const dir=path.join(process.env.CLAUDE_CONFIG_DIR,'projects',process.cwd().replace(/[^A-Za-z0-9]/g,'-')); fs.mkdirSync(dir,{recursive:true}); fs.writeFileSync(path.join(dir,a[a.indexOf('--session-id')+1]+'.jsonl'),JSON.stringify({type:'attachment',attachment:{type:'hook_additional_context',hookEvent:'SessionStart',content:[guidance]}})+'\\n'); } const u={input_tokens:10,cache_read_input_tokens:2,cache_creation_input_tokens:1,output_tokens:4}; process.stdout.write(JSON.stringify({type:'assistant',message:{id:randomUUID(),role:'assistant',usage:u}})+'\\n'+JSON.stringify({type:'result',usage:u})+'\\n'); process.exitCode=1; }`);
   const campaignRun = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
-    cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
+    cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, CLAUDE_CONFIG_DIR: path.join(dir, 'claude-config'), GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
   });
   assert.equal(campaignRun.code, 0, campaignRun.stderr);
   const records = (await readFile(path.join(artifacts, 'attempts.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
@@ -540,9 +606,9 @@ test('Purser contamination in off init aborts calibration without a terminal rec
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
   await installFixtureEngine(artifacts);
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `import fs from 'node:fs'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(!s.enabledPlugins['purser@inline']) process.stdout.write(JSON.stringify({type:'system',subtype:'init',plugins:[{name:'plugin:purser:codex-main'}]})+'\\n'); else process.stdout.write(JSON.stringify({type:'result'})+'\\n'); process.exitCode=1; }`);
+  await writeFile(fake, `import fs from 'node:fs'; const guidance=${JSON.stringify(purserGuidance)}; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(!s.enabledPlugins['purser@inline']) process.stdout.write(JSON.stringify({type:'system',subtype:'init',plugins:[{name:'plugin:purser:codex-main'}]})+'\\n'); else process.stdout.write(JSON.stringify({type:'system',subtype:'hook_response',hook_event:'SessionStart',stdout:guidance})+'\\n'+JSON.stringify({type:'result'})+'\\n'); process.exitCode=1; }`);
   const run = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
-    cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
+    cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, CLAUDE_CONFIG_DIR: path.join(dir, 'claude-config'), GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
   });
   assert.equal(run.code, 1);
   assert.match(run.stderr, /Purser plugin contamination detected/);
