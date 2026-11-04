@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
-import { chmod, mkdir, readFile, readdir, rm, stat, writeFile, appendFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile, appendFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -102,7 +102,14 @@ export function usageFromTranscript(input) {
       event.parent_tool_use_id != null || data.parent_tool_use_id != null ||
       (event.session_id && event.main_session_id && event.session_id !== event.main_session_id);
     if (event.type === 'result') {
-      if (!side) aggregate = usage;
+      if (!side) {
+        if (!aggregate) aggregate = { ...usage };
+        else for (const category of Object.keys(main)) {
+          aggregate[category] = Number.isFinite(aggregate[category]) && Number.isFinite(usage[category])
+            ? aggregate[category] + usage[category]
+            : Number.NaN;
+        }
+      }
       continue;
     }
     if (!side && event.type !== 'assistant' && data.role !== 'assistant') continue;
@@ -134,6 +141,99 @@ export function usageFromTranscript(input) {
     const [provider, model, role] = key.split('|');
     return { provider, model, role, usage: value.complete ? value : 'unknown' };
   }) };
+}
+
+function accountTranscript(transcript) {
+  let usage = { main: 'unknown', workers: 'unknown' }, accountingError;
+  try {
+    const parsed = [];
+    for (const line of transcript.split(/\r?\n/).filter(Boolean)) {
+      try { parsed.push(JSON.parse(line)); }
+      catch { throw new Error('malformed stream-json transcript'); }
+    }
+    const result = usageFromTranscript(parsed);
+    usage = { main: result.main, aggregate: result.aggregate, reconciliation_mismatch: result.reconciliation_mismatch, workers: result.workers.length ? result.workers : 'unknown' };
+    if (result.reconciliation_mismatch === true) accountingError = 'main transcript usage does not match aggregate result usage';
+  } catch (error) { accountingError = error.message; }
+  return { usage, accounting_error: accountingError };
+}
+
+export async function reaccountCampaign(campaignDir) {
+  const summary = { ok: true, updated: 0, unchanged: 0, skipped: 0, ledger_updated: 0 };
+  const accounted = new Map();
+  const files = (await readdir(campaignDir)).filter(file => file.endsWith('.json') && file !== 'campaign.json').sort();
+  for (const name of files) {
+    const file = path.join(campaignDir, name);
+    let record;
+    try { record = JSON.parse(await retryIO(() => readFile(file, 'utf8'))); }
+    catch (error) { console.error(`reaccount skipped ${name}: cannot read run JSON: ${error.message}`); summary.skipped++; continue; }
+    if (!record || typeof record.transcript_sha !== 'string') continue;
+    const runId = path.basename(name, '.json');
+    const transcriptPath = path.join(campaignDir, 'transcripts', runId, 'stdout.jsonl');
+    let transcript;
+    try { transcript = await retryIO(() => readFile(transcriptPath)); }
+    catch (error) { console.error(`reaccount skipped ${name}: transcript missing or unreadable: ${error.message}`); summary.skipped++; continue; }
+    if (sha(transcript) !== record.transcript_sha) {
+      console.error(`reaccount skipped ${name}: transcript sha256 mismatch`); summary.skipped++; continue;
+    }
+    const accounting = accountTranscript(transcript.toString('utf8'));
+    const key = JSON.stringify([record.session_id, record.task_id, record.repetition, record.arm]);
+    if ([record.session_id, record.task_id, record.repetition, record.arm].every(value => value != null)) accounted.set(key, accounting);
+    if (JSON.stringify(record.usage) === JSON.stringify(accounting.usage) && record.accounting_error === accounting.accounting_error) {
+      summary.unchanged++; continue;
+    }
+    record.usage = accounting.usage;
+    record.accounting_error = accounting.accounting_error;
+    const temporary = path.join(campaignDir, `${name}.${randomUUID()}.tmp`);
+    try {
+      await retryIO(() => writeFile(temporary, json(record)));
+      await retryIO(() => rename(temporary, file));
+      summary.updated++;
+    } catch (error) {
+      accounted.delete(key);
+      await retryIO(() => rm(temporary, { force: true })).catch(() => {});
+      console.error(`reaccount skipped ${name}: cannot rewrite run JSON: ${error.message}`); summary.skipped++;
+    }
+  }
+  const ledgerPath = path.join(campaignDir, 'attempts.jsonl');
+  const temporary = path.join(campaignDir, `attempts.jsonl.${randomUUID()}.tmp`);
+  try {
+    const ledger = await retryIO(() => readFile(ledgerPath)).catch(error => {
+      if (error.code === 'ENOENT') return Buffer.alloc(0);
+      throw error;
+    });
+    const lines = [];
+    let updated = 0;
+    for (let start = 0; start < ledger.length;) {
+      const newline = ledger.indexOf(10, start);
+      const end = newline === -1 ? ledger.length : newline + 1;
+      let line = ledger.subarray(start, end);
+      let record;
+      try { record = JSON.parse(line.toString('utf8')); } catch {}
+      if (record && typeof record === 'object') {
+        const accounting = accounted.get(JSON.stringify([record.session_id, record.task_id, record.repetition, record.arm]));
+        if (accounting && (JSON.stringify(record.usage) !== JSON.stringify(accounting.usage) || record.accounting_error !== accounting.accounting_error)) {
+          record.usage = accounting.usage;
+          record.accounting_error = accounting.accounting_error;
+          const ending = newline === -1 ? '' : ledger[newline - 1] === 13 ? '\r\n' : '\n';
+          line = Buffer.from(JSON.stringify(record) + ending);
+          updated++;
+        }
+      }
+      lines.push(line);
+      start = end;
+    }
+    if (updated) {
+      await retryIO(() => writeFile(temporary, Buffer.concat(lines)));
+      await retryIO(() => rename(temporary, ledgerPath));
+      summary.ledger_updated = updated;
+    }
+  } catch (error) {
+    await retryIO(() => rm(temporary, { force: true })).catch(() => {});
+    console.error(`reaccount skipped attempts.jsonl: ${error.message}`); summary.skipped++;
+  }
+  summary.ok = summary.skipped === 0;
+  return summary;
 }
 
 function command(exe, args, options = {}) {
@@ -326,7 +426,7 @@ function globMatch(value, pattern) {
 }
 function parseArgs(argv) {
   const [action, ...rest] = argv;
-  if (!['preflight', 'calibrate', 'run', 'validate'].includes(action)) throw new Error('usage: node bench/run.mjs preflight|calibrate|run --campaign <id> [--tasks <glob>] [--reps N] [--dry-run] [--resume] | validate [--tasks <glob>]');
+  if (!['preflight', 'calibrate', 'run', 'reaccount', 'validate'].includes(action)) throw new Error('usage: node bench/run.mjs preflight|calibrate|run --campaign <id> [--tasks <glob>] [--reps N] [--dry-run] [--resume] | reaccount --campaign <id> | validate [--tasks <glob>]');
   const opts = { action, reps: action === 'calibrate' ? 2 : 1, dryRun: false };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
@@ -337,6 +437,7 @@ function parseArgs(argv) {
   }
   if (action === 'validate') return opts;
   if (!opts.campaign || opts.campaign.startsWith('.') || !/^[A-Za-z0-9._-]+$/.test(opts.campaign)) throw new Error('--campaign is required and must be a safe id');
+  if (action === 'reaccount') return opts;
   opts.reps = Number(opts.reps);
   if (!Number.isInteger(opts.reps) || opts.reps < 1) throw new Error('--reps must be a positive integer');
   return opts;
@@ -487,6 +588,12 @@ async function main() {
   const campaignBase = path.resolve(ROOT, '.tmp', 'bench');
   const campaignDir = path.resolve(campaignBase, opts.campaign);
   if (path.dirname(campaignDir) !== campaignBase) throw new Error('campaign directory must stay inside .tmp/bench');
+  if (opts.action === 'reaccount') {
+    const summary = await reaccountCampaign(campaignDir);
+    console.log(json(summary));
+    if (!summary.ok) process.exitCode = 1;
+    return;
+  }
   await mkdir(campaignDir, { recursive: true });
   const pf = await preflight(campaignDir, opts.dryRun, opts.action === 'preflight');
   const disabledPlugins = await userPurserPlugins();
@@ -552,12 +659,8 @@ async function main() {
         const isAuthFailure = authFailure(parsed);
         const isPermissionFailure = permissionFailure(parsed);
         const pluginFailure = pluginContamination(parsed, arm);
-        let usage = { main: 'unknown', workers: 'unknown' }, accountingError;
-        try {
-          if (transcriptError) throw new Error(transcriptError);
-          const result = usageFromTranscript(parsed); usage = { main: result.main, aggregate: result.aggregate, reconciliation_mismatch: result.reconciliation_mismatch, workers: result.workers.length ? result.workers : 'unknown' };
-          if (result.reconciliation_mismatch === true) accountingError = 'main transcript usage does not match aggregate result usage';
-        } catch (e) { accountingError = e.message; }
+        const accounting = transcriptError ? { usage: { main: 'unknown', workers: 'unknown' }, accounting_error: transcriptError } : accountTranscript(transcript);
+        const { usage } = accounting, accountingError = accounting.accounting_error;
         if (!opts.dryRun && !isAuthFailure && !isPermissionFailure && !pluginFailure && !run.timedOut && run.code === 0) outcome = await grade(target, m, campaignDir);
         // The contract measures launch through independent grading.
         const elapsed = Date.now() - started;

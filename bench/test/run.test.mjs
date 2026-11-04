@@ -1,10 +1,11 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFile, chmod, mkdir, mkdtemp, readdir, rm, rmdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { armSettings, campaignMetadata, childEnvironment, cleanupRunDir, ensureEngine, goCheckContract, grade, promptNeedsIdentifiers, retryIO, runProcess, terminalAttempts, undefinedGoIdentifiers, usageFromTranscript } from '../run.mjs';
+import { armSettings, campaignMetadata, childEnvironment, cleanupRunDir, ensureEngine, goCheckContract, grade, promptNeedsIdentifiers, reaccountCampaign, retryIO, runProcess, terminalAttempts, undefinedGoIdentifiers, usageFromTranscript } from '../run.mjs';
 
 const scratchRoot = fileURLToPath(new URL('../../.tmp/bench-test/', import.meta.url));
 const protocol = JSON.parse(await readFile(fileURLToPath(new URL('../protocol.json', import.meta.url)), 'utf8'));
@@ -244,6 +245,84 @@ test('result usage reconciles assistant message totals without being added to th
   assert.equal(mismatch.reconciliation_mismatch, false);
   events.at(-1).usage.cache_read_input_tokens++;
   assert.equal(usageFromTranscript(events).reconciliation_mismatch, true);
+});
+
+test('multiple main result events are summed and reconcile with assistant message totals', () => {
+  const first = { input_tokens: 14, cache_read_input_tokens: 206077, cache_creation_input_tokens: 22900, output_tokens: 4245 };
+  const second = { input_tokens: 6, cache_read_input_tokens: 75186, cache_creation_input_tokens: 2216, output_tokens: 442 };
+  const total = { input_tokens: 20, cache_read_input_tokens: 281263, cache_creation_input_tokens: 25116, output_tokens: 4687 };
+  const result = usageFromTranscript([
+    { type: 'assistant', message: { id: 'turn-1', role: 'assistant', usage: first } },
+    { type: 'assistant', message: { id: 'turn-2', role: 'assistant', usage: second } },
+    { type: 'result', usage: first }, { type: 'result', usage: second }
+  ]);
+  assert.deepEqual(result.main, total);
+  assert.deepEqual(result.aggregate, total);
+  assert.equal(result.reconciliation_mismatch, false);
+});
+
+test('reaccount updates matching transcripts and skips sha mismatches', async t => {
+  const campaign = await mkdtemp(path.join(scratchRoot, 'bench-reaccount-'));
+  t.after(() => retryIO(() => rm(campaign, { recursive: true, force: true })));
+  const transcript = [
+    { type: 'assistant', message: { id: 'turn-1', role: 'assistant', usage: { input_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4, output_tokens: 5 } } },
+    { type: 'result', usage: { input_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4, output_tokens: 5 } }
+  ].map(event => JSON.stringify(event)).join('\n') + '\n';
+  const sha = createHash('sha256').update(transcript).digest('hex');
+  for (const id of ['matching', 'mismatch']) {
+    await mkdir(path.join(campaign, 'transcripts', id), { recursive: true });
+    await writeFile(path.join(campaign, 'transcripts', id, 'stdout.jsonl'), transcript);
+    await writeFile(path.join(campaign, `${id}.json`), JSON.stringify({ transcript_sha: id === 'matching' ? sha : 'wrong', usage: 'old', accounting_error: 'old error', untouched: 42 }));
+  }
+  const summary = await reaccountCampaign(campaign);
+  assert.deepEqual(summary, { ok: false, updated: 1, unchanged: 0, skipped: 1, ledger_updated: 0 });
+  const updated = JSON.parse(await readFile(path.join(campaign, 'matching.json'), 'utf8'));
+  assert.deepEqual(updated.usage.main, { input_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4, output_tokens: 5 });
+  assert.equal(updated.usage.reconciliation_mismatch, false);
+  assert.equal(updated.accounting_error, undefined);
+  assert.equal(updated.untouched, 42);
+  const skipped = JSON.parse(await readFile(path.join(campaign, 'mismatch.json'), 'utf8'));
+  assert.equal(skipped.usage, 'old');
+  assert.equal(skipped.accounting_error, 'old error');
+});
+
+test('reaccount repairs the ledger independently of run JSON and preserves other lines byte-for-byte', async t => {
+  const campaign = await mkdtemp(path.join(scratchRoot, 'bench-reaccount-ledger-'));
+  t.after(() => retryIO(() => rm(campaign, { recursive: true, force: true })));
+  const usage = { input_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4, output_tokens: 5 };
+  const transcript = [
+    { type: 'assistant', message: { id: 'message', role: 'assistant', usage } },
+    { type: 'result', usage }
+  ].map(event => JSON.stringify(event)).join('\n');
+  const record = { session_id: 'session', task_id: 'task', repetition: 1, arm: 'on', transcript_sha: createHash('sha256').update(transcript).digest('hex'), usage: 'stale', accounting_error: 'stale error', untouched: 42 };
+  await mkdir(path.join(campaign, 'transcripts', 'run'), { recursive: true });
+  await writeFile(path.join(campaign, 'transcripts', 'run', 'stdout.jsonl'), transcript);
+  const runPath = path.join(campaign, 'run.json');
+  await writeFile(runPath, JSON.stringify(record));
+  const ledgerPath = path.join(campaign, 'attempts.jsonl');
+  const prefix = Buffer.from('\r\n' + [
+    { ...record, session_id: 'other' }, { ...record, task_id: 'other' },
+    { ...record, repetition: 2 }, { ...record, arm: 'off' }
+  ].map(value => JSON.stringify(value, null, 0) + '  \n').join(''));
+  const tail = Buffer.concat([Buffer.from('\n{"interrupted":'), Buffer.from([0xff])]);
+  const staleLedger = Buffer.concat([prefix, Buffer.from(JSON.stringify(record) + '\r\n'), tail]);
+  await writeFile(ledgerPath, staleLedger);
+
+  assert.deepEqual(await reaccountCampaign(campaign), { ok: true, updated: 1, unchanged: 0, skipped: 0, ledger_updated: 1 });
+  const currentRun = await readFile(runPath);
+  const currentRecord = JSON.parse(currentRun.toString('utf8'));
+  const expectedLedger = Buffer.concat([prefix, Buffer.from(JSON.stringify(currentRecord) + '\r\n'), tail]);
+  assert.deepEqual(await readFile(ledgerPath), expectedLedger);
+  assert.deepEqual(currentRecord.usage.main, usage);
+  assert.equal(currentRecord.accounting_error, undefined);
+  assert.equal(currentRecord.untouched, 42);
+
+  await writeFile(ledgerPath, staleLedger);
+  assert.deepEqual(await reaccountCampaign(campaign), { ok: true, updated: 0, unchanged: 1, skipped: 0, ledger_updated: 1 });
+  assert.deepEqual(await readFile(runPath), currentRun);
+  assert.deepEqual(await readFile(ledgerPath), expectedLedger);
+  assert.deepEqual(await reaccountCampaign(campaign), { ok: true, updated: 0, unchanged: 1, skipped: 0, ledger_updated: 0 });
+  assert.deepEqual(await readFile(ledgerPath), expectedLedger);
 });
 
 test('repeated main message ids use growing usage snapshots once and reconcile to result totals', () => {
