@@ -32,7 +32,7 @@ test('allocation uses calibration task clusters and chooses a feasible balanced 
   assert.ok(components.main_claude_tokens.sigma_squared_within_task > 0);
   assert.equal(components.main_claude_tokens.task_count, 8);
   const allocation = chooseAllocation(components);
-  assert.ok(allocation.tasks >= 12 && allocation.tasks % 4 === 0);
+  assert.ok(allocation.tasks >= protocol.k_floor && allocation.tasks % 4 === 0);
   assert.ok(allocation.repetitions >= 1);
   for (const endpoint of Object.values(allocation.achieved_power)) assert.ok(endpoint.power >= 0.89);
 });

@@ -91,9 +91,9 @@
     "total_arm_runs": 32,
     "excluded_from_confirmation": true
   },
-  "k_floor": 12,
+  "k_floor": 8,
   "confirmation_allocation": {
-    "k_min": 12,
+    "k_min": 8,
     "k_multiple": 4,
     "initial_held_out_tasks": 12,
     "initial_tasks_per_class": 3,
@@ -104,7 +104,7 @@
     ],
     "se_squared_formula": "(tau_m^2 + sigma_m^2 / R) / K",
     "k_formula": "K >= ((t_{0.975,K-1} + z_{0.90})^2 * (tau_m^2 + sigma_m^2 / R)) / |log(1 - delta_m)|^2",
-    "k_floor_rationale": "sqrt(2 / (K - 1)) <= 0.50 variance-estimate relative standard error stability criterion, rounded up to a multiple of 4",
+    "k_floor_rationale": "Lowered from 12 to 8 on 2026-11-04 before confirmation data: the 12 floor was a variance-estimate stability convention (sqrt(2 / (K - 1)) <= 0.50), not a power requirement; calibration cal-2026-11-03f shows the token endpoint needs K of about 6, and t_{0.975,K-1} already widens the bound for small K",
     "k_floor_is_validity_guarantee": false
   },
   "initial_bank": {

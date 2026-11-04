@@ -413,7 +413,7 @@ async function taskDirs(pattern) {
       if (entry.isDirectory()) await visit(full);
       else if (entry.name === 'task.json') {
         const rel = path.relative(base, path.dirname(full)).split(path.sep).join('/');
-        if (!pattern || globMatch(rel, pattern)) found.push(path.dirname(full));
+        if (!pattern || pattern.split(',').some(p => globMatch(rel, p.trim()))) found.push(path.dirname(full));
       }
     }
   }
