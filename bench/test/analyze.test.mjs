@@ -75,24 +75,37 @@ test('zero-variance allocation still respects the protocol task floor', () => {
   assert.ok(chooseAllocation(components).tasks >= protocol.k_floor);
 });
 
-test('exactly two claim decisions distinguish supported savings from a zero upper bound', () => {
+test('allocation ignores descriptive endpoint variance', () => {
+  const components = {
+    main_claude_tokens: { tau_squared_between_task: 0, sigma_squared_within_task: 0.110 },
+    verified_wall_time: { tau_squared_between_task: 0, sigma_squared_within_task: 3.076 }
+  };
+  const allocation = chooseAllocation(components);
+  assert.equal(allocation.tasks, protocol.k_floor);
+  assert.equal(allocation.repetitions, 1);
+  assert.deepEqual(Object.keys(allocation.achieved_power), ['main_claude_tokens']);
+});
+
+test('confirmatory claims exclude descriptive endpoints and report descriptive intervals', () => {
   const records = confirmation().map(record => ({ ...record, passed: true, attempt_status: 'completed', verified_wall_time_ms: 1000 }));
   const report = buildReport(identity, records, 'synthetic');
-  assert.deepEqual(Object.keys(report.result.claims), protocol.endpoints.map(endpoint => endpoint.id));
-  const tokens = report.result.claims.main_claude_tokens, time = report.result.claims.verified_wall_time;
+  assert.deepEqual(Object.keys(report.result.claims), ['main_claude_tokens']);
+  assert.deepEqual(Object.keys(report.result.descriptive_endpoints), ['verified_wall_time']);
+  const tokens = report.result.claims.main_claude_tokens, time = report.result.descriptive_endpoints.verified_wall_time;
   assert.ok(tokens.upper_log_ratio < 0);
   assert.equal(tokens.decision, 'supported');
-  assert.equal(time.upper_log_ratio, 0);
-  assert.equal(time.decision, 'not_supported');
+  assert.equal(time.mean_log_ratio, 0);
+  assert.deepEqual(time.descriptive_95_percent_interval, { lower_log_ratio: 0, upper_log_ratio: 0 });
   assert.match(report.markdown, /Main-Claude tokens[^\n]*\| supported \|/);
-  assert.match(report.markdown, /Wall time to a verified success[^\n]*\| not_supported \|/);
+  assert.match(report.markdown, /Descriptive endpoint estimates \(no confirmatory claims; 95% intervals\)/);
+  assert.match(report.markdown, /Wall time to a verified success[^\n]*\| 0\.000000 \| \[0\.000000, 0\.000000\] \|/);
 });
 
 test('failed attempts remain in endpoint pairs and every pass-rate denominator', () => {
   const report = buildReport(identity, confirmation(), 'synthetic');
   assert.equal(report.result.claims.main_claude_tokens.tasks, 12);
-  assert.equal(report.result.claims.verified_wall_time.tasks, 12);
-  assert.equal(report.result.claims.verified_wall_time.mean_log_ratio, Number((Math.log(0.8) * 11 / 12 + Math.log(5) / 12).toFixed(8)));
+  assert.equal(report.result.descriptive_endpoints.verified_wall_time.tasks, 12);
+  assert.equal(report.result.descriptive_endpoints.verified_wall_time.mean_log_ratio, Number((Math.log(0.8) * 11 / 12 + Math.log(5) / 12).toFixed(8)));
   assert.deepEqual(report.result.descriptive_pass_rates.all.on, { passed: 11, attempted: 12, pass_rate: Number((11 / 12).toFixed(8)) });
   assert.deepEqual(report.result.descriptive_pass_rates.all.off, { passed: 12, attempted: 12, pass_rate: 1 });
   assert.equal(report.result.descriptive_pass_rates[classes[0]].on.attempted, 3);

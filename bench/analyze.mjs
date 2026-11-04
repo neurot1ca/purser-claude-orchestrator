@@ -5,6 +5,8 @@ import { retryIO } from './run.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROTOCOL = JSON.parse(await readFile(path.join(ROOT, 'bench', 'protocol.json'), 'utf8'));
+const CONFIRMATORY_ENDPOINTS = PROTOCOL.endpoints.filter(endpoint => endpoint.role === 'confirmatory');
+const DESCRIPTIVE_ENDPOINTS = PROTOCOL.endpoints.filter(endpoint => endpoint.role === 'descriptive');
 const CATEGORIES = PROTOCOL.endpoints[0].token_categories;
 const PROVENANCE = PROTOCOL.provenance_fields;
 const CLASSES = PROTOCOL.task_classes;
@@ -146,7 +148,7 @@ export function chooseAllocation(components) {
     let k = Math.ceil(targetK / multiple) * multiple;
     while (k <= 10000) {
       let ok = true;
-      for (const endpoint of PROTOCOL.endpoints) {
+      for (const endpoint of CONFIRMATORY_ENDPOINTS) {
         const v = components[endpoint.id];
         const delta = Math.abs(Math.log(1 - endpoint.prospective_reduction_target));
         const required = (tQuantile(1 - alpha, k - 1) + z) ** 2 * (v.tau_squared_between_task + v.sigma_squared_within_task / r) / (delta ** 2);
@@ -159,7 +161,7 @@ export function chooseAllocation(components) {
     const score = k * r;
     if (!best || score < best.score || (score === best.score && r < best.repetitions)) {
       const achieved = {};
-      for (const endpoint of PROTOCOL.endpoints) {
+      for (const endpoint of CONFIRMATORY_ENDPOINTS) {
         const v = components[endpoint.id], delta = Math.abs(Math.log(1 - endpoint.prospective_reduction_target));
         const se = Math.sqrt((v.tau_squared_between_task + v.sigma_squared_within_task / r) / k);
         achieved[endpoint.id] = { standard_error: round(se), power: round(normalCDF(delta / se - tQuantile(1 - alpha, k - 1))) };
@@ -234,13 +236,19 @@ export function buildReport(metadata, records, campaignId) {
   for (const task of tasks) if (!CLASSES.includes(task.task_class)) throw new Error(`unknown task class: ${task.task_class}`);
   for (const pair of pairs) if (pair.arms.on.repetition !== pair.arms.off.repetition) throw new Error('paired repetition mismatch');
   const claims = {};
-  for (const endpoint of PROTOCOL.endpoints) {
+  for (const endpoint of CONFIRMATORY_ENDPOINTS) {
     const bound = upperBound(pairedTaskLogMeans(tasks, endpoint.id));
     claims[endpoint.id] = { ...bound, alpha: endpoint.alpha, decision: bound.upper_log_ratio < 0 ? 'supported' : 'not_supported' };
   }
+  const descriptiveEndpoints = {};
+  for (const endpoint of DESCRIPTIVE_ENDPOINTS) {
+    const values = pairedTaskLogMeans(tasks, endpoint.id), avg = mean(values), sd = Math.sqrt(variance(values));
+    const margin = tQuantile(0.975, values.length - 1) * sd / Math.sqrt(values.length);
+    descriptiveEndpoints[endpoint.id] = { mean_log_ratio: round(avg), task_sd: round(sd), tasks: values.length, descriptive_95_percent_interval: { lower_log_ratio: round(avg - margin), upper_log_ratio: round(avg + margin) } };
+  }
   const provenance = Object.fromEntries(PROVENANCE.map(field => [field, records[0][field]]));
   const descriptions = descriptive(tasks);
-  const result = { provenance, platform, method: 'task-level paired log-ratio means; one-sided t upper bound', deadline_penalty: 'unsuccessful runs charged the predeclared verified_wall_time_ms deadline', claims, descriptive_pass_rates: descriptions.pass_rates, paired_outcomes: descriptions.paired_outcomes, failure_reasons: descriptions.failure_reasons };
+  const result = { provenance, platform, method: 'task-level paired log-ratio means; one-sided t upper bound for confirmatory endpoints', deadline_penalty: 'unsuccessful runs charged the predeclared verified_wall_time_ms deadline', claims, descriptive_endpoints: descriptiveEndpoints, descriptive_pass_rates: descriptions.pass_rates, paired_outcomes: descriptions.paired_outcomes, failure_reasons: descriptions.failure_reasons };
   const jsonText = JSON.stringify(result, (key, value) => {
     if (typeof value === 'number' && !Number.isFinite(value)) throw new Error(`non-finite report statistic: ${key}`);
     return value;
@@ -249,10 +257,12 @@ export function buildReport(metadata, records, campaignId) {
     '# Benchmark report', '',
     `Campaign: ${campaignId}`, `Platform cohort: ${platform}`,
     `Provenance: engine_sha=${provenance.engine_sha}; harness_sha=${provenance.harness_sha}; suite_hash=${provenance.suite_hash}; campaign_id=${provenance.campaign_id}; n_tasks=${provenance.n_tasks}; repetitions=${provenance.repetitions}; n_pairs=${provenance.n_pairs}; n_on=${provenance.n_on}; n_off=${provenance.n_off}`,
-    '', `Inference: task-level paired log-ratio means, one-sided Student t upper bounds at alpha=${PROTOCOL.alpha}. Failed attempts remain in all-attempt denominators; unsuccessful wall-time observations use the predeclared deadline.`, '',
+    '', `Confirmatory inference: task-level paired log-ratio means, one-sided Student t upper bounds at alpha=${PROTOCOL.alpha}. Failed attempts remain in all-attempt denominators; unsuccessful wall-time observations use the predeclared deadline.`, '',
     '| Endpoint | Tasks | Mean log ratio | Upper log bound | Savings lower bound | Savings claim |', '|---|---:|---:|---:|---:|---|'
   ];
-  for (const endpoint of PROTOCOL.endpoints) { const c = claims[endpoint.id]; lines.push(`| ${endpoint.name} | ${c.tasks} | ${fmt(c.mean_log_ratio)} | ${fmt(c.upper_log_ratio)} | ${fmt(c.savings_lower_bound)} | ${c.decision} |`); }
+  for (const endpoint of CONFIRMATORY_ENDPOINTS) { const c = claims[endpoint.id]; lines.push(`| ${endpoint.name} | ${c.tasks} | ${fmt(c.mean_log_ratio)} | ${fmt(c.upper_log_ratio)} | ${fmt(c.savings_lower_bound)} | ${c.decision} |`); }
+  lines.push('', 'Descriptive endpoint estimates (no confirmatory claims; 95% intervals):', '', '| Endpoint | Tasks | Mean log ratio | Descriptive 95% interval |', '|---|---:|---:|---:|');
+  for (const endpoint of DESCRIPTIVE_ENDPOINTS) { const estimate = descriptiveEndpoints[endpoint.id]; lines.push(`| ${endpoint.name} | ${estimate.tasks} | ${fmt(estimate.mean_log_ratio)} | [${fmt(estimate.descriptive_95_percent_interval.lower_log_ratio)}, ${fmt(estimate.descriptive_95_percent_interval.upper_log_ratio)}] |`); }
   lines.push('', 'Pass rates (descriptive only):', '', '| Group | Arm | Passed | Attempted | Pass rate |', '|---|---|---:|---:|---:|');
   for (const [group, arms] of Object.entries(result.descriptive_pass_rates)) for (const arm of ['on', 'off']) { const v = arms[arm]; lines.push(`| ${group} | ${arm} | ${v.passed} | ${v.attempted} | ${fmt(v.pass_rate * 100)}% |`); }
   lines.push('', 'Paired outcomes:', '', '| Both passed | On only passed | Off only passed | Neither passed |', '|---:|---:|---:|---:|', `| ${result.paired_outcomes.both_pass} | ${result.paired_outcomes.on_only_pass} | ${result.paired_outcomes.off_only_pass} | ${result.paired_outcomes.neither_pass} |`, '', 'Failure reasons by arm:', '');

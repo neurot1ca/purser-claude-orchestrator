@@ -53,7 +53,8 @@
     {
       "id": "verified_wall_time",
       "name": "Wall time to a verified success",
-      "role": "confirmatory",
+      "role": "descriptive",
+      "role_change": "Descriptive because calibration cal-2026-11-03f had within-task variance sigma^2=3.08; decided 2026-11-04 before any confirmation data.",
       "definition": "Observed elapsed time to a verified passing result; unsuccessful runs are charged the predeclared task deadline",
       "failure_penalty": "predeclared_deadline",
       "alpha": 0.025,
