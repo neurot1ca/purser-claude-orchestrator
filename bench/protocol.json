@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "pinned_commit": "37964a9528778ca1ad22203c5a879bda08cec78e",
+  "pinned_commit": "10fa36db7bbaf5f0f5a90c4c02eb46a7bfa890c2",
   "pinned_engine": {
-    "tag": "v0.1.225",
-    "commit": "37964a9528778ca1ad22203c5a879bda08cec78e",
-    "archive_url": "https://github.com/neurot1ca/purser-claude-orchestrator/releases/download/v0.1.225/purser-0.1.225.zip",
-    "archive_sha256": "e4e90cc1ea97cdf1e17778839da4951bef322d112535a4e17aacdafe86204b41",
+    "tag": "v0.1.228",
+    "commit": "10fa36db7bbaf5f0f5a90c4c02eb46a7bfa890c2",
+    "archive_url": "https://github.com/neurot1ca/purser-claude-orchestrator/releases/download/v0.1.228/purser-0.1.228.zip",
+    "archive_sha256": "e025bef9c6695801a9232b2067aceee7a414d4663af7832e2950be57d548cb0c",
     "treatment_plugin_key": "purser@inline"
   },
   "cli": {

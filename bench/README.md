@@ -91,7 +91,7 @@ Each campaign provisions the pinned Purser engine from the versioned GitHub rele
 
 Each campaign provisions:
 
-- A separate engine directory pinned to Purser `v0.1.225` (commit `37964a9528778ca1ad22203c5a879bda08cec78e`), never the active working tree.
+- A separate engine directory pinned to Purser `v0.1.228` (commit `10fa36db7bbaf5f0f5a90c4c02eb46a7bfa890c2`), never the active working tree.
 - A verified release archive containing the host-matched engine binary.
 - Separate per-arm target worktrees, settings files, `PURSER_STATE_DIR`, and transcript directories.
 
