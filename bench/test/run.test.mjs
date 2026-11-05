@@ -5,13 +5,27 @@ import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { armSettings, campaignMetadata, childEnvironment, cleanupRunDir, ensureEngine, goCheckContract, grade, hasPurserGuidance, projectKeyForPath, promptNeedsIdentifiers, reaccountCampaign, retryIO, runProcess, terminalAttempts, undefinedGoIdentifiers, usageFromTranscript, writeOnArmRoles } from '../run.mjs';
+import { armSettings, campaignMetadata, childEnvironment, cleanupRunDir, ensureEngine, goCheckContract, grade, hasPurserGuidance, permissionFailure, projectKeyForPath, promptNeedsIdentifiers, reaccountCampaign, retryIO, runProcess, terminalAttempts, undefinedGoIdentifiers, usageFromTranscript, writeOnArmRoles } from '../run.mjs';
 
 const scratchRoot = fileURLToPath(new URL('../../.tmp/bench-test/', import.meta.url));
 const protocol = JSON.parse(await readFile(fileURLToPath(new URL('../protocol.json', import.meta.url)), 'utf8'));
 const purserGuidance = 'Purser is installed for this project. Delegate repository code changes (features, fixes, refactors, tests) to the configured coder through the `purser:dispatcher` agent or `codex_start`; Purser\'s refusal messages explain the required first prompt line. Make trivial edits, such as a typo or a one-line change, yourself. Review each result, then accept and apply it with `codex_apply`.';
 const hostBinary = `bin/purser-hook-${process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : process.platform}-${({ x64: 'amd64', ia32: '386', arm: 'arm', arm64: 'arm64' })[process.arch] ?? process.arch}${process.platform === 'win32' ? '.exe' : ''}`;
 await mkdir(scratchRoot, { recursive: true });
+const editDelegationReason = 'Delegate this code change to the selected coder through the purser:dispatcher agent or codex_start.';
+test('only matching on-arm edit delegation denials are exempt from permission failures', () => {
+  const guardDenial = { tool_name: 'Edit', tool_use_id: 'toolu-1' };
+  const matchingResult = { type: 'user', message: { content: [{
+    type: 'tool_result', content: [{ type: 'text', text: editDelegationReason }], is_error: true, tool_use_id: 'toolu-1'
+  }] } };
+  const result = (...permission_denials) => ({ type: 'result', permission_denials });
+  assert.equal(permissionFailure([result(guardDenial), matchingResult], 'on'), false);
+  assert.equal(permissionFailure([result(guardDenial), matchingResult], 'off'), true);
+  assert.equal(permissionFailure([result(guardDenial), { ...matchingResult, message: { content: [{ ...matchingResult.message.content[0], content: 'different text' }] } }], 'on'), true);
+  assert.equal(permissionFailure([result({ ...guardDenial, tool_name: 'Bash' }), matchingResult], 'on'), true);
+  assert.equal(permissionFailure([result(guardDenial)], 'on'), true);
+  assert.equal(permissionFailure([result(guardDenial, { tool_name: 'Bash', tool_use_id: 'toolu-2' }), matchingResult], 'on'), true);
+});
 after(() => retryIO(() => rmdir(scratchRoot)).catch(error => {
   if (error.code !== 'ENOENT' && error.code !== 'ENOTEMPTY') throw error;
 }));

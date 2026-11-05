@@ -12,6 +12,7 @@ const RETRIES = 6;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const sha = value => createHash('sha256').update(value).digest('hex');
 const json = value => JSON.stringify(value, null, 2) + '\n';
+const EDIT_DELEGATION_REASON = 'Delegate this code change to the selected coder through the purser:dispatcher agent or codex_start.';
 const PURSER_GUIDANCE = 'Purser is installed for this project. Delegate repository code changes (features, fixes, refactors, tests) to the configured coder through the `purser:dispatcher` agent or `codex_start`; Purser\'s refusal messages explain the required first prompt line. Make trivial edits, such as a typo or a one-line change, yourself. Review each result, then accept and apply it with `codex_apply`.';
 // initsetup's Codex defaults and explicit Codex reviewer selection (policy reads reviewer.selected).
 const ON_ARM_ROLES = `schema_version = 1
@@ -127,8 +128,22 @@ function authFailure(events) {
   ));
 }
 
-function permissionFailure(events) {
-  return events.some(event => event.type === 'result' && Array.isArray(event.permission_denials) && event.permission_denials.length > 0);
+export function permissionFailure(events, arm) {
+  const editTools = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+  const toolResults = events.flatMap(event => event.type === 'user' && Array.isArray(event.message?.content)
+    ? event.message.content
+    : []);
+  return events.some(event => event.type === 'result' && Array.isArray(event.permission_denials) && event.permission_denials.some(denial => {
+    if (arm !== 'on' || !editTools.has(denial?.tool_name) || !denial?.tool_use_id) return true;
+    return !toolResults.some(result => {
+      if (result.type !== 'tool_result' || result.is_error !== true || result.tool_use_id !== denial.tool_use_id) return false;
+      const content = typeof result.content === 'string' ? result.content : Array.isArray(result.content) &&
+        result.content.every(block => block?.type === 'text' && typeof block.text === 'string')
+        ? result.content.map(block => block.text).join('')
+        : undefined;
+      return content === EDIT_DELEGATION_REASON;
+    });
+  }));
 }
 
 function pluginContamination(events, arm) {
@@ -715,7 +730,7 @@ async function main() {
           catch { transcriptError = 'malformed stream-json transcript'; break; }
         }
         const isAuthFailure = authFailure(parsed);
-        const isPermissionFailure = permissionFailure(parsed);
+        const isPermissionFailure = permissionFailure(parsed, arm);
         const pluginFailure = pluginContamination(parsed, arm);
         const purserNotInitialized = arm === 'on' && !opts.dryRun && !isAuthFailure && !isPermissionFailure && !pluginFailure && !await hasPurserGuidance(target, session, parsed);
         const accounting = transcriptError ? { usage: { main: 'unknown', workers: 'unknown' }, accounting_error: transcriptError } : accountTranscript(transcript);
