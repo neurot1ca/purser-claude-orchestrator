@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.228 — 2026-11-05
+- **Changed:** with a non-Claude coder selected, Purser denies main Claude's non-trivial code edits and points it to the coder; trivial edits stay allowed and `[roles] enforce_delegation = false` turns this off for a project.
+- **Changed:** the dispatcher agent runs at low effort.
+- **Fixed:** `plan accept` can extend a partially accepted plan with the same artifact.
+
 ## 0.1.227 — 2026-11-03
 - **Added:** Cursor can be the Reviewer once a live check confirms it is confined to reading.
 - **Changed:** from 200K tokens the idle auto-compact timer leaves an idle conversation to Claude Code's native idle compaction, so the two no longer both compact.
