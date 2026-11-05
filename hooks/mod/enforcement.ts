@@ -1,4 +1,6 @@
 type PostEvent = 'PostToolUse' | 'PostToolUseFailure'
+const editTools = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const editReported = new Set<string>()
 const postToolUseFailureTools = new Set([
   'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
   'mcp__codex-main__codex_start', 'mcp__codex-main__codex_result',
@@ -127,6 +129,34 @@ export function register(on) {
   on("classic.PostToolUseFailure", ($, e, next) => handlePostToolUse('PostToolUseFailure', $, e, next))
 
   on('classic.PreToolUse', async ($, e, next) => {
+    if (editTools.has(e.tool)) {
+      let sessionId = ''
+      try {
+        if (e.agentId) return next(e)
+        const [id, cwd, worker] = await Promise.all([$.session.id(), $.session.cwd(), $.env.get('PURSER_WORKER')])
+        sessionId = id
+        if (worker === '1') return next(e)
+        const result = await $.process.run([await goBinary($)], {
+          cwd, stdin: JSON.stringify(preRequest(e, sessionId, cwd)), timeoutMs: 2500,
+        })
+        if (result.exitCode !== 0) throw new Error('Go edit delegation failed')
+        const output = result.stdout.trim() ? JSON.parse(result.stdout) : {}
+        const specific = output?.hookSpecificOutput
+        if (specific?.hookEventName === 'PreToolUse' && specific.permissionDecision === 'deny' &&
+            typeof specific.permissionDecisionReason === 'string' && specific.permissionDecisionReason) {
+          return { deny: specific.permissionDecisionReason }
+        }
+        if (Object.keys(output).length) throw new Error('invalid edit delegation output')
+      } catch {
+        const key = sessionId || '<unknown>'
+        if (!editReported.has(key)) {
+          editReported.add(key)
+          try { await $.ui.log('Go edit delegation failed; edit continued unchanged.') }
+          catch { /* logging must not affect edits */ }
+        }
+      }
+      return next(e)
+    }
     if (!postToolUseTools.has(e.tool) && !postToolUseFailureTools.has(e.tool)) return next(e)
     try {
       const binary = await goBinary($)

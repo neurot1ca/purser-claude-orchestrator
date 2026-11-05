@@ -130,11 +130,19 @@ func main() {
 	case "PreToolUse":
 		if event["tool_name"] == "Read" {
 			_ = contextio.Read(event, started)
-		} else if response, failure := enforce.Pre(event, stateRoot()); response != nil {
-			if failure != nil {
+		} else {
+			response, failure := enforce.Pre(event, stateRoot())
+			tool, _ := event["tool_name"].(string)
+			edit := tool == "Edit" || tool == "Write" || tool == "MultiEdit" || tool == "NotebookEdit"
+			if failure != nil && (response != nil || edit) {
 				_, _ = os.Stderr.WriteString("orchestrator hook internal error: " + errorName(failure) + "\n")
+				if response == nil {
+					os.Exit(1)
+				}
 			}
-			writeJSON(response)
+			if response != nil {
+				writeJSON(response)
+			}
 		}
 	case "WriteUndeliveredMarker":
 		if err := enforce.WriteUndeliveredMarker(stateRoot(), event); err != nil {

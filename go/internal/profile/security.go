@@ -12,7 +12,7 @@ import (
 var familyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 var userSecurity = map[string]map[string]bool{
-	"roles":    {"orchestrator": true, "coder": true, "reviewer": true},
+	"roles":    {"orchestrator": true, "coder": true, "reviewer": true, "enforce_delegation": true},
 	"coding":   {"coder_agent": true, "routes": true, "family": true, "reviewer1_agent": true, "reviewer1_model_requested": true, "reviewer1_effort": true, "reviewer1_executable": true},
 	"reviewer": {"executable": true, "selected": true, "alternatives": true},
 	"trust":    {"paths": true},
@@ -98,6 +98,12 @@ func ValidateSecurityValue(section, key string, value any) (bool, string) {
 		}
 		return false, fmt.Sprintf("[coding] %s has an invalid value", key)
 	case "roles":
+		if key == "enforce_delegation" {
+			if _, ok := value.(bool); ok {
+				return true, ""
+			}
+			return invalid()
+		}
 		allowed := map[string][]string{
 			"orchestrator": {"claude-code"},
 			"coder":        {"codex", "claude", "opencode", "agy", "cursor"},

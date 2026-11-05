@@ -228,7 +228,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			return nil, lockErr
 		}
 	}
-	var childEnv []string
+	childEnv := []string{"PURSER_WORKER=1"}
 	stateRoot := opt.StateRoot
 	if stateRoot == "" {
 		stateRoot = filepath.Dir(filepath.Dir(dir))

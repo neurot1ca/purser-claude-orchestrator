@@ -135,7 +135,8 @@ func TestHostFakeWorker(t *testing.T) {
 	}
 	if mode == "environment" {
 		result, _ = json.Marshal(map[string]string{
-			"GOCACHE": os.Getenv("GOCACHE"), "GOTMPDIR": os.Getenv("GOTMPDIR"),
+			"PURSER_WORKER": os.Getenv("PURSER_WORKER"),
+			"GOCACHE":       os.Getenv("GOCACHE"), "GOTMPDIR": os.Getenv("GOTMPDIR"),
 			"TEMP": os.Getenv("TEMP"), "TMP": os.Getenv("TMP"), "TMPDIR": os.Getenv("TMPDIR"),
 		})
 		_ = os.WriteFile(os.Getenv("PURSER_HOST_FAKE_ENV_CAPTURE"), result, 0600)
@@ -1368,6 +1369,9 @@ func TestHostAddsSharedGoCacheForWorkspaceWrite(t *testing.T) {
 	}
 	if childEnvironment["GOCACHE"] != cacheDir || childEnvironment["GOTMPDIR"] != tmpDir || childEnvironment["TEMP"] != tmpDir || childEnvironment["TMP"] != tmpDir || childEnvironment["TMPDIR"] != tmpDir {
 		t.Errorf("child Go environment = %#v, want per-job temp %q and GOCACHE=%q", childEnvironment, tmpDir, cacheDir)
+	}
+	if childEnvironment["PURSER_WORKER"] != "1" {
+		t.Fatal("worker exemption not propagated to child")
 	}
 	if _, err := os.Stat(tmpDir); !os.IsNotExist(err) {
 		t.Errorf("terminal job temp directory remains: %v", err)

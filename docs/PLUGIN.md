@@ -17,6 +17,46 @@ Restart Claude Code after installation, then run `/purser:check`.
 Run `/purser:init` to configure Purser. Update with
 `/plugin marketplace update purser-claude-orchestrator`.
 
+Project roles live in `<stateRoot>/projects/<projectKey>/roles.toml`.
+With a non-Claude coder selected, main Claude must delegate non-trivial source
+edits through `purser:dispatcher` or `codex_start`. Omitted `enforce_delegation`
+means enabled, including in existing files. The guard's deny text is:
+
+> Delegate this code change to the selected coder through the purser:dispatcher agent or codex_start. Only if the user asks, set enforce_delegation = false under [roles] in roles.toml to allow direct edits for this project.
+
+This does not change SessionStart guidance.
+
+The PreToolUse guard covers Edit, Write, MultiEdit and NotebookEdit. Code means
+these case-sensitive extensions (tests use the same rule):
+`.go .py .pyi .js .jsx .mjs .cjs .ts .tsx .mts .cts .rs .c .h .cc .cpp .cxx .hpp
+.cs .java .kt .kts .swift .m .mm .rb .php .scala .sc .sh .bash .zsh .ps1 .psm1
+.bat .cmd .sql .r .R .lua .pl .ex .exs .erl .hrl .hs .fs .fsx .clj .cljs .dart
+.vue .svelte .html .css .scss .sass .less .ipynb`.
+Other extensions, including Markdown/prose, remain allowed. Only Edit with
+nonempty single-line old text and single-line new text that changes just one
+line is trivial. For `replace_all`, the guard counts matching lines in the file;
+Write, MultiEdit and NotebookEdit are never trivial.
+
+Subagents (`agent_id`) and Purser workers (`PURSER_WORKER=1`, set at launch) are
+exempt. Direct edits are also allowed for apply conflicts/worker replay from
+this session, or when this session's most recent project job by index mtime is
+FAILED, TIMED_OUT or has stage FAILED. A later successful job re-arms the guard;
+cancellation does not unlock edits. Tied latest jobs must all qualify for failure
+recovery; an incomplete tie at the scan boundary cannot grant failure recovery.
+Missing, locked or malformed state, git errors, unresolved paths and timeouts
+fail open, with hook failures logged at most once per session. The recovery
+scan reads only the newest 256 JSON index files by mtime, ignoring lock/claim
+files. Larger directories do not bypass the guard. Index mtimes are read only
+when the guard would otherwise deny. Files that vanish or cannot be read fail open.
+Unrecorded launch/authentication failures can still require the opt-out.
+Shell edits through Bash are outside this guard.
+
+Paths resolve symlinks (or existing ancestors for new files) and use filesystem
+identity for containment, respecting Windows drive/case/separator handling and
+the actual case rules of macOS/Linux volumes. Git uses `core.longpaths=true`,
+hidden process launch on Windows, and a shared one-second deadline. The host
+helper has a 2.5-second timeout. Unresolvable aliases/long paths allow the call.
+
 ## Release catalog
 
 A release tag starts the release workflow. The workflow builds and verifies

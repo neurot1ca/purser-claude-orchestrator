@@ -332,6 +332,9 @@ func TestSynchronousFakeCodexProcess(t *testing.T) {
 		return
 	}
 	mode := os.Getenv("PURSER_SYNC_ORACLE_MODE")
+	if mode == "worker-env" && os.Getenv("PURSER_WORKER") != "1" {
+		os.Exit(2)
+	}
 	if marker := os.Getenv("PURSER_SYNC_ORACLE_STARTED"); marker != "" && mode != "cancel-with-grandchild" {
 		if err := os.WriteFile(marker, []byte("started"), 0600); err != nil {
 			os.Exit(2)
@@ -406,6 +409,17 @@ func TestSynchronousFakeCodexProcess(t *testing.T) {
 }
 
 func syncEnv(name, value string) []string { return syncEnvFrom(os.Environ(), name, value) }
+
+func TestSynchronousWorkerExemption(t *testing.T) {
+	isolateSynchronousEnvironment(t)
+	args := synchronousDirectArgs(t)
+	t.Setenv("PURSER_WORKER", "0")
+	t.Setenv("PURSER_SYNC_ORACLE_MODE", "worker-env")
+	got, err := runSynchronousContext(context.Background(), args, "codex")
+	if err != nil || got == nil || got["isError"] == true {
+		t.Fatalf("worker exemption missing: %v %v", got, err)
+	}
+}
 
 func syncEnvFrom(environment []string, name, value string) []string {
 	result := make([]string, 0, len(environment)+1)

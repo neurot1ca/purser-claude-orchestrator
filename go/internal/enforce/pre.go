@@ -33,6 +33,9 @@ var writePreBypass = writeBypass
 // Pre owns the Go PreToolUse policy and recovers internal failures with the
 // synchronous bypass / async-start deny contract.
 func Pre(event map[string]any, root string) (response map[string]any, failure error) {
+	if event["hook_event_name"] == "PreToolUse" && editTool(stringValue(event["tool_name"])) {
+		return editDelegation(event, root)
+	}
 	if event["hook_event_name"] != "PreToolUse" || !codexTools[stringValue(event["tool_name"])] {
 		return nil, nil
 	}

@@ -42,6 +42,10 @@ End coder model questions with EN **Other / just write your model choice** / TR 
 
 After the coder is chosen, rerun `init --detect --json --coder CODER`, adding `--model MODEL` when a specific coder model was selected. Complete mode/model/effort choices before this call. Use its options to ask fallback (Codex/OpenCode/agy/Cursor only), reviewer and free small-job models (OpenCode detected only) together in one call.
 
+Project `roles.toml` defaults to enforcing delegation of main Claude's non-trivial
+code edits when a non-Claude coder is selected. `[roles] enforce_delegation = false`
+opts this project out; see `docs/PLUGIN.md` for scope and fail-open exemptions.
+
 Fallback: EN **⚓ Which coder should take over if the primary coder runs out of quota or fails? You will be asked before each switch.** TR: “⚓ Ana kodlayıcının kotası dolar ya da çalışmazsa hangi kodlayıcıya geçilsin? Geçmeden önce her seferinde sana sorulur.” Working detected coders by model name; “No fallback” first, unmarked. Selection: `--fallback-agent AGENT --fallback-model MODEL`; No fallback: neither flag. Never offer for Claude primary.
 
 Reviewer:

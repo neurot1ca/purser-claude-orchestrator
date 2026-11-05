@@ -20,6 +20,18 @@ type securityFixtureCase struct {
 	Reason string `json:"reason"`
 }
 
+func TestDelegationRoleSetting(t *testing.T) {
+	if ok, _ := ValidateSecurityKey("user", "roles", "enforce_delegation"); !ok {
+		t.Fatal("key rejected")
+	}
+	for _, value := range []any{false, true, "false"} {
+		_, boolean := value.(bool)
+		if ok, _ := ValidateSecurityValue("roles", "enforce_delegation", value); ok != boolean {
+			t.Fatalf("value %v: valid=%v", value, ok)
+		}
+	}
+}
+
 func TestSecurityPythonFixture(t *testing.T) {
 	path := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_profile", "security.json")
 	data, err := os.ReadFile(path)

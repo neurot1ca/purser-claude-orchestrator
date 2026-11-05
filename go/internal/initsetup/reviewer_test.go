@@ -338,3 +338,45 @@ func TestProjectReviewerSetKeepsCoderAndDisablesGlobalReviewer(t *testing.T) {
 		t.Fatalf("effective roles/coding = %#v / %#v", roles, coding)
 	}
 }
+
+func TestRoleCommandsPreserveDelegationOptOut(t *testing.T) {
+	for _, command := range []string{"init", "reviewer set"} {
+		t.Run(command, func(t *testing.T) {
+			home, root, restore := initTestEnvironment(t)
+			defer restore()
+			state := t.TempDir()
+			t.Setenv("PURSER_STATE_DIR", state)
+			globalPath := filepath.Join(home, ".orchestrator", "config.toml")
+			if err := os.MkdirAll(filepath.Dir(globalPath), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(globalPath, []byte("[roles]\ncoder = 'codex'\nenforce_delegation = false\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// First migrate global roles, then rewrite the existing project roles.
+			for i := 0; i < 2; i++ {
+				var output strings.Builder
+				var code int
+				if command == "init" {
+					code = Run(&output, &strings.Builder{}, []string{"--apply", "--coder", "claude", "--reviewer", "none", "--json"})
+				} else {
+					code = ReviewerRun(&output, &strings.Builder{}, []string{"set", "--cwd", root, "--agent", "none", "--json"})
+				}
+				if code != 0 {
+					t.Fatalf("%s: %s", command, output.String())
+				}
+				raw, err := os.ReadFile(profile.ProjectRolesPath(state, root))
+				if err != nil {
+					t.Fatal(err)
+				}
+				values, _, err := profile.DecodeTOML(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if value := values["roles"].(map[string]any)["enforce_delegation"]; value != false {
+					t.Fatalf("%s rewrite %d: opt-out = %#v, want boolean false", command, i, value)
+				}
+			}
+		})
+	}
+}
