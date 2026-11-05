@@ -22,7 +22,7 @@ With a non-Claude coder selected, main Claude must delegate non-trivial source
 edits through `purser:dispatcher` or `codex_start`. Omitted `enforce_delegation`
 means enabled, including in existing files. The guard's deny text is:
 
-> Delegate this code change to the selected coder through the purser:dispatcher agent or codex_start. Only if the user asks, set enforce_delegation = false under [roles] in roles.toml to allow direct edits for this project.
+> Delegate this code change to the selected coder through the purser:dispatcher agent or codex_start.
 
 This does not change SessionStart guidance.
 

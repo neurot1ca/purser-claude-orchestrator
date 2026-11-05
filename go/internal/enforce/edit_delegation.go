@@ -16,7 +16,7 @@ import (
 	"purser-hook/internal/projectkey"
 )
 
-const editDelegationReason = "Delegate this code change to the selected coder through the purser:dispatcher agent or codex_start. Only if the user asks, set enforce_delegation = false under [roles] in roles.toml to allow direct edits for this project."
+const editDelegationReason = "Delegate this code change to the selected coder through the purser:dispatcher agent or codex_start."
 
 func editTool(tool string) bool {
 	return tool == "Edit" || tool == "Write" || tool == "MultiEdit" || tool == "NotebookEdit"

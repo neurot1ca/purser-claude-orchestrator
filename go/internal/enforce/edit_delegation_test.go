@@ -197,7 +197,7 @@ func TestEditDelegation(t *testing.T) {
 			if got := response != nil; got != deny {
 				t.Fatalf("deny=%v, want %v; response=%v error=%v", got, deny, response, err)
 			}
-			if deny && mapValue(response["hookSpecificOutput"])["permissionDecisionReason"] != "Delegate this code change to the selected coder through the purser:dispatcher agent or codex_start. Only if the user asks, set enforce_delegation = false under [roles] in roles.toml to allow direct edits for this project." {
+			if deny && mapValue(response["hookSpecificOutput"])["permissionDecisionReason"] != "Delegate this code change to the selected coder through the purser:dispatcher agent or codex_start." {
 				t.Fatalf("wrong deny: %v", response)
 			}
 		})
