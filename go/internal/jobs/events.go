@@ -15,14 +15,16 @@ const AgyBackgroundTaskAbandonedCode = "AGY_BACKGROUND_TASK_ABANDONED"
 
 // EventResult is the interpretation of an agent's JSON event stream.
 type EventResult struct {
-	ThreadID string           `json:"threadId,omitempty"`
-	Status   string           `json:"status"`
-	Failure  string           `json:"failure,omitempty"`
-	Final    string           `json:"final,omitempty"`
-	Notes    []string         `json:"notes,omitempty"`
-	Findings []map[string]any `json:"findings,omitempty"`
-	Warnings []map[string]any `json:"warnings,omitempty"`
-	Usage    map[string]any   `json:"usage,omitempty"`
+	ThreadID          string           `json:"threadId,omitempty"`
+	Status            string           `json:"status"`
+	Failure           string           `json:"failure,omitempty"`
+	LastStepReason    string           `json:"lastStepReason,omitempty"`
+	MissingCompletion bool             `json:"missingCompletion,omitempty"`
+	Final             string           `json:"final,omitempty"`
+	Notes             []string         `json:"notes,omitempty"`
+	Findings          []map[string]any `json:"findings,omitempty"`
+	Warnings          []map[string]any `json:"warnings,omitempty"`
+	Usage             map[string]any   `json:"usage,omitempty"`
 }
 
 // EventStream consumes output as it arrives so ThreadID is available before
@@ -94,6 +96,15 @@ func (s *EventStream) consume(line []byte) {
 		}
 	case "opencode":
 		session = nonemptyString(event["sessionID"])
+		if kind == "step_finish" {
+			part, _ := event["part"].(map[string]any)
+			reason := nonemptyString(part["reason"])
+			if reason != "stop" {
+				s.result.LastStepReason = reason
+			} else {
+				s.result.LastStepReason = ""
+			}
+		}
 		if kind == "error" {
 			failure = eventMessage(event)
 		}
@@ -405,6 +416,9 @@ func (s *EventStream) Result(interrupted bool, exitCode int, stderr string) Even
 	if interrupted {
 		s.result.Status = "interrupted"
 		s.result.Failure = "cancelled"
+	}
+	if s.agent == "opencode" && s.result.Status == "incomplete" && !interrupted {
+		s.result.MissingCompletion = true
 	}
 	if !interrupted && exitCode != 0 && s.result.Status != "error" {
 		s.result.Status = "error"

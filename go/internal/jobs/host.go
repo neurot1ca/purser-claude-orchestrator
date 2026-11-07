@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/ledger"
@@ -512,6 +513,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	}
 	var result EventResult
 	var failureEvidence map[string]any
+	var exitCode int
 	for {
 		command := proc.Hide(exec.CommandContext(ctx, commandArgs[0], commandArgs[1:]...))
 		if len(childEnv) != 0 {
@@ -647,7 +649,7 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 				return nil, checkpointErr
 			}
 		}
-		exitCode := treeResult.RootExit
+		exitCode = treeResult.RootExit
 		if runErr != nil && exitCode == 0 {
 			exitCode = 1
 		}
@@ -712,6 +714,13 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 		failureEvidence = LaunchFailureEvidence(agent, stream.Events(), stderr.String(), true,
 			numberOr(activity["stdoutBytes"], 0) > 0, hostOutputHasData(args.OutputPath), &exitCode)
+		if result.MissingCompletion {
+			notes := boundedOpenCodeNotes(result.Notes)
+			failureEvidence["missingCompletion"] = map[string]any{
+				"provider": "OpenCode", "lastStepReason": result.LastStepReason,
+				"toolErrorNotes": notes, "exitCode": exitCode,
+			}
+		}
 		if err = saveHostAttemptFields(path, jobID, generation, token, result.Status != "success" || result.ThreadID == "", failureEvidence); err != nil {
 			return nil, err
 		}
@@ -779,7 +788,14 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		if message == "" {
 			message = "Codex completion event missing"
 		}
-		message = "Codex failed: " + message
+		if result.MissingCompletion {
+			message = fmt.Sprintf("OpenCode failed: completion event missing; last step reason: %s; exit code: %d", result.LastStepReason, exitCode)
+			if notes := boundedOpenCodeNotes(result.Notes); len(notes) > 0 {
+				message += "; " + strings.Join(notes, "; ")
+			}
+		} else {
+			message = "Codex failed: " + message
+		}
 		code := "CODEX_FAILED"
 		if attempts, valid := recoveryInteger(job, "capacityRetryAttempts"); valid && attempts >= 2 &&
 			failureEvidence["type"] == "RATE_LIMITED" && failureEvidence["noWorkProof"] == true {
@@ -826,6 +842,25 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		return nil, err
 	}
 	return map[string]any{"status": "ok"}, nil
+}
+
+func boundedOpenCodeNotes(notes []string) []string {
+	if len(notes) > 3 {
+		notes = notes[len(notes)-3:]
+	}
+	bounded := make([]string, len(notes))
+	for i, note := range notes {
+		if len(note) > 300 {
+			end := 297
+			for end > 0 && !utf8.RuneStart(note[end]) {
+				end--
+			}
+			bounded[i] = note[:end] + "..."
+		} else {
+			bounded[i] = note
+		}
+	}
+	return bounded
 }
 
 // MaintenanceTestRun is host evidence; workers cannot write its durable record.

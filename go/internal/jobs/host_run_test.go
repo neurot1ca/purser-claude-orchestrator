@@ -83,6 +83,11 @@ func TestHostFakeWorker(t *testing.T) {
 			}
 		}
 		_, _ = os.Stdout.WriteString("{\"type\": \"step_start\", \"sessionID\": \"fake-session\"}\r\n")
+		if mode == "missing_completion" {
+			_, _ = os.Stdout.WriteString("{\"type\":\"tool_use\",\"sessionID\":\"fake-session\",\"part\":{\"tool\":\"bash\",\"state\":{\"status\":\"error\",\"error\":\"The user rejected permission to use this specific tool call.\"}}}\n")
+			_, _ = os.Stdout.WriteString("{\"type\":\"step_finish\",\"sessionID\":\"fake-session\",\"part\":{\"reason\":\"tool-calls\"}}\n")
+			os.Exit(0)
+		}
 		if mode == "agent_failure" {
 			_, _ = os.Stdout.WriteString("{\"type\": \"error\", \"message\": \"fake agent failure\"}\r\n")
 			os.Exit(1)
@@ -357,6 +362,57 @@ func TestHostPassesOpenCodeReadOnlyPolicyAndCapturesFinalReport(t *testing.T) {
 	}
 	if content, err := os.ReadFile(filepath.Join(dir, outputFile)); err != nil || string(content) != "fake answer" {
 		t.Fatalf("worker report output = %q, err=%v", content, err)
+	}
+}
+
+func TestOpenCodeMissingCompletionFailureSurvivesResultConsumption(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": float64(time.Now().Add(time.Minute).UnixNano()) / 1e9,
+		"repoRoot": state, "worktreePath": state,
+	})
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex", "agent": "opencode", "codexBin": "opencode", "args": map[string]any{"cwd": state, "prompt": "plan"},
+	})
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "missing_completion")
+	t.Setenv("PURSER_HOST_FAKE_AGENT", "opencode")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+	}}
+	if _, err = RunHostGeneration(dir, hostTestID, 1, "owner", options); err != nil {
+		t.Fatal(err)
+	}
+	job := readJob(dir, hostTestID)
+	var stateValue, code, message string
+	if !job.Get("state", &stateValue) || stateValue != "FAILED" ||
+		!job.Get("errorCode", &code) || code != "CODEX_FAILED" ||
+		!job.Get("message", &message) || !strings.Contains(message, "bash") ||
+		!strings.Contains(message, "tool-calls") || !strings.Contains(message, "completion event missing") ||
+		!strings.Contains(message, "exit code: 0") {
+		t.Fatalf("missing completion failure = %q, record: %s", message, mustRecordJSON(t, job))
+	}
+	evidence, ok := recordMap(job)["launchFailureEvidence"].(map[string]any)
+	completion, completionOK := evidence["missingCompletion"].(map[string]any)
+	if !ok || !completionOK || completion["provider"] != "OpenCode" || completion["lastStepReason"] != "tool-calls" || completion["exitCode"] != float64(0) {
+		t.Fatalf("missing completion evidence = %#v", recordMap(job)["launchFailureEvidence"])
+	}
+	notes, ok := completion["toolErrorNotes"].([]any)
+	if !ok || len(notes) != 1 || !strings.Contains(notes[0].(string), "bash") {
+		t.Fatalf("missing tool error notes = %#v", completion["toolErrorNotes"])
+	}
+	consumed := Result(state, hostTestID, float64(time.Now().UnixNano())/1e9, ResultOptions{})["structuredContent"].(map[string]any)
+	if consumed["errorCode"] != "CODEX_FAILED" || consumed["message"] != message {
+		t.Fatalf("consumed result lost failure details: %#v", consumed)
 	}
 }
 
