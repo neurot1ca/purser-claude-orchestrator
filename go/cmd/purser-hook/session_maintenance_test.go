@@ -44,6 +44,10 @@ func quoteJSON(value string) string {
 
 func TestMaintenanceReportWakeRequiresMatchingOptIn(t *testing.T) {
 	saveSessionMaintenanceHooks(t)
+	t.Setenv("PYTHONUTF8", "")
+	if err := os.Unsetenv("PYTHONUTF8"); err != nil {
+		t.Fatal(err)
+	}
 	state, root := t.TempDir(), t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", state)
 	if output, err := testutil.Hide(exec.Command("git", "-C", root, "init", "-q")).CombinedOutput(); err != nil {
