@@ -3,8 +3,10 @@ package enforce
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -109,6 +111,15 @@ func TestBootstrapFixtureCheckerRequiresExactExpectedTree(t *testing.T) {
 	if !equalEmbeddedTree(match, expected) {
 		t.Fatal("line ending, trailing newline, or hidden path rejected")
 	}
+	if err := os.MkdirAll(filepath.Join(match, ".git", "objects"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(match, ".git", "objects", "test"), []byte("repository metadata"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !equalEmbeddedTree(match, expected) {
+		t.Fatal("scratch Git metadata affected grading")
+	}
 	wrong := filepath.Join(match, "a.go")
 	data, err := os.ReadFile(wrong)
 	if err != nil {
@@ -119,6 +130,96 @@ func TestBootstrapFixtureCheckerRequiresExactExpectedTree(t *testing.T) {
 	}
 	if equalEmbeddedTree(match, expected) {
 		t.Fatal("wrong edit accepted")
+	}
+}
+
+func TestBootstrapRepositoryBoundaryInsideParentWorktree(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not on PATH")
+	}
+	parent := t.TempDir()
+	parentFile := filepath.Join(parent, "parent.txt")
+	if err := os.WriteFile(parentFile, []byte("untouched"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	init := exec.Command(git, "init", "-q")
+	init.Dir = parent
+	if output, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("initialize parent repository: %v: %s", err, output)
+	}
+	scratch := filepath.Join(parent, "opencode", "bootstrap-test")
+	if err := os.MkdirAll(scratch, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if bootstrapRepositoryRootIs(git, scratch) {
+		t.Fatal("uninitialized scratch unexpectedly had its own Git root")
+	}
+	if err := initBootstrapRepository(git, scratch); err != nil {
+		t.Fatal(err)
+	}
+	if !bootstrapRepositoryRootIs(git, scratch) {
+		t.Fatal("scratch Git root did not resolve to scratch")
+	}
+	if got, err := os.ReadFile(parentFile); err != nil || string(got) != "untouched" {
+		t.Fatalf("parent file changed: %q, %v", got, err)
+	}
+}
+
+func TestBootstrapEnvironmentRemovesGitOverridesAndSetsPWD(t *testing.T) {
+	got := bootstrapEnvironment([]string{"GIT_DIR=parent", "gIt_CeIlInG_DiReCtOrIeS=parent", "PWD=wrong", "KEEP=value"}, "scratch")
+	if !reflect.DeepEqual(got, []string{"KEEP=value", "PWD=scratch"}) {
+		t.Fatalf("bootstrap environment = %#v", got)
+	}
+}
+
+func TestBootstrapBoundaryVerificationFailureRemovesScratch(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not on PATH")
+	}
+	root := t.TempDir()
+	t.Cleanup(func() { _ = clearBootstrapReadOnly(root) })
+	template := filepath.Join(root, "template")
+	if err := os.MkdirAll(filepath.Join(template, "objects"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Git copies the template's worktree override and read-only object into scratch.
+	files := map[string]string{
+		filepath.Join(root, ".gitconfig"):              fmt.Sprintf("[init]\n\ttemplateDir = %q\n", filepath.ToSlash(template)),
+		filepath.Join(template, "config"):              fmt.Sprintf("[core]\n\tworktree = %q\n", filepath.ToSlash(root)),
+		filepath.Join(template, "objects", "readonly"): "object",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(filepath.Join(template, "objects", "readonly"), 0400); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", root)
+	probe := filepath.Join(root, "probe")
+	if err := os.Mkdir(probe, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := initBootstrapRepository(git, probe); err != nil {
+		t.Fatalf("template must permit initialization: %v", err)
+	}
+	if bootstrapRepositoryRootIs(git, probe) {
+		t.Fatal("template must cause boundary verification to fail")
+	}
+	opencode := filepath.Join(root, "opencode")
+	if err := os.Mkdir(opencode, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if runMechanicalBootstrapTask(context.Background(), root, "unused", "rename_symbol", time.Second) {
+		t.Fatal("boundary verification failure accepted")
+	}
+	entries, err := os.ReadDir(opencode)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("scratch remains after boundary verification failure: %v, %v", entries, err)
 	}
 }
 

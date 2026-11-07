@@ -7,15 +7,18 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/proc"
 )
 
@@ -569,7 +572,7 @@ func writeBootstrapInventory(path string, inventory map[string]any) error {
 
 var mechanicalBootstrapRunner = runMechanicalBootstrapTask
 
-func runMechanicalBootstrapTask(ctx context.Context, root, model, task string, timeout time.Duration) bool {
+func runMechanicalBootstrapTask(ctx context.Context, root, model, task string, timeout time.Duration) (success bool) {
 	base := "bootstrap_tasks/" + task
 	input, err := fs.Sub(mechanicalBootstrapFiles, base+"/input")
 	if err != nil {
@@ -583,7 +586,20 @@ func runMechanicalBootstrapTask(ctx context.Context, root, model, task string, t
 	if err != nil {
 		return false
 	}
-	defer func() { _ = os.RemoveAll(scratch) }()
+	defer func() {
+		cleanupErr := clearBootstrapReadOnly(scratch)
+		if err := fsretry.Retry(func() error { return os.RemoveAll(scratch) }, 2*time.Second); cleanupErr == nil {
+			cleanupErr = err
+		}
+		if cleanupErr != nil {
+			log.Printf("bootstrap scratch cleanup failed for %s: %v", scratch, cleanupErr)
+			success = false
+		}
+	}()
+	git, err := exec.LookPath("git")
+	if err != nil || initBootstrapRepository(git, scratch) != nil || !bootstrapRepositoryRootIs(git, scratch) {
+		return false
+	}
 	if copyEmbeddedTree(input, scratch) != nil {
 		return false
 	}
@@ -601,13 +617,14 @@ func runMechanicalBootstrapTask(ctx context.Context, root, model, task string, t
 	if err != nil {
 		return false
 	}
-	permissions := map[string]string{"edit": "allow", "write": "allow", "bash": "allow", "webfetch": "deny", "task": "deny", "external_directory": "deny"}
+	permissions := map[string]string{"edit": "allow", "write": "allow", "bash": "deny", "webfetch": "deny", "task": "deny", "external_directory": "deny"}
 	config, _ := json.Marshal(map[string]any{"permission": permissions, "agent": map[string]any{"purser-bootstrap": map[string]any{"mode": "primary", "permission": permissions}}})
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := proc.Hide(exec.CommandContext(commandCtx, executable, "run", "--format", "json", "--model", model, "--agent", "purser-bootstrap", "--dir", scratch, string(description)))
 	cmd.Dir = scratch
-	cmd.Env = append(os.Environ(), "OPENCODE_CONFIG_CONTENT="+string(config))
+	cmd.Env = bootstrapEnvironment(os.Environ(), scratch)
+	cmd.Env = append(cmd.Env, "OPENCODE_CONFIG_CONTENT="+string(config))
 	cmd.Stdin = nil
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
@@ -616,6 +633,81 @@ func runMechanicalBootstrapTask(ctx context.Context, root, model, task string, t
 		return false
 	}
 	return equalEmbeddedTree(scratch, expected)
+}
+
+func initBootstrapRepository(git, scratch string) error {
+	cmd := proc.Hide(exec.Command(git, "init", "-q"))
+	cmd.Dir = scratch
+	cmd.Env = bootstrapEnvironment(os.Environ(), "")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, io.Discard, io.Discard
+	return cmd.Run()
+}
+
+func bootstrapRepositoryRootIs(git, scratch string) bool {
+	cmd := proc.Hide(exec.Command(git, "-C", scratch, "rev-parse", "--show-toplevel"))
+	cmd.Dir = scratch
+	cmd.Env = bootstrapEnvironment(os.Environ(), "")
+	cmd.Stderr = io.Discard
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	want, err := canonicalBootstrapPath(scratch)
+	if err != nil {
+		return false
+	}
+	got, err := canonicalBootstrapPath(strings.TrimSpace(string(output)))
+	if err != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(got, want)
+	}
+	return got == want
+}
+
+func canonicalBootstrapPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func bootstrapEnvironment(environment []string, pwd string) []string {
+	clean := make([]string, 0, len(environment)+1)
+	for _, value := range environment {
+		key, _, _ := strings.Cut(value, "=")
+		upper := strings.ToUpper(key)
+		if strings.HasPrefix(upper, "GIT_") || strings.EqualFold(key, "PWD") {
+			continue
+		}
+		clean = append(clean, value)
+	}
+	if pwd != "" {
+		clean = append(clean, "PWD="+pwd)
+	}
+	return clean
+}
+
+func clearBootstrapReadOnly(root string) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		mode := fs.FileMode(0600)
+		if entry.IsDir() {
+			mode = 0700
+		}
+		return os.Chmod(path, mode)
+	})
 }
 
 func copyEmbeddedTree(source fs.FS, destination string) error {
@@ -668,7 +760,7 @@ func equalEmbeddedTree(actual string, expected fs.FS) bool {
 			return nil
 		}
 		relSlash := filepath.ToSlash(rel)
-		if strings.HasPrefix(firstPathSegment(relSlash), ".") {
+		if firstPathSegment(relSlash) == ".git" || strings.HasPrefix(firstPathSegment(relSlash), ".") {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
