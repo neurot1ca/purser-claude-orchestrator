@@ -149,6 +149,33 @@ func TestHostFakeWorker(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestOpenCodeFakeExecutable(t *testing.T) {
+	capture := os.Getenv("PURSER_OPENCODE_CAPTURE")
+	if capture == "" {
+		return
+	}
+	args := os.Args
+	for index, arg := range args {
+		if arg == "--" {
+			args = args[index+1:]
+			break
+		}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]any{"argv": args, "cwd": cwd, "pwd": os.Getenv("PWD")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(capture, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = os.Stdout.WriteString("{\"type\":\"step_start\",\"sessionID\":\"fake-session\"}\n{\"type\":\"step_finish\",\"sessionID\":\"fake-session\",\"part\":{\"reason\":\"stop\"}}\n")
+	os.Exit(0)
+}
+
 func TestHostMaintenanceMeasuresIsolatedImprovement(t *testing.T) {
 	for _, mode := range []string{"improvement", "no-improvement", "no-new-tests", "unsupported"} {
 		t.Run(mode, func(t *testing.T) {
@@ -288,7 +315,7 @@ func TestHostPassesOpenCodeReadOnlyPolicyAndCapturesFinalReport(t *testing.T) {
 	deadline := float64(time.Now().Add(time.Minute).UnixNano()) / 1e9
 	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
 		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
-		"signalToken": "signal", "deadlineAt": deadline, "repoRoot": root,
+		"signalToken": "signal", "deadlineAt": deadline, "repoRoot": root, "worktreePath": root,
 	})
 	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
 		// codexBin keeps the launch independent of an installed OpenCode binary.
@@ -330,6 +357,105 @@ func TestHostPassesOpenCodeReadOnlyPolicyAndCapturesFinalReport(t *testing.T) {
 	}
 	if content, err := os.ReadFile(filepath.Join(dir, outputFile)); err != nil || string(content) != "fake answer" {
 		t.Fatalf("worker report output = %q, err=%v", content, err)
+	}
+}
+
+func TestOpenCodeHostDirectoryFollowsAssignedWorktree(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		cwd         string
+		unavailable bool
+		escape      bool
+	}{
+		{name: "root"},
+		{name: "subdirectory", cwd: filepath.Join("sub dir 雪", "nested")},
+		{name: "unavailable", cwd: "missing", unavailable: true},
+		{name: "symlink escape", cwd: "escape", escape: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			repo := filepath.Join(root, "main checkout café")
+			worktree := filepath.Join(root, "assigned worktree 雪")
+			requested := filepath.Join(repo, test.cwd)
+			workerDirectory := filepath.Join(worktree, test.cwd)
+			if err := os.MkdirAll(requested, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(worktree, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if !test.unavailable && !test.escape {
+				if err := os.MkdirAll(workerDirectory, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.escape {
+				external := filepath.Join(root, "outside worktree")
+				if err := os.MkdirAll(external, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(external, workerDirectory); err != nil {
+					t.Skipf("directory symlinks unavailable: %v", err)
+				}
+			}
+			dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+				"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+				"signalToken": "signal", "deadlineAt": float64(time.Now().Add(time.Minute).UnixNano()) / 1e9,
+				"repoRoot": repo, "worktreePath": worktree,
+			})
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			capture := filepath.Join(root, "launch capture.json")
+			t.Setenv("PURSER_OPENCODE_CAPTURE", capture)
+			t.Setenv("PWD", repo)
+			writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+				"name": "codex", "agent": "opencode", "codexBin": []string{executable, "-test.run=TestOpenCodeFakeExecutable", "--"},
+				"args": map[string]any{"cwd": requested, "prompt": "inspect", "model": "google/gemini-test"},
+			})
+			if _, err := RunHostGeneration(dir, hostTestID, 1, "owner", HostOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if test.unavailable || test.escape {
+				if _, err := os.Stat(capture); !os.IsNotExist(err) {
+					t.Fatalf("OpenCode launched for invalid directory: %v", err)
+				}
+				return
+			}
+			data, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var launch struct {
+				Argv []string `json:"argv"`
+				Cwd  string   `json:"cwd"`
+				PWD  string   `json:"pwd"`
+			}
+			if err := json.Unmarshal(data, &launch); err != nil {
+				t.Fatal(err)
+			}
+			want, err := OpenCodeDirectory(worktree, workerDirectory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if launch.Cwd != want || launch.PWD != want {
+				t.Fatalf("launch cwd=%q PWD=%q, want %q", launch.Cwd, launch.PWD, want)
+			}
+			for index := 0; index < len(launch.Argv); index++ {
+				if launch.Argv[index] == "--dir" {
+					if index+1 == len(launch.Argv) || launch.Argv[index+1] != want {
+						t.Fatalf("--dir argv = %#v, want one argument %q", launch.Argv, want)
+					}
+					return
+				}
+			}
+			t.Fatalf("argv lacks --dir: %#v", launch.Argv)
+		})
 	}
 }
 

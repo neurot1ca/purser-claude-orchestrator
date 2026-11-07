@@ -94,6 +94,13 @@ func TestHostPythonOracleReplay(t *testing.T) {
 			job := map[string]any{"jobId": jobID, "call": hostParityCall, "acceptedAt": float64(time.Now().UnixNano()) / 1e9, "state": "QUEUED", "generation": 1,
 				"ownershipToken": "host-owner-token", "signalToken": "host-signal-token", "deadlineAt": float64(deadline.UnixNano()) / 1e9,
 				"leaseQueued": fixture.Name == "queued" || fixture.Name == "cancel_queued"}
+			if fixture.Name == "agent_success" || fixture.Name == "agent_failure" {
+				worktree := filepath.Join(root, "wt")
+				if err := os.MkdirAll(worktree, 0700); err != nil {
+					t.Fatal(err)
+				}
+				job["repoRoot"], job["worktreePath"] = root, worktree
+			}
 			if fixture.Name == "stale" {
 				job["generation"] = 2
 			}

@@ -344,6 +344,9 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		}
 		mapped := filepath.Join(worktreePath, relativeCWD)
 		if info, statErr := os.Stat(mapped); statErr != nil || !info.IsDir() {
+			if agent == "opencode" {
+				return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "OpenCode worktree directory is unavailable")
+			}
 			_ = job.Set("cwdFallback", relativeCWD)
 			mapped = worktreePath
 			if err = Write(path, job); err != nil {
@@ -402,6 +405,20 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 	if launch.CodexBin != nil {
 		encoded, _ := json.Marshal(launch.CodexBin)
 		args.BinaryOverride = string(encoded)
+	}
+	if agent == "opencode" {
+		worktree := worktreePath
+		if worktree == "" && research {
+			worktree = args.Cwd
+		}
+		if worktree == "" {
+			return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "OpenCode job worktree is unavailable")
+		}
+		args.Cwd, err = OpenCodeDirectory(worktree, args.Cwd)
+		if err != nil {
+			return finishHostError(path, jobID, generation, token, "CODEX_FAILED", "OpenCode worktree directory is unavailable")
+		}
+		childEnv = append(childEnv, "PWD="+args.Cwd)
 	}
 	var commandArgs []string
 	if agent == "codex" {

@@ -44,7 +44,7 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 		return legacyError(nil, "prompt must be a string"), nil
 	}
 	var threadID string
-	var cwd, model, sandbox string
+	var cwd, model, sandbox, worktreePath string
 	var configArgs []string
 	var config any
 	if name == "codex-reply" {
@@ -69,8 +69,8 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 		sandbox, _ = reply["sandbox"].(string)
 		rawConfigArgs, _ := reply["config_args"].([]any)
 		configArgs = stringSlice(rawConfigArgs)
-		if worktree, _ := record["worktreePath"].(string); worktree != "" {
-			if info, err := os.Stat(worktree); err != nil || !info.IsDir() {
+		if worktreePath, _ = record["worktreePath"].(string); worktreePath != "" {
+			if info, err := os.Stat(worktreePath); err != nil || !info.IsDir() {
 				result := legacyError(&threadID, "worktree is unavailable")
 				result["errorCode"] = "WORKTREE_MISSING"
 				return result, nil
@@ -159,6 +159,13 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 	if agent == "opencode" && sandbox != "" {
 		return legacyError(nil, "OpenCode sandbox has no verified equivalent"), nil
 	}
+	if agent == "opencode" {
+		directory, directoryErr := jobs.OpenCodeDirectory(worktreePath, cwd)
+		if directoryErr != nil {
+			return legacyError(nil, "OpenCode worktree directory is unavailable"), nil
+		}
+		cwd = directory
+	}
 	if err := os.MkdirAll(jobs.StateDir(), 0o700); err != nil {
 		return legacyError(nil, err.Error()), nil
 	}
@@ -209,7 +216,25 @@ func runSynchronousContext(ctx context.Context, args map[string]any, name string
 		return legacyError(nil, err.Error()), nil
 	}
 	command := proc.Hide(exec.Command(commandArgs[0], commandArgs[1:]...))
-	command.Env = append(os.Environ(), "PURSER_WORKER=1")
+	command.Env = os.Environ()
+	environment := []string{"PURSER_WORKER=1"}
+	if agent == "opencode" {
+		environment = append(environment, "PWD="+cwd)
+	}
+	for _, override := range environment {
+		key, _, _ := strings.Cut(override, "=")
+		found := false
+		for index, entry := range command.Env {
+			entryKey, _, _ := strings.Cut(entry, "=")
+			if strings.EqualFold(entryKey, key) {
+				command.Env[index] = override
+				found = true
+			}
+		}
+		if !found {
+			command.Env = append(command.Env, override)
+		}
+	}
 	command.Dir = cwd
 	if agent == "codex" || agent == "cursor" {
 		command.Stdin = strings.NewReader(prompt)

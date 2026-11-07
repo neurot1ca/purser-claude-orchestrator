@@ -467,6 +467,7 @@
       "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "opencode",
+      "worktreePath": "__ROOT__/wt",
       "liveness": {
         "route": null,
         "agent": "opencode",
@@ -480,12 +481,13 @@
       "pid": "__PID__",
       "threadId": "fake-session",
       "threadConfig": {
-        "cwd": "__ROOT__",
+        "cwd": "__ROOT__/wt",
         "model": "provider/model",
         "config_args": [],
         "sandbox": null,
         "agent": "opencode",
-        "repoRoot": "__ROOT__"
+        "repoRoot": "__ROOT__",
+        "worktreePath": "__ROOT__/wt"
       },
       "exitCode": 0,
       "responsivenessAttempts": 1,
@@ -514,6 +516,7 @@
       "repoRoot": "__ROOT__",
       "startedAt": "__TIME__",
       "activeAgent": "opencode",
+      "worktreePath": "__ROOT__/wt",
       "liveness": {
         "route": null,
         "agent": "opencode",
@@ -527,12 +530,13 @@
       "pid": "__PID__",
       "threadId": "fake-session",
       "threadConfig": {
-        "cwd": "__ROOT__",
+        "cwd": "__ROOT__/wt",
         "model": "provider/model",
         "config_args": [],
         "sandbox": null,
         "agent": "opencode",
-        "repoRoot": "__ROOT__"
+        "repoRoot": "__ROOT__",
+        "worktreePath": "__ROOT__/wt"
       },
       "exitCode": 1,
       "launchFailureEvidence": {

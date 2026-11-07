@@ -75,8 +75,19 @@ func TestAgentCommandPythonParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(got, test.Argv) {
-				t.Fatalf("argv mismatch\n got: %#v\nwant: %#v", got, test.Argv)
+			want := test.Argv
+			if test.Agent == "opencode" {
+				absolute, absErr := filepath.Abs("C:/repo")
+				if absErr != nil {
+					t.Fatal(absErr)
+				}
+				want = append([]string(nil), test.Argv...)
+				for index := range want {
+					want[index] = strings.ReplaceAll(want[index], "__CWD__", absolute)
+				}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("argv mismatch\n got: %#v\nwant: %#v", got, want)
 			}
 		})
 	}
@@ -284,7 +295,7 @@ func assertAgentError(t *testing.T, err error, want string) {
 func stringPointer(value string) *string { return &value }
 
 func TestWorkspaceWriteSandboxIsTheBridgedCodersDefault(t *testing.T) {
-	in := AgentCommandInput{Agent: "opencode", Tool: "codex", Model: "opencode/big-pickle", Prompt: "work"}
+	in := AgentCommandInput{Agent: "opencode", Tool: "codex", CWD: t.TempDir(), Model: "opencode/big-pickle", Prompt: "work"}
 	want, err := BuildAgentCommand(in)
 	if err != nil {
 		t.Fatal(err)

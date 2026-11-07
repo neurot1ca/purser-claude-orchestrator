@@ -107,6 +107,48 @@ type AgentCommandInput struct {
 	Prompt     string
 }
 
+// OpenCodeDirectory returns the canonical launch directory after confirming it
+// exists and, when assigned, is inside the job worktree.
+func OpenCodeDirectory(worktree, cwd string) (string, error) {
+	if cwd == "" {
+		return "", errors.New("OpenCode directory is unavailable")
+	}
+	resolve := func(path string) (string, error) {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return "", err
+		}
+		resolved, err := filepath.EvalSymlinks(absolute)
+		if err != nil {
+			return "", err
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || !info.IsDir() {
+			return "", errors.New("OpenCode directory is unavailable")
+		}
+		return filepath.Clean(resolved), nil
+	}
+	directory, err := resolve(cwd)
+	if err != nil {
+		return "", errors.New("OpenCode directory is unavailable")
+	}
+	if worktree == "" {
+		return directory, nil
+	}
+	root, err := resolve(worktree)
+	if err != nil {
+		return "", errors.New("OpenCode worktree is unavailable")
+	}
+	if !strings.EqualFold(filepath.VolumeName(root), filepath.VolumeName(directory)) {
+		return "", errors.New("OpenCode directory is outside the assigned worktree")
+	}
+	relative, err := filepath.Rel(root, directory)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("OpenCode directory is outside the assigned worktree")
+	}
+	return directory, nil
+}
+
 const openCodeReadOnlyAgent = "purser-read-only"
 
 // AgentCommandEnvironment adds launch-time policy that cannot be expressed in
@@ -381,7 +423,11 @@ func BuildAgentCommand(in AgentCommandInput) ([]string, error) {
 			return nil, errors.New("unsupported OpenCode config")
 		}
 		command := append([]string{}, in.Prefix...)
-		command = append(command, "run", "--format", "json", "--model", in.Model)
+		directory, err := filepath.Abs(in.CWD)
+		if err != nil || in.CWD == "" {
+			return nil, errors.New("OpenCode directory is unavailable")
+		}
+		command = append(command, "run", "--format", "json", "--dir", directory, "--model", in.Model)
 		if in.Sandbox != nil {
 			command = append(command, "--agent", openCodeReadOnlyAgent)
 		}
