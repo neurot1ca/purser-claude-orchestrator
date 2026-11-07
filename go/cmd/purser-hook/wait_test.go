@@ -64,7 +64,7 @@ func TestWaitEmpty255ReobservesSameJob(t *testing.T) {
 		line  string
 	}{
 		{empty: true, state: "RUNNING", code: 255},
-		{state: "RUNNING", code: 5, line: "purser-wait samejob STILL_WAITING"},
+		{state: "RUNNING", code: 0, line: "purser-wait samejob STILL_WAITING"},
 		{state: "SUCCEEDED", code: 0, line: "purser-wait samejob SUCCEEDED"},
 	} {
 		job["state"] = tc.state

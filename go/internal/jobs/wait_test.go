@@ -88,8 +88,8 @@ func TestWaitReturnsStillWaitingAtConfiguredBound(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("Wait took %s, want configured bound within 2s", elapsed)
 	}
-	if got.ExitCode != 5 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait queued STILL_WAITING" {
-		t.Fatalf("Wait = %#v, want STILL_WAITING with exit code 5", got)
+	if got.ExitCode != 0 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait queued STILL_WAITING" {
+		t.Fatalf("Wait = %#v, want STILL_WAITING with exit code 0", got)
 	}
 }
 
@@ -117,8 +117,8 @@ func TestWaitDoesNotSleepAfterSignalExhaustsBound(t *testing.T) {
 		time.Sleep(duration)
 	}
 	got := Wait(root, "bounded")
-	if got.ExitCode != 5 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait bounded STILL_WAITING" {
-		t.Fatalf("Wait = %#v, want STILL_WAITING with exit code 5", got)
+	if got.ExitCode != 0 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait bounded STILL_WAITING" {
+		t.Fatalf("Wait = %#v, want STILL_WAITING with exit code 0", got)
 	}
 }
 
@@ -311,7 +311,7 @@ func TestWaitLiveHostBeforeDeadlineStillWaiting(t *testing.T) {
 	})
 	got := Wait(root, "livehost")
 	fields := readWaitFields(t, path)
-	if got.ExitCode != 5 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait livehost STILL_WAITING" || fields["state"] != "RUNNING" {
+	if got.ExitCode != 0 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait livehost STILL_WAITING" || fields["state"] != "RUNNING" {
 		t.Fatalf("result=%#v record=%#v", got, fields)
 	}
 }
@@ -325,7 +325,7 @@ func TestWaitUnknownHostLivenessBeforeDeadlineStillWaiting(t *testing.T) {
 	})
 	got := Wait(root, "unknownhost")
 	fields := readWaitFields(t, path)
-	if got.ExitCode != 5 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait unknownhost STILL_WAITING" || fields["state"] != "RUNNING" {
+	if got.ExitCode != 0 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait unknownhost STILL_WAITING" || fields["state"] != "RUNNING" {
 		t.Fatalf("result=%#v record=%#v", got, fields)
 	}
 }

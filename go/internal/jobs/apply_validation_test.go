@@ -103,7 +103,7 @@ func TestWaitApplyValidationRunningReturnsStillWaiting(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := WaitApplyValidation(root, key, id)
-	if got.ExitCode != 5 || len(got.Lines) != 1 || got.Lines[0] != "purser-validation STILL_WAITING" {
+	if got.ExitCode != 0 || len(got.Lines) != 1 || got.Lines[0] != "purser-validation STILL_WAITING" {
 		t.Fatalf("WaitApplyValidation = %#v", got)
 	}
 }

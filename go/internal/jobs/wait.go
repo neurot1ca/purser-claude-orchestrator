@@ -88,7 +88,7 @@ func WaitContext(ctx context.Context, stateRoot, jobID string) WaitResult {
 		}
 		remainingWaitSeconds := float64(maxWaitSeconds) - time.Since(started).Seconds()
 		if remainingWaitSeconds <= 0 {
-			return WaitResult{Lines: []string{"purser-wait " + jobID + " STILL_WAITING"}, ExitCode: 5}
+			return WaitResult{Lines: []string{"purser-wait " + jobID + " STILL_WAITING"}, ExitCode: 0}
 		}
 		if port != 0 {
 			wait := time.Duration(math.Min(1, math.Min(remainingSeconds, remainingWaitSeconds)) * float64(time.Second))

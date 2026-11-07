@@ -250,7 +250,7 @@ func WaitApplyValidation(stateRoot, key, id string) WaitResult {
 		}
 		remaining := time.Duration(maxWaitSeconds)*time.Second - time.Since(started)
 		if remaining <= 0 {
-			return WaitResult{Lines: []string{"purser-validation STILL_WAITING"}, ExitCode: 5}
+			return WaitResult{Lines: []string{"purser-validation STILL_WAITING"}, ExitCode: 0}
 		}
 		waitSleep(min(100*time.Millisecond, remaining))
 	}
