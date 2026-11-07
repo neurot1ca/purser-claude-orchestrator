@@ -16,6 +16,7 @@ import (
 )
 
 func TestPostStartPythonWriteFixture(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
 	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/tests/fixtures/go_policy/post_start.json")
 	if err != nil {
 		t.Fatal(err)
