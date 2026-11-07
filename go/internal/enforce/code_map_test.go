@@ -134,8 +134,13 @@ func TestCodeMapNativeFitsOversizedRender(t *testing.T) {
 	if len(data) > codeMapMaxBytes {
 		t.Fatalf("rendered %d bytes, limit %d", len(data), codeMapMaxBytes)
 	}
-	if !strings.Contains(string(data), "files omitted:") {
-		t.Fatal("oversized render did not mark omitted files")
+	if !strings.Contains(string(data), "symbols omitted:") || strings.Contains(string(data), "files omitted:") {
+		t.Fatal("oversized render did not preserve paths and mark omitted symbols")
+	}
+	for i := 0; i < 5000; i++ {
+		if !strings.Contains(string(data), fmt.Sprintf("src/file-%04d.go\n", i)) {
+			t.Fatalf("oversized render omitted path src/file-%04d.go", i)
+		}
 	}
 	if !strings.Contains(string(data), "src/file-4999.go") {
 		t.Fatal("changed file was not prioritized")

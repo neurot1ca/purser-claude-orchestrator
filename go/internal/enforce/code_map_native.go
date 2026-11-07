@@ -243,7 +243,7 @@ func codeMapMarkPending(files []codeMapFile, start int, old map[string]json.RawM
 }
 
 func codeMapLanguage(path string) string {
-	language := map[string]string{".py": "python", ".pyi": "python", ".js": "javascript", ".jsx": "javascript", ".ts": "typescript", ".tsx": "tsx", ".go": "go", ".rs": "rust", ".java": "java", ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".hpp": "cpp", ".cs": "c_sharp", ".rb": "ruby", ".php": "php", ".swift": "swift", ".kt": "kotlin", ".kts": "kotlin", ".scala": "scala", ".lua": "lua", ".sh": "bash", ".bash": "bash"}
+	language := map[string]string{".py": "python", ".pyi": "python", ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "tsx", ".go": "go", ".rs": "rust", ".java": "java", ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".hpp": "cpp", ".cs": "c_sharp", ".rb": "ruby", ".php": "php", ".swift": "swift", ".kt": "kotlin", ".kts": "kotlin", ".scala": "scala", ".lua": "lua", ".sh": "bash", ".bash": "bash"}
 	if value := language[strings.ToLower(filepath.Ext(path))]; value != "" {
 		return value
 	}
@@ -263,6 +263,54 @@ func renderCodeMapNativeWithPriority(entries map[string]codeMapNativeEntry, chan
 	if len(data) <= codeMapMaxBytes {
 		return data, nil
 	}
+	allPaths := append([]string(nil), paths...)
+	shed := make([]string, 0, len(entries))
+	omittedSymbols := map[string]bool{}
+	for path, entry := range entries {
+		if len(entry.Symbols) > 0 {
+			shed = append(shed, path)
+			omittedSymbols[path] = true
+		}
+	}
+	if len(renderCodeMapNativeWithOmissions(entries, allPaths, 0, len(shed), omittedSymbols)) <= codeMapMaxBytes {
+		sort.Slice(shed, func(i, j int) bool {
+			left, right := entries[shed[i]], entries[shed[j]]
+			leftChanged, rightChanged := changed[shed[i]], changed[shed[j]]
+			if leftChanged != rightChanged {
+				return !leftChanged
+			}
+			leftTest, rightTest := codeMapTestOrFixturePath(shed[i]), codeMapTestOrFixturePath(shed[j])
+			if !leftChanged && leftTest != rightTest {
+				return leftTest
+			}
+			if left.MTimeNS != right.MTimeNS {
+				return left.MTimeNS < right.MTimeNS
+			}
+			return shed[i] < shed[j]
+		})
+		low, high := 0, len(shed)
+		for low < high {
+			middle := low + (high-low)/2
+			omittedSymbols := make(map[string]bool, middle)
+			for _, path := range shed[:middle] {
+				omittedSymbols[path] = true
+			}
+			candidate := renderCodeMapNativeWithOmissions(entries, allPaths, 0, middle, omittedSymbols)
+			if len(candidate) <= codeMapMaxBytes {
+				high = middle
+			} else {
+				low = middle + 1
+			}
+		}
+		omittedSymbols := make(map[string]bool, low)
+		for _, path := range shed[:low] {
+			omittedSymbols[path] = true
+		}
+		data = renderCodeMapNativeWithOmissions(entries, allPaths, 0, low, omittedSymbols)
+		if len(data) <= codeMapMaxBytes {
+			return data, nil
+		}
+	}
 	sort.Slice(paths, func(i, j int) bool {
 		left, right := entries[paths[i]], entries[paths[j]]
 		if changed[paths[i]] != changed[paths[j]] {
@@ -276,24 +324,41 @@ func renderCodeMapNativeWithPriority(entries map[string]codeMapNativeEntry, chan
 	low, high := 0, len(paths)
 	for low < high {
 		middle := low + (high-low+1)/2
-		candidate := renderCodeMapNativePaths(entries, paths[:middle], len(paths)-middle)
+		candidate := renderCodeMapNativeWithOmissions(entries, paths[:middle], len(paths)-middle, 0, nil)
 		if len(candidate) <= codeMapMaxBytes {
 			low = middle
 		} else {
 			high = middle - 1
 		}
 	}
-	data = renderCodeMapNativePaths(entries, paths[:low], len(paths)-low)
+	data = renderCodeMapNativeWithOmissions(entries, paths[:low], len(paths)-low, 0, nil)
 	if len(data) > codeMapMaxBytes {
 		return nil, errors.New("rendered map")
 	}
 	return data, nil
 }
 
+func codeMapTestOrFixturePath(path string) bool {
+	path = strings.ToLower(filepath.ToSlash(path))
+	parts := strings.Split(path, "/")
+	for _, part := range parts[:len(parts)-1] {
+		switch part {
+		case "test", "tests", "testdata", "fixtures":
+			return true
+		}
+	}
+	base := parts[len(parts)-1]
+	return strings.HasSuffix(base, "_test.go") || strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") ||
+		strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py") || strings.HasSuffix(base, "_test.py")
+}
+
 func renderCodeMapNativePaths(entries map[string]codeMapNativeEntry, paths []string, omitted int) []byte {
+	return renderCodeMapNativeWithOmissions(entries, paths, omitted, 0, nil)
+}
+
+func renderCodeMapNativeWithOmissions(entries map[string]codeMapNativeEntry, paths []string, omitted, omittedSymbols int, shed map[string]bool) []byte {
 	coveredSet := map[string]bool{}
-	for _, path := range paths {
-		entry := entries[path]
+	for _, entry := range entries {
 		if entry.Coverage == "native" {
 			coveredSet[entry.Language] = true
 		}
@@ -310,6 +375,9 @@ func renderCodeMapNativePaths(entries map[string]codeMapNativeEntry, paths []str
 	for _, path := range paths {
 		entry := entries[path]
 		lines = append(lines, path)
+		if shed[path] {
+			continue
+		}
 		if entry.Coverage == "pending" {
 			lines = append(lines, "  symbols: pending")
 		} else if entry.Coverage == "unavailable" && entry.Language != "unknown" {
@@ -334,6 +402,9 @@ func renderCodeMapNativePaths(entries map[string]codeMapNativeEntry, paths []str
 	}
 	if omitted > 0 {
 		lines = append(lines, fmt.Sprintf("  files omitted: %d (map size limit)", omitted))
+	}
+	if omittedSymbols > 0 {
+		lines = append(lines, fmt.Sprintf("  symbols omitted: %d files (map size limit)", omittedSymbols))
 	}
 	return []byte(strings.Join(lines, "\n") + "\n")
 }

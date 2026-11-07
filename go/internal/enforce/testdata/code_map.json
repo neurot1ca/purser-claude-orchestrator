@@ -1,6 +1,6 @@
 {
   "oracle": "Python .claude/hooks/orchestrator/code_map.py inventory and refresh cache",
-  "version": 5,
+  "version": 6,
   "parser": "unavailable",
   "limits": {
     "max_files": 5000,

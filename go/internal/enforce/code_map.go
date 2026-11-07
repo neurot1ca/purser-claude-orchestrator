@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	codeMapVersion              = 5
+	codeMapVersion              = 6
 	codeMapMaxFiles             = 5000
 	codeMapMaxFileBytes         = 512 * 1024
 	codeMapMaxTotal             = 32 * 1024 * 1024

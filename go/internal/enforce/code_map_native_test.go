@@ -194,7 +194,11 @@ func TestCodeMapNativeDefaultExtractors(t *testing.T) {
 	r, s := nativeMapRepo(t, map[string]string{
 		"sample.py":  "class Box:\n    def open(self):\n        pass\n",
 		"sample.js":  "export default () => {};\nexport const run = () => {};\nclass Box { open() {} }\n",
+		"sample.mjs": "export const run = () => {};\n",
+		"sample.cjs": "const run = () => {};\n",
 		"sample.ts":  "export default () => {};\nexport const run = () => {};\nclass Box { open() {} }\n",
+		"sample.mts": "export const run = () => {};\n",
+		"sample.cts": "export const run = () => {};\n",
 		"sample.tsx": "export default () => {};\nexport const run = () => {};\nclass Box { open() {} }\n",
 		"sample.rs":  "fn unavailable() {}\n",
 	})
@@ -207,7 +211,9 @@ func TestCodeMapNativeDefaultExtractors(t *testing.T) {
 	for _, want := range []string{
 		"Parser: native Go/Python/tree-sitter", "sample.py\n  1 class Box\n  2 method Box.open",
 		"sample.js\n  1 function default\n  2 function run\n  3 class Box\n  3 method Box.open",
+		"sample.mjs\n  1 function run", "sample.cjs\n  1 function run",
 		"sample.ts\n  1 function default\n  2 function run\n  3 class Box\n  3 method Box.open",
+		"sample.mts\n  1 function run", "sample.cts\n  1 function run",
 		"sample.tsx\n  1 function default\n  2 function run\n  3 class Box\n  3 method Box.open",
 		"sample.rs\n  1 function unavailable",
 	} {
@@ -238,11 +244,98 @@ func TestCodeMapNativeOracleOrderingAndTruncation(t *testing.T) {
 	p, status := refreshCodeMapNative(r, s, time.Second, e, nil)
 	got, err := os.ReadFile(p)
 	text := string(got)
-	if err != nil || status != "FRESH" || !strings.HasPrefix(text, "# Code map v5\nParser: native Go/Python/tree-sitter\n") ||
+	if err != nil || status != "FRESH" || !strings.HasPrefix(text, "# Code map v6\nParser: native Go/Python/tree-sitter\n") ||
 		!strings.Contains(text, "a_first.py\n  1 function first(argument_0: str='value'") ||
 		!strings.Contains(text, "m_middle.py\n  1 class Zebra\n  3 class Alpha") ||
 		!strings.Contains(text, "z_last.py\n  1 function zed()") {
 		t.Fatalf("status=%s err=%v\n%s", status, err, got)
+	}
+}
+
+func TestCodeMapNativeShedsSymbolsBeforeFiles(t *testing.T) {
+	largeSymbols := func(name string, count int) [][]any {
+		symbols := make([][]any, count)
+		for i := range symbols {
+			symbols[i] = []any{i + 1, "function", name, "()"}
+		}
+		return symbols
+	}
+	entries := map[string]codeMapNativeEntry{
+		"test/old_test.go":  {MTimeNS: 1, Language: "go", Coverage: "native", Symbols: largeSymbols("testOld", 7000)},
+		"tests/new.test.js": {MTimeNS: 2, Language: "javascript", Coverage: "native", Symbols: largeSymbols("testNew", 7000)},
+		"src/old.js":        {MTimeNS: 3, Language: "javascript", Coverage: "native", Symbols: largeSymbols("ordinary", 7000)},
+		"src/changed.js":    {MTimeNS: 4, Language: "javascript", Coverage: "native", Symbols: largeSymbols("changed", 7000)},
+	}
+	data, err := renderCodeMapNativeWithPriority(entries, map[string]bool{"src/changed.js": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, path := range []string{"test/old_test.go", "tests/new.test.js", "src/old.js", "src/changed.js"} {
+		if !strings.Contains(text, path+"\n") {
+			t.Errorf("missing inventory path %s", path)
+		}
+	}
+	if !strings.Contains(text, "symbols omitted: 3 files (map size limit)") || strings.Contains(text, "function testOld") || strings.Contains(text, "function testNew") || strings.Contains(text, "function ordinary") || !strings.Contains(text, "function changed") {
+		t.Fatalf("symbols were not shed in priority order with a truthful count; summary=%q\n%s", strings.TrimSpace(text[len(text)-min(len(text), 120):]), text[:min(len(text), 400)])
+	}
+	if !strings.Contains(text, "Covered languages: go, javascript") {
+		t.Fatalf("coverage omitted language whose symbols were shed:\n%s", text[:200])
+	}
+	excerpt := scopedCodeMapExcerpt(data, []string{"tests/new.test.js"}, "header\n", "map.txt")
+	if !strings.Contains(excerpt, "tests/new.test.js\n") || !strings.Contains(excerpt, "symbols omitted: 3 files") || strings.Contains(excerpt, "map size limit)\nheader") {
+		t.Fatalf("scoped excerpt lost path or misparsed summary line:\n%s", excerpt)
+	}
+}
+
+func TestCodeMapNativeWholeFileFallback(t *testing.T) {
+	entries := make(map[string]codeMapNativeEntry, 1000)
+	for i := 0; i < 1000; i++ {
+		entries[fmt.Sprintf("%04d/%s.go", i, strings.Repeat("x", 280))] = codeMapNativeEntry{Language: "go"}
+	}
+	data, err := renderCodeMapNative(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "files omitted:") || strings.Contains(text, "symbols omitted:") || len(data) > codeMapMaxBytes {
+		t.Fatalf("whole-file fallback was not used: bytes=%d\n%s", len(data), text[len(text)-min(len(text), 200):])
+	}
+}
+
+func TestCodeMapNativeWholeFileFallbackIncludesSymbolSummarySize(t *testing.T) {
+	entry := codeMapNativeEntry{Language: "go", Coverage: "native", Symbols: [][]any{{1, "function", "Run", "()"}}}
+	path := "large.go"
+	entries := map[string]codeMapNativeEntry{path: entry}
+	bare := renderCodeMapNativeWithOmissions(entries, []string{path}, 0, 0, map[string]bool{path: true})
+	path = strings.Repeat("p", codeMapMaxBytes-len(bare)+len(path))
+	entries = map[string]codeMapNativeEntry{path: entry}
+	bare = renderCodeMapNativeWithOmissions(entries, []string{path}, 0, 0, map[string]bool{path: true})
+	if len(bare) != codeMapMaxBytes {
+		t.Fatalf("paths-only boundary setup: got %d bytes", len(bare))
+	}
+	data, err := renderCodeMapNative(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) > codeMapMaxBytes || !strings.Contains(string(data), "  files omitted: 1 (map size limit)") {
+		t.Fatalf("summary overflow did not fall back: bytes=%d", len(data))
+	}
+}
+
+func TestCodeMapNativeTestFixturePathsAndNewExtensions(t *testing.T) {
+	for path, want := range map[string]bool{
+		"pkg/tests/one.go": true, "src/card.test.ts": true, "src/card.spec.js": true,
+		"test_helper.py": true, "helper_test.py": true, "fixtures/data.js": true, "src/app.js": false,
+	} {
+		if got := codeMapTestOrFixturePath(path); got != want {
+			t.Errorf("codeMapTestOrFixturePath(%q)=%t want %t", path, got, want)
+		}
+	}
+	for path, want := range map[string]string{"x.mjs": "javascript", "x.cjs": "javascript", "x.mts": "typescript", "x.cts": "typescript"} {
+		if got := codeMapLanguage(path); got != want {
+			t.Errorf("codeMapLanguage(%q)=%q want %q", path, got, want)
+		}
 	}
 }
 
