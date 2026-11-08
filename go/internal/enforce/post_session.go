@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
@@ -27,6 +28,11 @@ func finishPostSession(root string, event, pending, bundle map[string]any, threa
 	taskID := stringValue(pending["task_id"])
 	ledgerBundle := clonePostMap(bundle)
 	delete(ledgerBundle, "_review_diff")
+	for key := range ledgerBundle {
+		if strings.HasPrefix(key, "_complete_review_") {
+			delete(ledgerBundle, key)
+		}
+	}
 	if pending["kind"] == "pretool_bypass" {
 		if taskID != "" && stringValue(pending["route"]) != "" && stringValue(pending["model"]) != "" && stringValue(pending["effort"]) != "" {
 			record := ledger.BuildSessionRecord(taskID, optionalThread(threadID), stringValue(pending["route"]),

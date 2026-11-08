@@ -62,7 +62,10 @@ func copyFindings(value any, limit *int) []any {
 func compactBundle(bundle map[string]any, cap int) (map[string]any, bool, error) {
 	compact := make(map[string]any, len(bundle))
 	for key, value := range bundle {
-		compact[key] = value
+		// Review presentation is restored after ordinary compaction, including on recovery.
+		if !strings.HasPrefix(key, "review_diff_") && !strings.HasPrefix(key, "_complete_review_") {
+			compact[key] = value
+		}
 	}
 	for _, key := range []string{"hook_checks_full", "codex_quota", "whole_tree_delta", "whole_tree_anomaly", "known_concurrent_scopes", "_review_diff", "_review_job_id", "review_navigation"} {
 		delete(compact, key)
@@ -329,6 +332,11 @@ func finalizeBundle(root string, event map[string]any, bundle map[string]any, ca
 	}
 	applyReviewNavigationPreview(compact, bundle)
 	delete(bundle, "_review_diff")
+	for key := range bundle {
+		if strings.HasPrefix(key, "_complete_review_") {
+			delete(bundle, key)
+		}
+	}
 	encoded, err := canonicalJSON(bundle)
 	if err != nil {
 		return nil, "", err

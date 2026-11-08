@@ -2,6 +2,8 @@ package enforce
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -276,6 +278,21 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		return nil, err
 	}
 	bundle["audit_receipt"] = postAsyncAuditReceipt(bundle)
+	if !zeroDelta && stringValue(pending["phase"]) == "implementation" && bundle["claude_review_mode"] == review.Full {
+		bundle["_complete_review_requested"] = true
+	}
+	if bundle["_complete_review_requested"] == true && worktree != "" && job["applyState"] != "applied" {
+		snapshot := stringValue(pending["worktree_snapshot"])
+		if snapshot != "" {
+			if patch, patchErr := ledger.JobPatch(worktree, snapshot); patchErr == nil {
+				sum := sha256.Sum256([]byte(patch))
+				revision := hex.EncodeToString(sum[:])
+				if revision == stringValue(bundle["changed_paths_sha256"]) {
+					bundle["_complete_review_patch"], bundle["_complete_review_revision"] = patch, revision
+				}
+			}
+		}
+	}
 	compact, artifact, err := finalizePostArtifacts(root, original, bundle, cap, reportLimit)
 	if err != nil {
 		return nil, err
