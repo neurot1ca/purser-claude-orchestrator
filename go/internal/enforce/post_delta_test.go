@@ -188,6 +188,8 @@ func TestAssemblePostDeltaOffersScopedMainCheckoutRecoveryWhenWorktreeIsEmpty(t 
 	git(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
 	mainBaseline := CaptureMainCheckoutBaseline(repo, nil)
 	worktreeBaseline := postScopeBaseline(t, worktree, []string{"scope"})
+	// Legacy records without base-commit evidence still offer manual recovery.
+	delete(worktreeBaseline, "head")
 	snapshotOut, err := testutil.Hide(exec.Command("git", "-C", worktree, "rev-parse", "HEAD^{tree}")).Output()
 	if err != nil {
 		t.Fatal(err)

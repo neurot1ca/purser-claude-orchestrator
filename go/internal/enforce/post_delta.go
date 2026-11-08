@@ -68,8 +68,17 @@ func assemblePostDelta(repoRoot string, pending, bundle map[string]any, protecte
 				"baseline_head": delta["baseline_head"], "current_head": delta["current_head"], "changed_paths": nil}
 		}
 	}
+	mainChanged := false
+	mainInspection := map[string]any{}
+	if _, recorded := pending["main_checkout_baseline"]; recorded && worktree != "" && phase == "implementation" {
+		mainChanged = inspectMainCheckout(repoRoot, mapValue(pending["main_checkout_baseline"]), scope, delta, mainInspection)
+		if adopted, digest := adoptMainCheckout(repoRoot, pending, delta, mainInspection); adopted != nil {
+			delta = adopted
+			bundle["changed_paths_sha256"] = digest
+		}
+	}
 	bundle["baseline_head"], bundle["current_head"] = delta["baseline_head"], delta["current_head"]
-	forceFull := delta["status"] != ledger.OK || bundle["force_full_review"] == true
+	forceFull := mainChanged || delta["status"] != ledger.OK || bundle["force_full_review"] == true
 	var anomaly map[string]any
 	if delta["status"] == ledger.OK && phase == "implementation" && len(scope) > 0 && baseline["status"] == ledger.OK {
 		if worktree != "" {
@@ -167,8 +176,9 @@ func assemblePostDelta(repoRoot string, pending, bundle map[string]any, protecte
 		}
 		forceFull = applyOutOfScopeResult(bundle, anomaly, protectedPaths) || forceFull
 	}
-	if _, recorded := pending["main_checkout_baseline"]; recorded && worktree != "" && phase == "implementation" {
-		forceFull = inspectMainCheckout(repoRoot, mapValue(pending["main_checkout_baseline"]), scope, delta, bundle) || forceFull
+	if findings, ok := mainInspection["findings"].([]any); ok {
+		existing, _ := bundle["findings"].([]any)
+		bundle["findings"] = append(existing, findings...)
 	}
 	if delta["status"] != ledger.OK {
 		forceFull = true
