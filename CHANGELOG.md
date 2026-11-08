@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.230 — 2026-11-08
+- **Changed:** the dispatcher only starts a job and waits for it; main Claude collects the result, reviews it and applies it.
+- **Changed:** Purser's tools load upfront and session start supplies the routine routing rules, so delegation needs no ToolSearch or Skill turn.
+- **Changed:** a FULL review result includes a complete small diff inline, or the exact path of the complete diff when it is large or not plain text.
+
 ## 0.1.229 — 2026-11-08
 - **Changed:** when a worker writes its in-scope work to the main checkout and leaves its worktree empty, Purser moves that work into the worktree so the job is reviewed and applied normally.
 - **Changed:** the code map keeps every path, dropping symbols from tests and older files first, and parses `.mjs`, `.cjs`, `.mts` and `.cts` files.
