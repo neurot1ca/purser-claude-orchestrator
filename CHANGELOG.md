@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.229 — 2026-11-08
+- **Changed:** when a worker writes its in-scope work to the main checkout and leaves its worktree empty, Purser moves that work into the worktree so the job is reviewed and applied normally.
+- **Changed:** the code map keeps every path, dropping symbols from tests and older files first, and parses `.mjs`, `.cjs`, `.mts` and `.cts` files.
+- **Fixed:** OpenCode workers launch with an explicit directory inside their worktree and can no longer open the main checkout.
+- **Fixed:** each mechanical bootstrap task runs in its own Git repository with Bash denied.
+- **Fixed:** an OpenCode run that ends without a completion event reports its last step reason, exit code and recent notes.
+- **Fixed:** the job and validation waiters exit 0 when they print `STILL_WAITING`.
+
 ## 0.1.228 — 2026-11-05
 - **Changed:** with a non-Claude coder selected, Purser denies main Claude's non-trivial code edits and points it to the coder; trivial edits stay allowed and `[roles] enforce_delegation = false` turns this off for a project.
 - **Changed:** the dispatcher agent runs at low effort.
