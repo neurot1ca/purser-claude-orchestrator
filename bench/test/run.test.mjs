@@ -6,6 +6,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { armSettings, campaignMetadata, childEnvironment, cleanupRunDir, ensureEngine, goCheckContract, grade, hasPurserGuidance, permissionFailure, projectKeyForPath, promptNeedsIdentifiers, reaccountCampaign, retryIO, runProcess, terminalAttempts, undefinedGoIdentifiers, usageFromTranscript, writeOnArmRoles } from '../run.mjs';
+import { reportFlow, summarizeAttempt } from '../flow-report.mjs';
 
 const scratchRoot = fileURLToPath(new URL('../../.tmp/bench-test/', import.meta.url));
 const protocol = JSON.parse(await readFile(fileURLToPath(new URL('../protocol.json', import.meta.url)), 'utf8'));
@@ -13,6 +14,150 @@ const purserGuidance = 'Purser is installed for this project. Delegate repositor
 const hostBinary = `bin/purser-hook-${process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : process.platform}-${({ x64: 'amd64', ia32: '386', arm: 'arm', arm64: 'arm64' })[process.arch] ?? process.arch}${process.platform === 'win32' ? '.exe' : ''}`;
 await mkdir(scratchRoot, { recursive: true });
 const editDelegationReason = 'Delegate this code change to the selected coder through the purser:dispatcher agent or codex_start.';
+const flowUsage = { input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 1, output_tokens: 4 };
+test('flow report counts unique main message IDs once and includes superseded attempts', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'flow-report-'));
+  t.after(() => retryIO(() => rm(dir, { recursive: true, force: true })));
+  await mkdir(path.join(dir, 'transcripts', 'on-first'), { recursive: true });
+  await mkdir(path.join(dir, 'transcripts', 'on-retry'), { recursive: true });
+  await mkdir(path.join(dir, 'transcripts', 'off-only'), { recursive: true });
+  const assistant = { type: 'assistant', message: { id: 'main-1', role: 'assistant', usage: flowUsage, content: [
+    { type: 'tool_use', id: 'agent-1', name: 'Agent', input: { subagent_type: 'purser:dispatcher' } },
+    { type: 'tool_use', id: 'codex-1', name: 'mcp__purser__codex_start', input: {} }
+  ] } };
+  await writeFile(path.join(dir, 'transcripts', 'on-first', 'stdout.jsonl'), `${JSON.stringify(assistant)}\n${JSON.stringify(assistant)}\n`);
+  await writeFile(path.join(dir, 'transcripts', 'on-retry', 'stdout.jsonl'), `${JSON.stringify({ ...assistant, message: { ...assistant.message, id: 'main-2' } })}\n`);
+  await writeFile(path.join(dir, 'transcripts', 'off-only', 'stdout.jsonl'), `${JSON.stringify({ ...assistant, message: { ...assistant.message, id: 'off-1', content: [] } })}\n`);
+  const record = (arm, status) => ({ arm, attempt_status: status, usage: { main: flowUsage } });
+  await writeFile(path.join(dir, 'on-first.json'), JSON.stringify({ ...record('on', 'superseded'), task_id: 'task', repetition: 1, session_id: 'old' }));
+  await writeFile(path.join(dir, 'on-retry.json'), JSON.stringify({ ...record('on', 'completed'), task_id: 'task', repetition: 1, session_id: 'final' }));
+  await writeFile(path.join(dir, 'off-only.json'), JSON.stringify({ ...record('off', 'completed'), task_id: 'task', repetition: 1, session_id: 'off' }));
+  await writeFile(path.join(dir, 'attempts.jsonl'), `${JSON.stringify({ task_id: 'task', repetition: 1, arm: 'on', session_id: 'final' })}\n${JSON.stringify({ task_id: 'task', repetition: 1, arm: 'off', session_id: 'off' })}\n`);
+  const report = await reportFlow(dir);
+  assert.equal(report.arms.on.all_attempts.attempts, 2);
+  assert.equal(report.arms.on.all_attempts.main_requests, 2);
+  assert.equal(report.arms.on.all_attempts.dispatcher_calls, 2);
+  assert.equal(report.arms.on.all_attempts.codex_start_calls, 2);
+  assert.equal(report.arms.on.all_attempts.raw_main_tokens, 34);
+  assert.equal(report.arms.on.all_attempts.dispatcher_tokens, null);
+  assert.ok(report.arms.on.all_attempts.coverage_gaps.some(gap => /dispatcher token usage missing/.test(gap)));
+  assert.equal(report.arms.on.final_attempts.attempts, 1);
+  assert.equal(report.arms.on.final_attempts.main_requests, 1);
+  assert.equal(report.arms.on.final_attempts.raw_main_tokens, 17);
+  assert.equal(report.arms.on.final_attempts.durable_codex_tokens, null);
+  assert.ok(report.arms.on.final_attempts.coverage_gaps.some(gap => /durable Codex usage missing/.test(gap)));
+  assert.equal(report.arms.off.final_attempts.raw_main_tokens, 17);
+  assert.equal(report.arms.off.all_attempts.dispatcher_calls, 0);
+  assert.equal(report.arms.off.all_attempts.dispatcher_tokens, 0);
+  assert.equal(report.arms.off.all_attempts.durable_codex_tokens, 0);
+  assert.deepEqual(report.arms.off.all_attempts.coverage_gaps, []);
+});
+
+test('flow report keeps missing provider usage unknown', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'flow-unknown-'));
+  t.after(() => retryIO(() => rm(dir, { recursive: true, force: true })));
+  await mkdir(path.join(dir, 'transcripts', 'off-missing'), { recursive: true });
+  await writeFile(path.join(dir, 'off-missing.json'), JSON.stringify({ arm: 'off', usage: { main: 'unknown' } }));
+  await writeFile(path.join(dir, 'transcripts', 'off-missing', 'stdout.jsonl'), '');
+  const report = await reportFlow(dir);
+  assert.equal(report.arms.off.all_attempts.raw_main_tokens, null);
+  assert.equal(report.arms.off.all_attempts.weighted_main_cost, null);
+  assert.ok(report.arms.off.all_attempts.coverage_gaps.some(gap => /main provider usage missing/.test(gap)));
+});
+
+test('flow report separates Codex sidechains and merges repeated usage snapshots by category', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'flow-sidechains-'));
+  t.after(() => retryIO(() => rm(dir, { recursive: true, force: true })));
+  const record = { arm: 'on', task_id: 'sidechains', usage: { main: flowUsage } };
+  const side = (id, provider, usage) => ({ type: 'assistant', parent_tool_use_id: 'agent', message: { id, provider, usage } });
+  const events = [
+    { type: 'assistant', message: { id: 'main', content: [{ type: 'tool_use', name: 'Agent', input: { subagent_type: 'purser:dispatcher' } }] } },
+    side('claude', 'anthropic', flowUsage),
+    side('claude', 'anthropic', { input_tokens: 8, cache_read_input_tokens: 7, cache_creation_input_tokens: 0, output_tokens: 9 }),
+    side('codex', 'openai', flowUsage),
+    side('codex', 'openai', { input_tokens: 7, cache_read_input_tokens: 8, cache_creation_input_tokens: 6, output_tokens: 14 }),
+    side('claude', 'anthropic', flowUsage), side('codex', 'openai', flowUsage)
+  ];
+  await writeFile(path.join(dir, 'on-sidechains.json'), JSON.stringify(record));
+  await mkdir(path.join(dir, 'transcripts', 'on-sidechains'), { recursive: true });
+  await writeFile(path.join(dir, 'transcripts', 'on-sidechains', 'stdout.jsonl'), events.map(JSON.stringify).join('\n'));
+  const arm = (await reportFlow(dir)).arms.on.all_attempts;
+  assert.equal(arm.dispatcher_tokens, 27);
+  assert.equal(arm.durable_codex_tokens, 38);
+  assert.deepEqual(arm.coverage_gaps, []);
+  assert.equal(summarizeAttempt(events, record, { ...arm, tools: {}, gaps: new Set() }).sawDispatcherUsage, true);
+});
+
+test('flow report prefers recorded Claude workers to dispatcher transcript usage', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'flow-recorded-dispatcher-'));
+  t.after(() => retryIO(() => rm(dir, { recursive: true, force: true })));
+  await mkdir(path.join(dir, 'transcripts', 'on-recorded'), { recursive: true });
+  await writeFile(path.join(dir, 'on-recorded.json'), JSON.stringify({ arm: 'on', usage: { main: flowUsage, workers: [
+    { provider: 'unknown', model: 'claude-haiku-5-5', usage: { ...flowUsage, complete: true } },
+    { provider: 'anthropic', usage: { ...flowUsage, complete: true } }
+  ] } }));
+  await writeFile(path.join(dir, 'transcripts', 'on-recorded', 'stdout.jsonl'), [
+    { type: 'assistant', message: { id: 'main', content: [{ type: 'tool_use', name: 'Agent', input: { subagent_type: 'purser:dispatcher' } }] } },
+    { type: 'assistant', parent_tool_use_id: 'agent', message: { id: 'child', usage: { input_tokens: 1000 } } }
+  ].map(JSON.stringify).join('\n'));
+  const arm = (await reportFlow(dir)).arms.on.all_attempts;
+  assert.equal(arm.dispatcher_tokens, 34);
+  assert.ok(!arm.coverage_gaps.some(gap => /dispatcher token usage/.test(gap)));
+});
+
+test('flow report keeps incomplete recorded Claude workers unknown despite complete transcript usage', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'flow-incomplete-dispatcher-'));
+  t.after(() => retryIO(() => rm(dir, { recursive: true, force: true })));
+  await mkdir(path.join(dir, 'transcripts', 'on-incomplete'), { recursive: true });
+  await writeFile(path.join(dir, 'on-incomplete.json'), JSON.stringify({ arm: 'on', usage: { main: flowUsage }, worker_usage: [
+    { model: 'claude-haiku-5-5', usage: { ...flowUsage, complete: true } },
+    { model: 'claude-haiku-5-5', usage: { ...flowUsage, complete: false } }
+  ] }));
+  await writeFile(path.join(dir, 'transcripts', 'on-incomplete', 'stdout.jsonl'), [
+    { type: 'assistant', message: { id: 'main', content: [{ type: 'tool_use', name: 'Task', input: { subagent_type: 'purser:dispatcher' } }] } },
+    { type: 'assistant', parent_tool_use_id: 'agent', message: { id: 'child', usage: flowUsage } }
+  ].map(JSON.stringify).join('\n'));
+  const arm = (await reportFlow(dir)).arms.on.all_attempts;
+  assert.equal(arm.dispatcher_tokens, null);
+  assert.ok(arm.coverage_gaps.some(gap => /dispatcher token usage incomplete/.test(gap)));
+});
+
+test('flow report uses recorded Codex usage without leaving a transcript missing gap', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'flow-recorded-codex-'));
+  t.after(() => retryIO(() => rm(dir, { recursive: true, force: true })));
+  const record = { arm: 'on', task_id: 'recorded', repetition: 1, session_id: 'recorded', attempt_status: 'completed', usage: { main: flowUsage }, worker_usage: [
+    { provider: 'openai', model: 'codex', usage: { ...flowUsage, complete: true } }
+  ] };
+  await writeFile(path.join(dir, 'on-recorded.json'), JSON.stringify(record));
+  await writeFile(path.join(dir, 'attempts.jsonl'), JSON.stringify(record));
+  await mkdir(path.join(dir, 'transcripts', 'on-recorded'), { recursive: true });
+  await writeFile(path.join(dir, 'transcripts', 'on-recorded', 'stdout.jsonl'), JSON.stringify({ type: 'assistant', message: { id: 'main', content: [
+    { type: 'tool_use', name: 'codex_start', input: {} }
+  ] } }));
+  for (const arm of Object.values((await reportFlow(dir)).arms.on)) {
+    assert.equal(arm.durable_codex_tokens, 17);
+    assert.deepEqual(arm.coverage_gaps, []);
+  }
+});
+
+test('flow report keeps worker tokens unknown for missing and unreadable transcripts in both scopes', async t => {
+  const dir = await mkdtemp(path.join(scratchRoot, 'flow-unreadable-'));
+  t.after(() => retryIO(() => rm(dir, { recursive: true, force: true })));
+  const records = ['off', 'on'].map(arm => ({ arm, task_id: 'unreadable', repetition: 1, session_id: arm, attempt_status: 'completed', usage: { main: flowUsage }, worker_usage: [
+    { model: 'claude-haiku-5-5', usage: flowUsage }, { provider: 'openai', usage: flowUsage }
+  ] }));
+  for (const record of records) await writeFile(path.join(dir, `${record.arm}-unreadable.json`), JSON.stringify(record));
+  await writeFile(path.join(dir, 'attempts.jsonl'), records.map(JSON.stringify).join('\n'));
+  // A directory instead of a file fails readFile on Windows, macOS and Linux without permission assumptions.
+  await mkdir(path.join(dir, 'transcripts', 'on-unreadable', 'stdout.jsonl'), { recursive: true });
+  const report = await reportFlow(dir);
+  for (const scopes of Object.values(report.arms)) for (const arm of Object.values(scopes)) {
+    assert.equal(arm.dispatcher_tokens, null);
+    assert.equal(arm.durable_codex_tokens, null);
+    assert.ok(arm.coverage_gaps.some(gap => /transcript missing or unreadable/.test(gap)));
+  }
+});
+
 test('only matching on-arm edit delegation denials are exempt from permission failures', () => {
   const guardDenial = { tool_name: 'Edit', tool_use_id: 'toolu-1' };
   const matchingResult = { type: 'user', message: { content: [{

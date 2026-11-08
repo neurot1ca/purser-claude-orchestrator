@@ -4,17 +4,18 @@ This directory defines the paired A/B benchmark contract comparing Claude Code w
 
 ## 1. Confirmatory Endpoints and Descriptive Metrics
 
-The benchmark evaluates **two confirmatory endpoints only**:
+The benchmark evaluates **one confirmatory endpoint**:
 
 1. **Main-Claude tokens (`main_claude_tokens`):** the unweighted sum of unique main-session `input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, and `output_tokens`.
-2. **Wall time to a verified success (`verified_wall_time`):** elapsed time from process launch through delivered changes, process/job quiescence, and authoritative verification for passing runs; unsuccessful runs are charged the task's predeclared deadline.
+
+Verified wall time (`verified_wall_time`) is descriptive: elapsed time from process launch through delivered changes, process/job quiescence, and authoritative verification for passing runs; unsuccessful runs are charged the task's predeclared deadline. This matches [`protocol.json`](protocol.json).
 
 ### Descriptive-Only Quality and Timing
 
 - **Pass rates are descriptive only:** report passed/attempted counts and percentages per arm alongside paired outcome counts and failure reasons.
 - There is **no quality non-inferiority test** and **no 80-task requirement**.
 - Do not claim savings at "equal quality", "preserved quality", or non-inferior quality. Every savings statement must be accompanied by the observed pass counts and the deadline-penalty convention for failed runs.
-- Observed elapsed time (without deadline substitution) is reported descriptively alongside the confirmatory wall-time endpoint.
+- Report observed elapsed time and deadline-charged verified wall time descriptively; neither is a confirmatory endpoint.
 
 ### Separate Worker Accounting
 
@@ -27,15 +28,15 @@ The benchmark evaluates **two confirmatory endpoints only**:
 
 Tasks—not individual repetitions—are the independent units of analysis.
 
-For endpoint $m$, task $i \in \{1, \dots, K\}$, and paired repetition $r \in \{1, \dots, R\}$:
+For main-Claude raw tokens, task $i \in \{1, \dots, K\}$, and paired repetition $r \in \{1, \dots, R\}$:
 
-$$d_{ir,m} = \log\!\left(\frac{Y_{\mathrm{on},ir,m}}{Y_{\mathrm{off},ir,m}}\right), \qquad \bar{d}_{i,m} = \frac{1}{R}\sum_{r=1}^{R} d_{ir,m}$$
+$$d_{ir,T} = \log\!\left(\frac{Y_{\mathrm{on},ir,T}}{Y_{\mathrm{off},ir,T}}\right), \qquad \bar{d}_{i,T} = \frac{1}{R}\sum_{r=1}^{R} d_{ir,T}$$
 
-Across the $K$ confirmation tasks, compute the sample mean $\overline{d}_m$ and task-level sample standard deviation $s_m$ of $\{\bar{d}_{i,m}\}_{i=1}^{K}$. Each endpoint uses a **one-sided upper confidence bound at $\alpha = 0.025$** (Bonferroni correction across the two confirmatory claims, controlling familywise Type I error at $0.05$):
+Across the $K$ confirmation tasks, compute the sample mean $\overline{d}_T$ and task-level sample standard deviation $s_T$ of the paired log ratios for main-Claude raw tokens. The protocol uses a **one-sided upper confidence bound at $\alpha = 0.025$**:
 
-$$U_m = \overline{d}_m + t_{0.975,\,K-1}\frac{s_m}{\sqrt{K}}, \qquad L_m = 1 - \exp(U_m)$$
+$$U_T = \overline{d}_T + t_{0.975,\,K-1}\frac{s_T}{\sqrt{K}}, \qquad L_T = 1 - \exp(U_T)$$
 
-A confirmatory savings claim on endpoint $m$ requires $L_m > 0$. Failed runs remain in both endpoint calculations and pass-rate denominators; never restrict analysis to jointly passing pairs.
+A confirmatory main-token savings claim requires $L_T > 0$. Failed runs remain in the token calculation and pass-rate denominators; never restrict analysis to jointly passing pairs. Verified wall time is descriptive and has no confirmatory savings claim.
 
 ## 3. Task Bank, Calibration, and $(K, R)$ Selection
 
@@ -62,16 +63,16 @@ Authoritative grading runs outside the agent workspace by applying the submitted
 Power targets are fixed before calibration:
 
 - **Main-Claude token reduction target:** $\delta_T = 40\%$ ($0.40$).
-- **Verified wall-time reduction target:** $\delta_W = 30\%$ ($0.30$).
-- **Power:** $90\%$ per endpoint ($\ge 80\%$ joint power by the union bound).
+- The historical 30% verified wall-time target is descriptive and is not used for confirmatory power or allocation.
+- **Power:** $90\%$ for the main-token endpoint.
 
-From calibration, estimate between-task variance $\tau_m^2$ and within-task paired log-ratio variance $\sigma_m^2$. The squared standard error of the task-mean log ratio is:
+From calibration, estimate between-task variance $\tau_T^2$ and within-task paired log-ratio variance $\sigma_T^2$. The squared standard error of the task-mean log ratio is:
 
-$$SE_m^2 \approx \frac{\tau_m^2 + \sigma_m^2 / R}{K}$$
+$$SE_T^2 \approx \frac{\tau_T^2 + \sigma_T^2 / R}{K}$$
 
-Choose integer $R \ge 1$ and confirmation task count $K$ (constrained to be a **multiple of 4** for class balance) satisfying for both endpoints:
+Choose integer $R \ge 1$ and confirmation task count $K$ (constrained to be a **multiple of 4** for class balance) satisfying for main-Claude raw tokens:
 
-$$K \ge \frac{\left(t_{0.975,\,K-1} + z_{0.90}\right)^2 \left(\tau_m^2 + \sigma_m^2 / R\right)}{\left|\log(1 - \delta_m)\right|^2}$$
+$$K \ge \frac{\left(t_{0.975,\,K-1} + z_{0.90}\right)^2 \left(\tau_T^2 + \sigma_T^2 / R\right)}{\left|\log(1 - \delta_T)\right|^2}$$
 
 ### Hard Floor $K_{\min} = 12$
 
@@ -91,7 +92,7 @@ Each campaign provisions the pinned Purser engine from the versioned GitHub rele
 
 Each campaign provisions:
 
-- A separate engine directory pinned to Purser `v0.1.228` (commit `10fa36db7bbaf5f0f5a90c4c02eb46a7bfa890c2`), never the active working tree.
+- A separate engine directory pinned to Purser `v0.1.230` (commit `78904b9f35aaa8b100d574be8b43c621c8471b9f`), never the active working tree.
 - A verified release archive containing the host-matched engine binary.
 - Separate per-arm target worktrees, settings files, `PURSER_STATE_DIR`, and transcript directories.
 
@@ -115,6 +116,8 @@ Both arm settings use `permissions.defaultMode: "bypassPermissions"`; the sole t
 Claude uses the user's default config directory for authentication while `project,local` sources exclude user settings; enabled non-inline Purser plugins from the user settings are explicitly disabled in both arm settings files. Parent Claude Code session variables are removed from the child environment, while provider variables and the per-run Purser state directory are preserved.
 
 Main assistant usage snapshots with repeated message IDs are counted once using the maximum observed value per category; the final `result` usage supplies authoritative main-session output tokens because assistant snapshots can report partial output. Input and cache categories remain reconciled against the result usage, and worker accounting remains separate.
+
+For supplementary flow detail, run `node bench/flow-report.mjs <run-directory>`. It counts unique main message IDs per attempt, reports their tool combinations, dispatcher calls/tokens, weighted main-Claude usage (input 1, cache read 0.1, cache write 1.25, one-hour cache write 2, output 5), and durable Codex usage when recorded. It includes superseded run records and lists missing or incomplete coverage explicitly; missing provider usage is `null`/unknown. These metrics do not change the confirmatory raw-token endpoint in `analyze.mjs`.
 
 ## 5. Cross-OS Requirements (Windows, macOS, Linux)
 
