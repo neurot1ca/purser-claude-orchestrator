@@ -35,7 +35,7 @@ func sessionStartContext(t *testing.T, event map[string]any) string {
 }
 
 func TestSessionStartConfiguredCoderGuidance(t *testing.T) {
-	const want = "Purser is installed for this project. Delegate repository code changes (features, fixes, refactors, tests) to the configured coder through the `purser:dispatcher` agent or `codex_start`; Purser's refusal messages explain the required first prompt line. Make trivial edits, such as a typo or a one-line change, yourself. Review each result, then accept and apply it with `codex_apply`."
+	const want = coderGuidance
 	for _, source := range []string{"startup", "resume", "compact", "clear"} {
 		t.Run(source, func(t *testing.T) {
 			stateRoot := t.TempDir()
@@ -49,8 +49,20 @@ func TestSessionStartConfiguredCoderGuidance(t *testing.T) {
 				t.Fatal(err)
 			}
 			event := map[string]any{"hook_event_name": "SessionStart", "session_id": "coder-guidance-" + source, "source": source, "cwd": repo}
-			if got := sessionStartContext(t, event); !strings.Contains(got, want) {
+			got := sessionStartContext(t, event)
+			if !strings.Contains(got, want) || !strings.Contains(got, routingGuidance) {
 				t.Fatalf("SessionStart context missing configured coder guidance: %q", got)
+			}
+			if strings.Count(got, routingGuidance) != 1 {
+				t.Fatalf("SessionStart context must include routing guidance once: %q", got)
+			}
+			if len([]byte(routingGuidance)) > 2*1024 {
+				t.Fatalf("SessionStart routing guidance exceeds 2 KiB UTF-8: %d", len([]byte(routingGuidance)))
+			}
+			for _, required := range []string{"No ToolSearch or Skill turn", "task, phase, and route are required", "bounded repo-relative `scope`", "basis=design:<choice>", "short user-language `label`", "Start the dispatcher in the background and wait for its terminal result.", "Main Claude collects the result, reviews it, and accepts and applies the reviewed revision.", "focused validation", "only if guidance is missing or the case is exceptional", "older clients lacking loaded tools can use the Skill fallback"} {
+				if !strings.Contains(routingGuidance, required) {
+					t.Errorf("routing guidance missing %q", required)
+				}
 			}
 		})
 	}
@@ -59,7 +71,7 @@ func TestSessionStartConfiguredCoderGuidance(t *testing.T) {
 		t.Setenv("PURSER_STATE_DIR", stateRoot)
 		repo := updateSessionTestRepo(t)
 		got := sessionStartContext(t, map[string]any{"hook_event_name": "SessionStart", "session_id": "coder-guidance-absent", "source": "startup", "cwd": repo})
-		if strings.Contains(got, want) {
+		if strings.Contains(got, want) || strings.Contains(got, routingGuidance) {
 			t.Fatalf("SessionStart context unexpectedly contains configured coder guidance: %q", got)
 		}
 	})

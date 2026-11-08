@@ -37,6 +37,9 @@ const handoffMaxAge = 12 * time.Hour
 var handoffLanguage = regexp.MustCompile(`(?i)^\s*User language:\s*(.*?)\s*$`)
 var systemReminder = regexp.MustCompile(`<system-reminder>[\s\S]*?(?:</system-reminder>|\z)`)
 
+const coderGuidance = "Purser is installed for this project. Delegate repository code changes (features, fixes, refactors, tests) to the configured coder through the `purser:dispatcher` agent or `codex_start`; Purser's refusal messages explain the required first prompt line. Make trivial edits, such as a typo or a one-line change, yourself. Review each result, then accept and apply it with `codex_apply`."
+const routingGuidance = "Routine routing: No ToolSearch or Skill turn when this guidance suffices; call the `codex-orchestrator` Skill only if guidance is missing or the case is exceptional. Start each worker prompt with exact `ORCH|task=<stable-id>|phase=<implementation|operation|plan>|route=<mechanical|subtle|normal|consequential|escalated|operation|research|plan_standard>`; task, phase, and route are required. Normal, consequential, and escalated need `basis` (open design: `basis=design:<choice>`), or `requested=user` for implementation. Implementation requires bounded repo-relative `scope` (never the whole repository); omit it for operation; plan is read-only and uses `plan_standard`. Choose the lowest likely-success route: mechanical for narrow mechanical work; subtle for resolved delicate work; normal for ordinary work or unresolved design; consequential for unresolved consequential design; escalated for a material miss, disagreement, or repeated failure; operation for an established runbook; research for read-only research; plan_standard for read-only planning. Add a short user-language `label` to every dispatch, start, and reply. Start the dispatcher in the background and wait for its terminal result. Read the receipt and named bundle files; independently review the delta, behavior, invariants, and focused validation. Send material defects back on the job's thread through a new dispatcher, then apply the accepted receipt revision with `codex_apply`. Main Claude collects the result, reviews it, and accepts and applies the reviewed revision. Respect explicit user deferral; older clients lacking loaded tools can use the Skill fallback. Check scoped acceptance criteria and report validation commands and status."
+
 func SessionStart(event map[string]any) []byte {
 	repository := projectRoot(event)
 	if repository != "" {
@@ -151,7 +154,7 @@ func SessionStart(event map[string]any) []byte {
 		root := stateRoot()
 		rolesPath := filepath.Join(root, "projects", projectKey, "roles.toml")
 		if _, err := os.Stat(rolesPath); err == nil {
-			additional = joinContext(additional, "Purser is installed for this project. Delegate repository code changes (features, fixes, refactors, tests) to the configured coder through the `purser:dispatcher` agent or `codex_start`; Purser's refusal messages explain the required first prompt line. Make trivial edits, such as a typo or a one-line change, yourself. Review each result, then accept and apply it with `codex_apply`.")
+			additional = joinContext(additional, coderGuidance, routingGuidance)
 		}
 		additional = joinContext(additional, durationHint(root, projectKey, "codex-main"))
 		additional = joinContext(additional, followupHints(root, projectKey, session, language))

@@ -5,7 +5,8 @@
       "args": [
         "${CLAUDE_PLUGIN_ROOT}/bin/purser-launcher.js",
         "go-mcp"
-      ]
+      ],
+      "alwaysLoad": true
     }
   }
 }
