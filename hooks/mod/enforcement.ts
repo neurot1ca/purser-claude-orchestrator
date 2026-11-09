@@ -1,6 +1,13 @@
 type PostEvent = 'PostToolUse' | 'PostToolUseFailure'
 const editTools = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const shellEditTools = new Set(['Bash', 'PowerShell'])
 const editReported = new Set<string>()
+
+function shellWriteShape(command: unknown): boolean {
+  if (typeof command !== 'string') return false
+  const text = command.replace(/2\s*>(?!&)|\d+\s*>&|>&/g, ' ')
+  return /(?:\b(?:sed|perl)\b[^\n]*(?:--in-place|(?:^|\s)-\S*i\S*)|\b(?:python3?|py|node)\b[^\n]*(?:\s-[ce]\b|<<)|\b(?:tee|Set-Content|Add-Content|Out-File)\b|\[\s*(?:System\.)?IO\.File\s*\]\s*::|(?:^|[^0-9&])(?:>>?|1>>?)\s*[^\s])/i.test(text)
+}
 const postToolUseFailureTools = new Set([
   'mcp__codex-main__codex', 'mcp__codex-main__codex-reply',
   'mcp__codex-main__codex_start', 'mcp__codex-main__codex_result',
@@ -129,13 +136,14 @@ export function register(on) {
   on("classic.PostToolUseFailure", ($, e, next) => handlePostToolUse('PostToolUseFailure', $, e, next))
 
   on('classic.PreToolUse', async ($, e, next) => {
-    if (editTools.has(e.tool)) {
+    const guardedEdit = editTools.has(e.tool) || shellEditTools.has(e.tool) && shellWriteShape(e.command)
+    if (guardedEdit) {
       let sessionId = ''
       try {
         if (e.agentId) return next(e)
-        const [id, cwd, worker] = await Promise.all([$.session.id(), $.session.cwd(), $.env.get('PURSER_WORKER')])
+        if (await $.env.get('PURSER_WORKER') === '1') return next(e)
+        const [id, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
         sessionId = id
-        if (worker === '1') return next(e)
         const result = await $.process.run([await goBinary($)], {
           cwd, stdin: JSON.stringify(preRequest(e, sessionId, cwd)), timeoutMs: 2500,
         })

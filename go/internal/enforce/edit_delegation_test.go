@@ -204,6 +204,75 @@ func TestEditDelegation(t *testing.T) {
 	}
 }
 
+func TestShellEditDelegation(t *testing.T) {
+	for _, tc := range []struct {
+		name, roles                     string
+		worker, agent                   string
+		tracked, ignored, outside, deny bool
+	}{
+		{name: "tracked denied", roles: "[roles]\ncoder='codex'\n", tracked: true, deny: true},
+		{name: "untracked allowed", roles: "[roles]\ncoder='codex'\n"},
+		{name: "ignored allowed", roles: "[roles]\ncoder='codex'\n", tracked: true, ignored: true},
+		{name: "outside allowed", roles: "[roles]\ncoder='codex'\n", outside: true},
+		{name: "claude mode", roles: "[roles]\ncoder='claude'\n", tracked: true},
+		{name: "none mode", roles: "[roles]\ncoder='none'\n", tracked: true},
+		{name: "delegation disabled", roles: "[roles]\ncoder='codex'\nenforce_delegation=false\n", tracked: true},
+		{name: "worker", roles: "[roles]\ncoder='codex'\n", worker: "1", tracked: true},
+		{name: "agent", roles: "[roles]\ncoder='codex'\n", agent: "subagent", tracked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PURSER_WORKER", tc.worker)
+			base := t.TempDir()
+			repo := filepath.Join(base, "repo")
+			state := filepath.Join(base, "state")
+			if err := os.MkdirAll(repo, 0700); err != nil {
+				t.Fatal(err)
+			}
+			write := func(path, value string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(value), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write(filepath.Join(repo, "source.go"), "package source\n")
+			cmd := proc.Hide(exec.Command("git", "init", "-q", repo))
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git init: %s: %v", out, err)
+			}
+			if tc.tracked {
+				cmd = proc.Hide(exec.Command("git", "-C", repo, "add", "source.go"))
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("git add: %s: %v", out, err)
+				}
+			}
+			if tc.ignored {
+				write(filepath.Join(repo, ".gitignore"), "source.go\n")
+			}
+			write(filepath.Join(state, "projects", projectkey.For(repo), "roles.toml"), tc.roles)
+			path := "source.go"
+			if tc.outside {
+				path = filepath.Join(base, "outside.go")
+				write(path, "package outside\n")
+			}
+			event := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "shell-session", "cwd": repo, "agent_id": tc.agent,
+				"tool_input": map[string]any{"command": "sed -i 's/a/b/g' " + path}}
+			response, err := Pre(event, state)
+			if err != nil {
+				t.Fatalf("Pre: %v", err)
+			}
+			if got := response != nil; got != tc.deny {
+				t.Fatalf("deny=%v want %v response=%v", got, tc.deny, response)
+			}
+			if tc.deny && mapValue(response["hookSpecificOutput"])["permissionDecisionReason"] != editDelegationReason {
+				t.Fatalf("reason mismatch: %v", response)
+			}
+		})
+	}
+}
+
 func TestEditDelegationPathIdentity(t *testing.T) {
 	base := t.TempDir()
 	repo := filepath.Join(base, "Repository")

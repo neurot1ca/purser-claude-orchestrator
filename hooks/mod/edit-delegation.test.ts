@@ -25,6 +25,41 @@ test('edit guard maps Go deny before the edit', async ($, on) => {
   expect(calls[0]).toMatchObject({ tool_name: 'Write', agent_id: '', tool_input: { file_path: 'source.go' } })
 })
 
+test('shell edit guard maps Go deny before Bash', async ($, on) => {
+  const calls: unknown[] = []
+  stub(on, { stdout: JSON.stringify({ hookSpecificOutput: {
+    hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'delegate shell change',
+  } }) }, calls, [])
+  const result = await $.tool.call({ tool: 'Bash', command: "sed -i 's/a/b/g' source.go" })
+  expect(result.isError).toBe(true)
+  expect(result.text).toContain('delegate shell change')
+  expect(calls).toHaveLength(1)
+  expect(calls[0]).toMatchObject({ tool_name: 'Bash', tool_input: { command: "sed -i 's/a/b/g' source.go" } })
+})
+
+test('shell guard skips commands without write shapes', async ($, on) => {
+  const calls: unknown[] = []
+  stub(on, { exitCode: 0 }, calls, [])
+  const result = await $.tool.call({ tool: 'Bash', command: 'ls -la 2>/dev/null' })
+  expect(result.isError).not.toBe(true)
+  expect(calls).toEqual([])
+})
+
+test('shell guard prefilters case-insensitive cmdlets and adjacent redirects', async ($, on) => {
+  const calls: unknown[] = []
+  stub(on, { exitCode: 0 }, calls, [])
+  await $.tool.call({ tool: 'PowerShell', command: 'set-content -Path source.go -Value x' })
+  await $.tool.call({ tool: 'Bash', command: 'echo x>source.go' })
+  expect(calls).toHaveLength(2)
+})
+
+test('shell guard exempts subagents before Go', async ($, on) => {
+  const calls: unknown[] = []
+  stub(on, { exitCode: 1 }, calls, [])
+  await $.tool.call({ tool: 'PowerShell', command: 'Set-Content -Path source.go -Value x', agentId: 'agent-1' })
+  expect(calls).toEqual([])
+})
+
 test('edit guard fails open and reports only once per session', async ($, on) => {
   const calls: unknown[] = [], logs: string[] = []
   stub(on, { exitCode: 1 }, calls, logs)

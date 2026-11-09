@@ -22,6 +22,13 @@ func editTool(tool string) bool {
 	return tool == "Edit" || tool == "Write" || tool == "MultiEdit" || tool == "NotebookEdit"
 }
 
+const editSourceExtensions = ".go .py .pyi .js .jsx .mjs .cjs .ts .tsx .mts .cts .rs .c .h .cc .cpp .cxx .hpp .cs .java .kt .kts .swift .m .mm .rb .php .scala .sc .sh .bash .zsh .ps1 .psm1 .bat .cmd .sql .r .R .lua .pl .ex .exs .erl .hrl .hs .fs .fsx .clj .cljs .dart .vue .svelte .html .css .scss .sass .less .ipynb"
+
+type editCandidate struct {
+	path        string
+	requiresGit bool
+}
+
 // editDelegation is deliberately independent of MCP admission: every error allows.
 func editDelegation(event map[string]any, state string) (response map[string]any, err error) {
 	defer func() {
@@ -37,9 +44,7 @@ func editDelegation(event map[string]any, state string) (response map[string]any
 	if event["tool_name"] == "NotebookEdit" {
 		name = stringValue(input["notebook_path"])
 	}
-	// Explicit source-language extensions, including tests in those languages.
-	const extensions = ".go .py .pyi .js .jsx .mjs .cjs .ts .tsx .mts .cts .rs .c .h .cc .cpp .cxx .hpp .cs .java .kt .kts .swift .m .mm .rb .php .scala .sc .sh .bash .zsh .ps1 .psm1 .bat .cmd .sql .r .R .lua .pl .ex .exs .erl .hrl .hs .fs .fsx .clj .cljs .dart .vue .svelte .html .css .scss .sass .less .ipynb"
-	if name == "" || !strings.Contains(" "+extensions+" ", " "+filepath.Ext(name)+" ") {
+	if name == "" || !editSourcePath(name) {
 		return nil, nil
 	}
 	if event["tool_name"] == "Edit" {
@@ -67,6 +72,25 @@ func editDelegation(event map[string]any, state string) (response map[string]any
 				return nil, nil
 			}
 		}
+	}
+	return editDelegationTargets(event, state, []editCandidate{{path: name}})
+}
+
+func editSourcePath(name string) bool {
+	return strings.Contains(" "+editSourceExtensions+" ", " "+filepath.Ext(name)+" ")
+}
+
+func editDelegationTargets(event map[string]any, state string, candidates []editCandidate) (response map[string]any, err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			response, err = nil, fmt.Errorf("edit delegation: %v", value)
+		}
+	}()
+	if stringValue(event["agent_id"]) != "" || os.Getenv("PURSER_WORKER") == "1" {
+		return nil, nil
+	}
+	if len(candidates) == 0 {
+		return nil, nil
 	}
 	cwd := stringValue(event["cwd"])
 	if !filepath.IsAbs(cwd) || stringValue(event["session_id"]) == "" {
@@ -115,17 +139,6 @@ func editDelegation(event map[string]any, state string) (response map[string]any
 	if coder == "" || coder == "none" || coder == "claude" {
 		return nil, nil
 	}
-	if !filepath.IsAbs(name) {
-		name = filepath.Join(cwd, name)
-	}
-	target, err := editResolvedPath(name)
-	if err != nil {
-		return nil, err
-	}
-	relative, inside := editRelative(repo, target)
-	if !inside {
-		return nil, nil
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	git := func(args ...string) ([]byte, error) {
@@ -147,19 +160,42 @@ func editDelegation(event map[string]any, state string) (response map[string]any
 	if !os.SameFile(a, b) {
 		return nil, errors.New("git repository mismatch")
 	}
-	_, err = git("check-ignore", "-q", "--no-index", "--", filepath.ToSlash(relative))
-	if err == nil {
-		return nil, nil
+	for _, candidate := range candidates {
+		name := candidate.path
+		if !editSourcePath(name) {
+			continue
+		}
+		if !filepath.IsAbs(name) {
+			name = filepath.Join(cwd, name)
+		}
+		target, err := editResolvedPath(name)
+		if err != nil {
+			return nil, err
+		}
+		relative, inside := editRelative(repo, target)
+		if !inside {
+			continue
+		}
+		_, ignoreErr := git("check-ignore", "-q", "--no-index", "--", filepath.ToSlash(relative))
+		if ignoreErr == nil {
+			continue
+		}
+		var exit *exec.ExitError
+		if !errors.As(ignoreErr, &exit) || exit.ExitCode() != 1 || ctx.Err() != nil {
+			return nil, ignoreErr
+		}
+		if candidate.requiresGit {
+			if _, trackedErr := git("ls-files", "--error-unmatch", "--", filepath.ToSlash(relative)); trackedErr != nil {
+				continue
+			}
+		}
+		allowed, err := editRecovery(ctx, state, project, stringValue(event["session_id"]))
+		if err != nil || allowed {
+			return nil, err
+		}
+		return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": editDelegationReason}}, nil
 	}
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 1 || ctx.Err() != nil {
-		return nil, err
-	}
-	allowed, err := editRecovery(ctx, state, project, stringValue(event["session_id"]))
-	if err != nil || allowed {
-		return nil, err
-	}
-	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": editDelegationReason}}, nil
+	return nil, nil
 }
 
 // Resolve existing ancestors for new Write targets, but never guess past a

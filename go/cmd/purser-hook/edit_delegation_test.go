@@ -19,6 +19,13 @@ func TestEditDelegationHookProcess(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %s %v", output, err)
 	}
+	if err := os.WriteFile(filepath.Join(repo, "source.go"), []byte("package source\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd = testutil.Hide(exec.Command("git", "-C", repo, "add", "source.go"))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %s %v", output, err)
+	}
 	roles := filepath.Join(state, "projects", projectkey.For(repo), "roles.toml")
 	if err := os.MkdirAll(filepath.Dir(roles), 0700); err != nil {
 		t.Fatal(err)
@@ -37,20 +44,26 @@ func TestEditDelegationHookProcess(t *testing.T) {
 		if err := os.WriteFile(roles, []byte(text), 0600); err != nil {
 			t.Fatal(err)
 		}
-		raw, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Write", "session_id": "main", "cwd": repo,
-			"tool_input": map[string]any{"file_path": "new.go", "content": "package main"}})
-		cmd := testutil.Hide(exec.Command(self, "enforce"))
-		cmd.Stdin = bytes.NewReader(raw)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		output, err := cmd.Output()
-		if malformed {
-			if err == nil || len(output) != 0 || stderr.Len() == 0 {
-				t.Fatalf("error must signal failure without deny: %q %q %v", output, stderr.String(), err)
+		for _, tool := range []string{"Write", "Bash"} {
+			if malformed && tool == "Bash" {
+				continue
 			}
-		} else {
-			if err != nil || !bytes.Contains(output, []byte(`"permissionDecision":"deny"`)) {
-				t.Fatalf("deny missing: %q %q %v", output, stderr.String(), err)
+			input := map[string]any{"file_path": "new.go", "content": "package main"}
+			if tool == "Bash" {
+				input = map[string]any{"command": `sed -i 's/a/b/g' source.go`}
+			}
+			raw, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": tool, "session_id": "main", "cwd": repo, "tool_input": input})
+			cmd := testutil.Hide(exec.Command(self, "enforce"))
+			cmd.Stdin = bytes.NewReader(raw)
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			output, err := cmd.Output()
+			if malformed {
+				if err == nil || len(output) != 0 || stderr.Len() == 0 {
+					t.Fatalf("%s malformed roles must signal failure without deny: %q %q %v", tool, output, stderr.String(), err)
+				}
+			} else if err != nil || !bytes.Contains(output, []byte(`"permissionDecision":"deny"`)) {
+				t.Fatalf("%s deny missing: %q %q %v", tool, output, stderr.String(), err)
 			}
 		}
 	}

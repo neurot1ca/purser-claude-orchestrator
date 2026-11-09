@@ -33,8 +33,31 @@ var writePreBypass = writeBypass
 // Pre owns the Go PreToolUse policy and recovers internal failures with the
 // synchronous bypass / async-start deny contract.
 func Pre(event map[string]any, root string) (response map[string]any, failure error) {
+	tool := stringValue(event["tool_name"])
+	if event["hook_event_name"] == "PreToolUse" && (editTool(tool) || tool == "Bash" || tool == "PowerShell") {
+		defer func() {
+			if recover() != nil {
+				response, failure = nil, nil
+			}
+		}()
+	}
 	if event["hook_event_name"] == "PreToolUse" && editTool(stringValue(event["tool_name"])) {
 		return editDelegation(event, root)
+	}
+	if event["hook_event_name"] == "PreToolUse" {
+		tool := stringValue(event["tool_name"])
+		if tool == "Bash" || tool == "PowerShell" {
+			input := mapValue(event["tool_input"])
+			targets, trivial := shellEditTargets(tool, stringValue(input["command"]))
+			if trivial || len(targets) == 0 {
+				return nil, nil
+			}
+			candidates := make([]editCandidate, 0, len(targets))
+			for _, target := range targets {
+				candidates = append(candidates, editCandidate{path: target, requiresGit: true})
+			}
+			return editDelegationTargets(event, root, candidates)
+		}
 	}
 	if event["hook_event_name"] != "PreToolUse" || !codexTools[stringValue(event["tool_name"])] {
 		return nil, nil
@@ -49,7 +72,7 @@ func Pre(event map[string]any, root string) (response map[string]any, failure er
 	}()
 	// Contract process tests require building the hook with -tags contracttest.
 	internal := contractFault()
-	tool := stringValue(event["tool_name"])
+	tool = stringValue(event["tool_name"])
 	if strings.HasSuffix(tool, "__codex_apply") {
 		return preApply(event, root), nil
 	}
