@@ -150,8 +150,9 @@ func TestCursorConfinement(t *testing.T) {
 				t.Fatal(err)
 			}
 			shimConfig := map[string]any{"reviewer1_executable": path, "reviewer1_model_requested": "claude-sonnet-4-5"}
-			if !cursorConfinementVerified(context.Background(), shimConfig) {
-				t.Fatalf("%s shim confinement not verified", ext)
+			checks := map[string]string{}
+			if got := cursorConfinementStatus(context.Background(), shimConfig, checks); got != "verified" {
+				t.Fatalf("%s shim confinement = %s (checks %v), want verified", ext, got, checks)
 			}
 		}
 	})

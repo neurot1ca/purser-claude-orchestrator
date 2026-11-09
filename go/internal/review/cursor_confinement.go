@@ -23,7 +23,10 @@ import (
 	"purser-hook/internal/lease"
 )
 
-const cursorProbeTimeout = 90 * time.Second
+const (
+	cursorProbeTimeout      = 90 * time.Second
+	cursorShimLaunchTimeout = 30 * time.Second // Script shims can start slowly.
+)
 
 // Selection probes lazily; command construction also checks the current version.
 // Only the explicit operator override may bypass a missing or failed verdict.
@@ -46,7 +49,7 @@ func cursorConfinementStatus(ctx context.Context, config map[string]any, checks 
 		return "executable"
 	}
 	adapter := reviewerAdapters["cursor"]
-	versionCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	versionCtx, cancel := context.WithTimeout(ctx, cursorShimLaunchTimeout)
 	var version boundedBuffer
 	version.limit = 4096
 	code, err := runSupervised(versionCtx, []string{executable, "--version"}, "", os.Environ(), nil, &version, io.Discard, adapter.LaunchOptions())
@@ -246,7 +249,7 @@ func probeCursorConfinement(ctx context.Context, config map[string]any, timeout 
 	if err != nil {
 		return "command"
 	}
-	listCtx, listCancel := context.WithTimeout(probeCtx, 10*time.Second)
+	listCtx, listCancel := context.WithTimeout(probeCtx, cursorShimLaunchTimeout)
 	var listing boundedBuffer
 	listing.limit = 16384
 	listCode, listErr := runSupervised(listCtx, []string{command[0], "mcp", "list"}, working, os.Environ(), nil, &listing, io.Discard, adapter.LaunchOptions())
