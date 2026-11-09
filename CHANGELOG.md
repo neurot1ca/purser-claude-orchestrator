@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.231 — 2026-11-09
+- **Added:** a long desktop session is told to send code changes, bug investigations and multi-file work to a fresh session, and to archive that session once its work has landed.
+- **Changed:** the edit delegation guard also covers Bash and PowerShell commands that write to tracked code.
+- **Fixed:** a Windows `go test` exit of -1 no longer fails host validation when every selected package passed; the validation record notes it.
+
 ## 0.1.230 — 2026-11-08
 - **Changed:** the dispatcher only starts a job and waits for it; main Claude collects the result, reviews it and applies it.
 - **Changed:** Purser's tools load upfront and session start supplies the routine routing rules, so delegation needs no ToolSearch or Skill turn.
