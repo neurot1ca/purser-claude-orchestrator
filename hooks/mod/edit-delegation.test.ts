@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { register } from './enforcement.js'
 
 function stub(on, outcome: { exitCode?: number; stdout?: string }, calls: unknown[], logs: string[], worker = '') {
   on('env.get', (_$, e) => ({ value: ({ OS: 'Windows_NT', PROCESSOR_ARCHITECTURE: 'AMD64', PURSER_WORKER: worker })[e.name] }))
@@ -53,11 +54,14 @@ test('shell guard prefilters case-insensitive cmdlets and adjacent redirects', a
   expect(calls).toHaveLength(2)
 })
 
-test('shell guard exempts subagents before Go', async ($, on) => {
-  const calls: unknown[] = []
-  stub(on, { exitCode: 1 }, calls, [])
-  await $.tool.call({ tool: 'PowerShell', command: 'Set-Content -Path source.go -Value x', agentId: 'agent-1' })
-  expect(calls).toEqual([])
+// The engine owns agentId, so the kit cannot set it; call the registered handler directly.
+test('shell guard exempts subagents before Go', async () => {
+  let handler
+  register((event, fn) => { if (event === 'classic.PreToolUse') handler = fn })
+  const runs: unknown[] = [], event = { tool: 'PowerShell', command: 'Set-Content -Path source.go -Value x', agentId: 'agent-1' }
+  const $ = { process: { run: async (argv) => { runs.push(argv); return { exitCode: 1, stdout: '', stderr: '' } } } }
+  expect(await handler($, event, async (e) => e)).toBe(event)
+  expect(runs).toEqual([])
 })
 
 test('edit guard fails open and reports only once per session', async ($, on) => {
