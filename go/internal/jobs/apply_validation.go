@@ -102,6 +102,7 @@ type applyValidation struct {
 	Packages       []string       `json:"packages,omitempty"`
 	Status         string         `json:"status"`
 	Reason         string         `json:"reason,omitempty"`
+	ValidationNote string         `json:"validation_note,omitempty"`
 	PriorStatus    string         `json:"prior_status,omitempty"`
 	PriorReason    string         `json:"prior_reason,omitempty"`
 	PluginStatus   string         `json:"plugin_test_status,omitempty"`
@@ -1200,9 +1201,15 @@ func runValidationCommand(dir string, env, args []string, timeout time.Duration,
 		cmd.Stdout = capture
 	}
 	cmd.Stderr = capture
+	var overriddenExit error
 	defer func() {
-		if finishErr := capture.Finish(); finishErr != nil && resultErr != nil {
-			resultErr = errors.Join(resultErr, finishErr)
+		if finishErr := capture.Finish(); finishErr != nil {
+			if overriddenExit != nil {
+				record.ValidationNote = ""
+				resultErr = overriddenExit
+			} else if resultErr != nil {
+				resultErr = errors.Join(resultErr, finishErr)
+			}
 		}
 	}()
 	receiptPath := ""
@@ -1246,7 +1253,66 @@ func runValidationCommand(dir string, env, args []string, timeout time.Duration,
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	if record != nil && !capture.overflow {
+		if note := abnormalGoTestExitOverride(err, parsed, validationCommandPackages(args), runtime.GOOS); note != "" {
+			overriddenExit = err
+			record.ValidationNote = note
+			return nil
+		}
+	}
 	return err
+}
+
+func validationCommandPackages(args []string) []string {
+	for i, arg := range args {
+		if arg == "-json" {
+			packages := append([]string(nil), args[i+1:]...)
+			for _, pkg := range packages {
+				if strings.HasPrefix(pkg, "-") || strings.Contains(pkg, "...") || pkg == "." {
+					return nil
+				}
+			}
+			return packages
+		}
+	}
+	return nil
+}
+
+func abnormalGoTestExitOverride(err error, capture *testJSONCapture, selected []string, goos string) string {
+	if goos != "windows" || len(selected) == 0 || capture == nil || capture.record == nil {
+		return ""
+	}
+	capture.Finish()
+	if capture.invalidStream || capture.buildFailure {
+		return ""
+	}
+	exit, ok := err.(workerExitError)
+	if !ok || (exit.code != -1 && int64(exit.code) != 0xffffffff) {
+		return ""
+	}
+	if capture.record.Counts["packages_failed"] != 0 || capture.record.Counts["tests_failed"] != 0 || len(capture.running) != 0 {
+		return ""
+	}
+	if len(capture.packages) != len(selected) {
+		return ""
+	}
+	seen := make(map[string]bool, len(selected))
+	for _, pkg := range selected {
+		matched := ""
+		for got := range capture.packages {
+			if got == pkg || strings.HasSuffix(got, "/"+strings.TrimPrefix(pkg, "./")) {
+				if matched != "" {
+					return ""
+				}
+				matched = got
+			}
+		}
+		if matched == "" || capture.packages[matched] != "pass" || seen[matched] {
+			return ""
+		}
+		seen[matched] = true
+	}
+	return "go_test_root_exit_minus_one_all_packages_passed"
 }
 
 func setValidationChildEnv(env []string) []string {
@@ -1261,11 +1327,13 @@ func setValidationChildEnv(env []string) []string {
 }
 
 type testJSONCapture struct {
-	record      *applyValidation
-	pending     []byte
-	running     []string
-	packages    map[string]string
-	discardLine bool
+	record        *applyValidation
+	pending       []byte
+	running       []string
+	packages      map[string]string
+	discardLine   bool
+	invalidStream bool
+	buildFailure  bool
 }
 
 func (b *testJSONCapture) allPackagesSucceeded() bool {
@@ -1290,6 +1358,7 @@ func (b *testJSONCapture) Write(value []byte) (int, error) {
 			} else {
 				b.pending = b.pending[:0]
 				b.discardLine = true
+				b.invalidStream = true
 			}
 			break
 		}
@@ -1332,7 +1401,13 @@ func parseTestJSONLine(data []byte, capture *testJSONCapture) {
 		Output  string
 	}
 	if json.Unmarshal(bytes.TrimSpace(data), &event) != nil {
+		if len(bytes.TrimSpace(data)) > 0 {
+			capture.invalidStream = true
+		}
 		return
+	}
+	if event.Action == "build-fail" || (event.Action == "output" && strings.HasPrefix(strings.TrimSpace(event.Output), "# ")) {
+		capture.buildFailure = true
 	}
 	if event.Test != "" {
 		switch event.Action {

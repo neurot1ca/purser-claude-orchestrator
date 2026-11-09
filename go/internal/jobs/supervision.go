@@ -24,6 +24,10 @@ type treeReceipt struct {
 
 var errTreeUnconfirmed = errors.New("Process termination unconfirmed")
 
+type workerExitError struct{ code int }
+
+func (e workerExitError) Error() string { return fmt.Sprintf("worker exited with code %d", e.code) }
+
 func prepareTreeReceipt(dir, id, previous string) (string, error) {
 	path := previous
 	if path != "" {
@@ -235,7 +239,7 @@ func (s *supervisedCommand) wait() (proc.SupervisionResult, error) {
 		return r, r.Err
 	}
 	if r.RootExit != 0 {
-		return r, fmt.Errorf("worker exited with code %d", r.RootExit)
+		return r, workerExitError{code: r.RootExit}
 	}
 	return r, nil
 }
