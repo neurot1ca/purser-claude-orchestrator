@@ -1268,6 +1268,23 @@ func TestApplyValidationOutcomeSurvivesStaleness(t *testing.T) {
 	}
 }
 
+func TestApplyValidationFinishPreservesStaleReason(t *testing.T) {
+	root, repo, record := validationFixture(t, []string{"main.go"})
+	path := validationRecordPath(root, validationRepositoryKey(repo), record.JobID)
+	if err := writeApplyValidation(path, record); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(repo, "main.go"), "package validation\nfunc Value() int { return 3 }\n")
+	want := "checkout changed before validation started"
+	if err := finishValidation(root, path, &record, "stale", want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readApplyValidation(path)
+	if err != nil || got.Status != "stale" || got.Reason != want {
+		t.Fatalf("receipt = %#v, %v", got, err)
+	}
+}
+
 func TestApplyValidationOutcomeWriteFailureKeepsTerminalReceipt(t *testing.T) {
 	root, repo, record := validationFixture(t, []string{"main.go"})
 	path := validationRecordPath(root, validationRepositoryKey(repo), record.JobID)

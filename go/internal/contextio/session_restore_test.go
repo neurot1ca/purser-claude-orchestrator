@@ -106,6 +106,46 @@ func TestRestoreHandoffFreshCompactKeepsAuthoredContent(t *testing.T) {
 	}
 }
 
+func TestRestoreHandoffStartupReturnsPointerWithoutWriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "purser-handoff.md")
+	content := "# Purser handoff\n## Goal\nUser language: Türkçe\nFresh authored goal.\n## State\nFresh state.\n"
+	if err := os.WriteFile(path, []byte("original bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := restoreHandoff("startup", path, content, "")
+	want := "Reply to the user in Türkçe; everything else stays as the project rules say.\n" +
+		"A Purser handoff from an earlier session exists at " + path + ". It was not loaded because this is a new session; open it only if this task continues that work."
+	if got != want {
+		t.Fatalf("startup handoff = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "Fresh authored goal") || strings.Contains(got, "Fresh state") || strings.Contains(got, handoffHeader) {
+		t.Fatalf("startup injected handoff body: %q", got)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("startup changed handoff bytes: before %q, after %q", before, after)
+	}
+}
+
+func TestRestoreHandoffClearStillReturnsBody(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "purser-handoff.md")
+	if err := os.WriteFile(path, []byte("fresh handoff"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	content := "# Purser handoff\n## Goal\nFresh authored goal.\n## State\nFresh state.\n"
+	got := restoreHandoff("clear", path, content, "")
+	if !strings.Contains(got, handoffHeader) || !strings.Contains(got, "Fresh authored goal.") || !strings.Contains(got, "Fresh state.") {
+		t.Fatalf("clear handoff omitted body: %q", got)
+	}
+}
+
 func setHandoffModTime(t *testing.T, path string, modified time.Time) {
 	t.Helper()
 	if err := os.Chtimes(path, modified, modified); err != nil {

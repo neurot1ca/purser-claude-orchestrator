@@ -1064,7 +1064,7 @@ func finishValidation(root, path string, record *applyValidation, status, reason
 	if err == nil && record.TestedSnapshot != "" {
 		packageSnapshot, err = validationPackageSnapshot(record.Repository, record.Packages)
 	}
-	if err == nil && status != "launch_error" && status != "unconfirmed" && (currentSnapshot != record.Snapshot || packageSnapshot != record.TestedSnapshot) {
+	if err == nil && status != "launch_error" && status != "unconfirmed" && status != "stale" && (currentSnapshot != record.Snapshot || packageSnapshot != record.TestedSnapshot) {
 		status = "stale"
 		reason = "checkout changed during validation"
 	} else if err != nil && status == "passed" {

@@ -772,6 +772,14 @@ func restoreHandoff(source, path, content, transcriptPath string) string {
 	if !meaningful {
 		return ""
 	}
+	if source == "startup" {
+		language := HandoffUserLanguage(content)
+		instruction := ""
+		if language != "" && !strings.EqualFold(language, "English") {
+			instruction = "Reply to the user in " + language + "; everything else stays as the project rules say.\n"
+		}
+		return instruction + "A Purser handoff from an earlier session exists at " + path + ". It was not loaded because this is a new session; open it only if this task continues that work."
+	}
 	_ = writeHandoffAtomically(path, []byte(markedContent))
 	if source == "compact" {
 		if recent, boundary := recentTurns(transcriptPath); boundary {
