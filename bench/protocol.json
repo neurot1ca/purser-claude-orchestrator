@@ -9,7 +9,7 @@
     "treatment_plugin_key": "purser@inline"
   },
   "cli": {
-    "version": "2.1.317",
+    "version": "2.1.318",
     "command": "claude",
     "required_flags": [
       "-p",

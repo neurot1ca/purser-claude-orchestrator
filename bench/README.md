@@ -96,7 +96,7 @@ Each campaign provisions:
 - A verified release archive containing the host-matched engine binary.
 - Separate per-arm target worktrees, settings files, `PURSER_STATE_DIR`, and transcript directories.
 
-Both arms launch via `claude -p` (verified against Claude CLI `2.1.317`) with identical arguments and stdin prompt bytes:
+Both arms launch via `claude -p` (verified against Claude CLI `2.1.318`) with identical arguments and stdin prompt bytes:
 
 ```text
 claude -p \

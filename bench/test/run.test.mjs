@@ -590,7 +590,7 @@ test('preflight uses the injected fake Claude executable without network access'
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
   await installFixtureEngine(artifacts);
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `process.stdout.write('Claude Code 2.1.317\\n');`);
+  await writeFile(fake, `process.stdout.write('Claude Code 2.1.318\\n');`);
   const result = await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [runner, 'preflight', '--campaign', campaign, '--dry-run'], { env: { ...process.env, BENCH_CLAUDE: fake }, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
@@ -599,7 +599,7 @@ test('preflight uses the injected fake Claude executable without network access'
     child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
   });
   assert.equal(result.code, 0, result.stderr);
-  assert.match(result.stdout, /2\.1\.317/);
+  assert.match(result.stdout, /2.1.318/);
 });
 
 test('run selects confirmation tasks and calibrate rejects a narrowed task selection', async t => {
@@ -611,7 +611,7 @@ test('run selects confirmation tasks and calibrate rejects a narrowed task selec
   const narrowedArtifacts = path.join(repo, '.tmp', 'bench', `${campaign}-narrow`);
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); await retryIO(() => rm(narrowedArtifacts, { recursive: true, force: true })); });
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `process.stdout.write('Claude Code 2.1.317\\n');`);
+  await writeFile(fake, `process.stdout.write('Claude Code 2.1.318\\n');`);
   const run = await runProcess(process.execPath, [runner, 'run', '--campaign', campaign, '--dry-run'], {
     cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake }, input: '', deadlineSeconds: 30
   });
@@ -642,7 +642,7 @@ test('fake Claude calibration artifacts are accepted by analyze allocate', async
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
   await installFixtureEngine(artifacts);
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `import { randomUUID } from 'node:crypto'; import fs from 'node:fs'; import path from 'node:path'; const guidance=${JSON.stringify(purserGuidance)}; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(s.enabledPlugins['purser@inline']) { const dir=path.join(process.env.CLAUDE_CONFIG_DIR,'projects',process.cwd().replace(/[^A-Za-z0-9]/g,'-')); fs.mkdirSync(dir,{recursive:true}); fs.writeFileSync(path.join(dir,a[a.indexOf('--session-id')+1]+'.jsonl'),JSON.stringify({type:'attachment',attachment:{type:'hook_additional_context',hookEvent:'SessionStart',content:[guidance]}})+'\\n'); } const u={input_tokens:10,cache_read_input_tokens:2,cache_creation_input_tokens:1,output_tokens:4}; process.stdout.write(JSON.stringify({type:'assistant',message:{id:randomUUID(),role:'assistant',usage:u}})+'\\n'+JSON.stringify({type:'result',usage:u})+'\\n'); process.exitCode=1; }`);
+  await writeFile(fake, `import { randomUUID } from 'node:crypto'; import fs from 'node:fs'; import path from 'node:path'; const guidance=${JSON.stringify(purserGuidance)}; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.318\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(s.enabledPlugins['purser@inline']) { const dir=path.join(process.env.CLAUDE_CONFIG_DIR,'projects',process.cwd().replace(/[^A-Za-z0-9]/g,'-')); fs.mkdirSync(dir,{recursive:true}); fs.writeFileSync(path.join(dir,a[a.indexOf('--session-id')+1]+'.jsonl'),JSON.stringify({type:'attachment',attachment:{type:'hook_additional_context',hookEvent:'SessionStart',content:[guidance]}})+'\\n'); } const u={input_tokens:10,cache_read_input_tokens:2,cache_creation_input_tokens:1,output_tokens:4}; process.stdout.write(JSON.stringify({type:'assistant',message:{id:randomUUID(),role:'assistant',usage:u}})+'\\n'+JSON.stringify({type:'result',usage:u})+'\\n'); process.exitCode=1; }`);
   const campaignRun = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
     cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, CLAUDE_CONFIG_DIR: path.join(dir, 'claude-config'), GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
   });
@@ -678,7 +678,7 @@ test('authentication failure stops calibration and remains retryable on resume',
     enabledPlugins: { 'purser@purser-local': true, 'purser@inline': true, 'other-plugin': true }
   }));
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `import fs from 'node:fs'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const args=process.argv.slice(2); const settings=JSON.parse(fs.readFileSync(args[args.indexOf('--settings')+1],'utf8')); const env={CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,PURSER_STATE_DIR:process.env.PURSER_STATE_DIR}; const parentPresent=Object.fromEntries(['CLAUDECODE','CLAUDE_CODE_SESSION_ID','CLAUDE_CODE_ENTRYPOINT','CLAUDE_CODE_MESSAGING_TEST','CLAUDE_EFFORT','CLAUDE_PID'].map(key=>[key,key in process.env])); fs.writeFileSync(process.env.BENCH_CAPTURE,JSON.stringify({args,env,parentPresent,anthropicKeyPreserved:process.env.ANTHROPIC_API_KEY==='kept',settings})); process.stdout.write(JSON.stringify({type:'result',is_error:true,terminal_reason:'api_error',result:'Not logged in · Please run /login'})+'\\n'); }`);
+  await writeFile(fake, `import fs from 'node:fs'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.318\\n'); else { const args=process.argv.slice(2); const settings=JSON.parse(fs.readFileSync(args[args.indexOf('--settings')+1],'utf8')); const env={CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,PURSER_STATE_DIR:process.env.PURSER_STATE_DIR}; const parentPresent=Object.fromEntries(['CLAUDECODE','CLAUDE_CODE_SESSION_ID','CLAUDE_CODE_ENTRYPOINT','CLAUDE_CODE_MESSAGING_TEST','CLAUDE_EFFORT','CLAUDE_PID'].map(key=>[key,key in process.env])); fs.writeFileSync(process.env.BENCH_CAPTURE,JSON.stringify({args,env,parentPresent,anthropicKeyPreserved:process.env.ANTHROPIC_API_KEY==='kept',settings})); process.stdout.write(JSON.stringify({type:'result',is_error:true,terminal_reason:'api_error',result:'Not logged in · Please run /login'})+'\\n'); }`);
   const run = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
     cwd: repo, env: {
       ...process.env, BENCH_CLAUDE: fake, BENCH_CAPTURE: capture, CLAUDE_CONFIG_DIR: userConfig,
@@ -715,7 +715,7 @@ test('permission denials stop calibration without a terminal ledger record', asy
   const fake = path.join(dir, 'fake-claude.mjs');
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
   await installFixtureEngine(artifacts);
-  await writeFile(fake, `if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else process.stdout.write(JSON.stringify({type:'result',permission_denials:[{tool_name:'Edit'}]})+'\\n');`);
+  await writeFile(fake, `if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.318\\n'); else process.stdout.write(JSON.stringify({type:'result',permission_denials:[{tool_name:'Edit'}]})+'\\n');`);
   const run = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
     cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' },
     input: '', deadlineSeconds: 2400
@@ -740,7 +740,7 @@ test('Purser engine init failure aborts calibration without a terminal record', 
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
   await installFixtureEngine(artifacts);
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `import fs from 'node:fs'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(s.enabledPlugins['purser@inline']) process.stdout.write(JSON.stringify({type:'system',subtype:'init',mcp_servers:[{name:'plugin:purser:codex-main',status:'failed'}]})+'\\n'); else process.stdout.write(JSON.stringify({type:'result'})+'\\n'); process.exitCode=1; }`);
+  await writeFile(fake, `import fs from 'node:fs'; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.318\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(s.enabledPlugins['purser@inline']) process.stdout.write(JSON.stringify({type:'system',subtype:'init',mcp_servers:[{name:'plugin:purser:codex-main',status:'failed'}]})+'\\n'); else process.stdout.write(JSON.stringify({type:'result'})+'\\n'); process.exitCode=1; }`);
   const run = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
     cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
   });
@@ -765,7 +765,7 @@ test('Purser contamination in off init aborts calibration without a terminal rec
   t.after(async () => { await retryIO(() => rm(dir, { recursive: true, force: true })); await retryIO(() => rm(artifacts, { recursive: true, force: true })); });
   await installFixtureEngine(artifacts);
   const fake = path.join(dir, 'fake-claude.mjs');
-  await writeFile(fake, `import fs from 'node:fs'; const guidance=${JSON.stringify(purserGuidance)}; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.317\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(!s.enabledPlugins['purser@inline']) process.stdout.write(JSON.stringify({type:'system',subtype:'init',plugins:[{name:'plugin:purser:codex-main'}]})+'\\n'); else process.stdout.write(JSON.stringify({type:'system',subtype:'hook_response',hook_event:'SessionStart',stdout:guidance})+'\\n'+JSON.stringify({type:'result'})+'\\n'); process.exitCode=1; }`);
+  await writeFile(fake, `import fs from 'node:fs'; const guidance=${JSON.stringify(purserGuidance)}; if(process.argv.includes('--version')) process.stdout.write('Claude Code 2.1.318\\n'); else { const a=process.argv.slice(2), s=JSON.parse(fs.readFileSync(a[a.indexOf('--settings')+1])); if(!s.enabledPlugins['purser@inline']) process.stdout.write(JSON.stringify({type:'system',subtype:'init',plugins:[{name:'plugin:purser:codex-main'}]})+'\\n'); else process.stdout.write(JSON.stringify({type:'system',subtype:'hook_response',hook_event:'SessionStart',stdout:guidance})+'\\n'+JSON.stringify({type:'result'})+'\\n'); process.exitCode=1; }`);
   const run = await runProcess(process.execPath, [runner, 'calibrate', '--campaign', campaign], {
     cwd: repo, env: { ...process.env, BENCH_CLAUDE: fake, CLAUDE_CONFIG_DIR: path.join(dir, 'claude-config'), GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' }, input: '', deadlineSeconds: 2400
   });
