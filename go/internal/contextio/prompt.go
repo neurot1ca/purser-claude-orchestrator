@@ -14,6 +14,10 @@ var planToken = regexp.MustCompile(`(?i)/purser:plan\b`)
 
 const planningHintText = "Before drafting any plan yourself, ask the user whether to run /purser:plan (the coder writes it, saving your tokens); do not write the plan in chat first."
 
+const freshSessionNudgeTokens = 150000
+
+const freshSessionNudgeText = "Purser: long session. If the start_session tool is available, do code changes, bug investigations and multi-file work in a fresh session opened with it; answer short questions and single edits here. When that session ends, check its result: if its work is committed or complete, nothing awaits the user and no related job or validation is pending, archive it with archive_session; otherwise leave it and tell the user."
+
 func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 	recordPromptTurn(event, processStart)
 	repository := projectRoot(event)
@@ -37,7 +41,15 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 	if statePath != "" {
 		if session, _ := event["session_id"].(string); session != "" {
 			markFallbackAnswerable(repository, session)
-			advice := compactionAdvice(event, repository, statePath, session)
+			var records []map[string]any
+			var advice string
+			if os.Getenv("CLAUDE_CODE_ENTRYPOINT") == "claude-desktop" {
+				records = readTranscriptRecords(stringValue(event["transcript_path"]))
+				advice = compactionAdviceWithRecords(event, repository, statePath, session, records)
+			} else {
+				advice = compactionAdvice(event, repository, statePath, session)
+			}
+			nudge := freshSessionNudge(records, statePath, session)
 			retry := promptRetryContext(statePath, session)
 			planPointer := deliverPlanPointer(repository, statePath, session, false)
 			languageLine, injectPlan := contextInjections(statePath, session, language, planningHint(event["prompt"]), true)
@@ -47,7 +59,7 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 			}
 			state := readAdvisorState(statePath, session)
 			lifecycle := lifecycleGuidance(state)
-			additional := joinContext(languageLine, advice, retry, planLine, lifecycle, planPointer)
+			additional := joinContext(languageLine, advice, retry, planLine, lifecycle, planPointer, nudge)
 			if additional == "" {
 				return nil
 			}
@@ -69,6 +81,34 @@ func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 		return nil
 	}
 	return []byte(`{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": ` + jsonString(additional) + `}}`)
+}
+
+func freshSessionNudge(records []map[string]any, statePath, session string) (result string) {
+	defer func() {
+		if recover() != nil {
+			result = ""
+		}
+	}()
+	if os.Getenv("CLAUDE_CODE_ENTRYPOINT") != "claude-desktop" || statePath == "" || session == "" || len(records) == 0 {
+		return ""
+	}
+	state := readAdvisorState(statePath, session)
+	context := transcriptUsageContext(records)
+	if context < freshSessionNudgeTokens {
+		if state["fresh_session_nudged"] == true {
+			state["fresh_session_nudged"] = false
+			_ = writeAdvisorState(statePath, state)
+		}
+		return ""
+	}
+	if state["fresh_session_nudged"] == true {
+		return ""
+	}
+	state["fresh_session_nudged"] = true
+	if writeAdvisorState(statePath, state) != nil {
+		return ""
+	}
+	return freshSessionNudgeText
 }
 
 // RecordAdviceWritten records delivery only after the caller has written the

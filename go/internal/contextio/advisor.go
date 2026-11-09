@@ -82,6 +82,10 @@ func promptRetryContext(path, session string) string {
 }
 
 func compactionAdvice(event map[string]any, repository, statePath, session string) (result string) {
+	return compactionAdviceWithRecords(event, repository, statePath, session, readTranscriptRecords(stringValue(event["transcript_path"])))
+}
+
+func compactionAdviceWithRecords(event map[string]any, repository, statePath, session string, records []map[string]any) (result string) {
 	defer func() {
 		if recover() != nil {
 			result = ""
@@ -93,7 +97,6 @@ func compactionAdvice(event map[string]any, repository, statePath, session strin
 			settings.threshold = min(settings.threshold, max(1, threshold-autoCompactAdviceHeadroom))
 		}
 	}
-	records := readTranscriptRecords(stringValue(event["transcript_path"]))
 	context := transcriptUsageContext(records)
 	state := readAdvisorState(statePath, session)
 	if !settings.enabled {
