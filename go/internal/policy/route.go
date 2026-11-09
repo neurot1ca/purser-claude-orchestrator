@@ -220,7 +220,8 @@ func ThreadCompatibility(requested any, recorded any) ThreadCompatibilityDecisio
 	if !ok {
 		return fresh("INVALID_REQUEST", "Requested thread identity is incomplete; a fresh thread is required.")
 	}
-	if recorded == nil {
+	recordedMap, recordedIsMap := recorded.(map[string]any)
+	if recorded == nil || recordedIsMap && recordedMap == nil {
 		return fresh("NO_LIVE_THREAD", "No compatible live thread was recorded.")
 	}
 	recordedValues, ok := threadValues(recorded)

@@ -67,6 +67,19 @@ func TestPythonRouteThreadGoldenParity(t *testing.T) {
 	}
 }
 
+func TestThreadCompatibilityTypedNilRecordedThread(t *testing.T) {
+	requested := map[string]any{"task_id": "task", "route": "route", "model": "model", "effort": "medium"}
+	var recorded map[string]any
+	got := ThreadCompatibility(requested, recorded)
+	if got.Compatible || got.Code != "NO_LIVE_THREAD" || got.Action != "require a fresh thread" {
+		t.Fatalf("typed nil thread compatibility = %#v", got)
+	}
+	fresh := DecideFreshCodex(requested, recorded, "")
+	if !fresh.Allowed || fresh.Code != "NO_LIVE_THREAD" || fresh.Message != "No compatible live thread exists; a fresh codex call is allowed." {
+		t.Fatalf("fresh decision for no live thread = %#v", fresh)
+	}
+}
+
 func TestGearEligibilityDiscoveryAndRestore(t *testing.T) {
 	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/config.json")
 	if err != nil {

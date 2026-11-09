@@ -91,6 +91,105 @@ func TestPostAsyncFailureFollowupPythonFixture(t *testing.T) {
 	}
 }
 
+func TestPostAsyncFailureFollowupDoesNotConsumeStillRunningResult(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "post_async_failure.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []map[string]any `json:"cases"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil || len(fixture.Cases) == 0 {
+		t.Fatalf("decode async failure fixture: cases=%d err=%v", len(fixture.Cases), err)
+	}
+	for _, state := range []string{"RUNNING", "SUCCEEDED"} {
+		t.Run(state, func(t *testing.T) {
+			root := t.TempDir()
+			item := fixture.Cases[0]
+			event, index := mapValue(item["event"]), mapValue(item["index"])
+			pending, job := mapValue(item["pending"]), mapValue(item["job"])
+			index["project_key"], pending["project_key"], index["stage"] = "0123456789abcdef", "0123456789abcdef", "RUNNING"
+			job["state"] = state
+			event["error"] = `{"threadId": null, "error": "ASYNC_STILL_RUNNING: still running; wait for the completion signal"}`
+			key, id := stringValue(index["call_key"]), stringValue(index["jobId"])
+			writeAsyncFixtureObject(t, filepath.Join(root, "async_jobs"), id, index)
+			writeAsyncFixtureObject(t, filepath.Join(root, "pending"), key, pending)
+			writeAsyncFixtureObject(t, filepath.Join(root, "codex_exec_mcp", "jobs"), id, job)
+			if got := lease.New(filepath.Join(root, "projects", stringValue(pending["project_key"]))).Acquire(
+				stringValue(pending["lease_owner"]), stringValue(pending["task_id"]), []string{"src"}, lease.AcquireOptions{}, 100); got.Status != "OK" {
+				t.Fatalf("seed lease: %#v", got)
+			}
+			indexPath := filepath.Join(root, "async_jobs", id+".json")
+			pendingPath := filepath.Join(root, "pending", key+".json")
+			leasePath := filepath.Join(root, "projects", stringValue(pending["project_key"]), "scope_leases.json")
+			beforeIndex, err := os.ReadFile(indexPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforePending, err := os.ReadFile(pendingPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeLease, err := os.ReadFile(leasePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := PostToolUseFailureAsyncFollowup(event, root); got != nil {
+				t.Fatalf("failure response = %#v, want nil", got)
+			}
+			for _, check := range []struct {
+				path   string
+				before []byte
+			}{{indexPath, beforeIndex}, {pendingPath, beforePending}, {leasePath, beforeLease}} {
+				after, readErr := os.ReadFile(check.path)
+				if readErr != nil || !reflect.DeepEqual(after, check.before) {
+					t.Fatalf("state changed at %s: read err=%v", check.path, readErr)
+				}
+			}
+			for _, path := range []string{filepath.Join(root, "async_jobs", id+".claim.lock"), filepath.Join(root, "raw_tool_outputs", key+"-failure.json")} {
+				if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+					t.Fatalf("unexpected state write %s: %v", path, statErr)
+				}
+			}
+		})
+	}
+}
+
+func TestPostAsyncFailureFollowupTerminalFailedResultFinalizes(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "post_async_failure.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []map[string]any `json:"cases"`
+	}
+	if err = json.Unmarshal(data, &fixture); err != nil || len(fixture.Cases) == 0 {
+		t.Fatalf("decode async failure fixture: cases=%d err=%v", len(fixture.Cases), err)
+	}
+	root := t.TempDir()
+	item := fixture.Cases[0]
+	event, index := mapValue(item["event"]), mapValue(item["index"])
+	pending, job := mapValue(item["pending"]), mapValue(item["job"])
+	index["project_key"], pending["project_key"], index["stage"] = "0123456789abcdef", "0123456789abcdef", "FINALIZING"
+	job["state"] = "FAILED"
+	event["error"] = "Codex execution failed"
+	key, id := stringValue(index["call_key"]), stringValue(index["jobId"])
+	writeAsyncFixtureObject(t, filepath.Join(root, "async_jobs"), id, index)
+	writeAsyncFixtureObject(t, filepath.Join(root, "pending"), key, pending)
+	writeAsyncFixtureObject(t, filepath.Join(root, "codex_exec_mcp", "jobs"), id, job)
+	if got := lease.New(filepath.Join(root, "projects", stringValue(pending["project_key"]))).Acquire(
+		stringValue(pending["lease_owner"]), stringValue(pending["task_id"]), []string{"src"}, lease.AcquireOptions{}, 100); got.Status != "OK" {
+		t.Fatalf("seed lease: %#v", got)
+	}
+	if response := PostToolUseFailureAsyncFollowup(event, root); response == nil {
+		t.Fatal("terminal failure returned nil")
+	}
+	stored, err := readAsyncObject(filepath.Join(root, "async_jobs", id+".json"))
+	if err != nil || stored["stage"] != "CONSUMED" || stored["terminal_failure"] != true {
+		t.Fatalf("terminal failure index = %#v, err=%v", stored, err)
+	}
+}
+
 func replaceFailureState(value any, root string) any {
 	switch item := value.(type) {
 	case string:

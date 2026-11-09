@@ -16,13 +16,27 @@ func PostToolUseFailureAsyncFollowup(event map[string]any, root string) map[stri
 	if root == "" {
 		return failureErrorOutput("state root is missing")
 	}
-	if _, artifactRequested := mapValue(event["tool_input"])["artifact"]; artifactRequested && strings.HasSuffix(tool, "__codex_result") {
+	if strings.HasSuffix(tool, "__codex_result") {
 		// The outer failure hook binds the MCP call; verify job ownership too.
-		// A failed read must not claim or consume the worker's result.
-		if _, _, _, _, err := asyncOwned(root, event, stringValue(event["cwd"])); err != nil {
-			return failureErrorOutput(failureErrorText(err))
+		// A failed read or a still-running result must not claim or consume it.
+		_, index, _, _, err := asyncOwned(root, event, stringValue(event["cwd"]))
+		_, artifactRequested := mapValue(event["tool_input"])["artifact"]
+		if err != nil {
+			if artifactRequested {
+				return failureErrorOutput(failureErrorText(err))
+			}
+		} else {
+			if strings.Contains(stringValue(event["error"]), "ASYNC_STILL_RUNNING") {
+				return nil
+			}
+			job := asyncJob(root, index)
+			if job != nil && (job["state"] == "QUEUED" || job["state"] == "RUNNING") {
+				return nil
+			}
+			if artifactRequested {
+				return nil
+			}
 		}
-		return nil
 	}
 	lock, index, pending, _, cached, err := claimAsyncResult(root, event, stringValue(event["cwd"]))
 	if err != nil {
