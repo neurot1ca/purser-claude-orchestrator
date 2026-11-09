@@ -230,7 +230,7 @@ func Stop(event map[string]any, started time.Time) []byte {
 		}
 	}
 	if notice, ok := state["notice_pending"].(map[string]any); ok && validNoticePending(notice) && notice["blocked"] != true {
-		if !autoCompactModActive() {
+		if !noticeUsesAutoCompact(notice) {
 			notice["blocked"] = true
 			add("compaction", "End your reply with a line `---` followed by this exact four-line blockquote, translated into the user's language while keeping the markdown exactly:\n"+stopBlockquote(notice))
 		}
@@ -296,7 +296,7 @@ func stopBlockquote(n map[string]any) string {
 }
 
 func autoCompactModActive() bool {
-	if value := strings.ToLower(os.Getenv("PURSER_AUTO_COMPACT_TOKENS")); value == "0" || value == "off" {
+	if autoCompactExplicitlyDisabled() {
 		return false
 	}
 	info, err := os.Stat(filepath.Join(StateRoot(), "auto-compact.log"))
@@ -305,6 +305,15 @@ func autoCompactModActive() bool {
 	}
 	age := time.Since(info.ModTime())
 	return age >= 0 && age <= 30*time.Minute
+}
+
+func autoCompactExplicitlyDisabled() bool {
+	value := strings.ToLower(os.Getenv("PURSER_AUTO_COMPACT_TOKENS"))
+	return value == "0" || value == "off"
+}
+
+func noticeUsesAutoCompact(notice map[string]any) bool {
+	return !autoCompactExplicitlyDisabled() && (notice["auto_compact"] == true || autoCompactModActive())
 }
 
 func fallbackGuidance(p map[string]any) string {

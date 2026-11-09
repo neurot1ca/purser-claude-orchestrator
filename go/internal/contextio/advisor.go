@@ -186,7 +186,7 @@ func compactionAdviceWithRecords(event map[string]any, repository, statePath, se
 	notice := map[string]any{"context": context, "percentage": pct,
 		"handoff":  filepath.Join(filepath.Dir(statePath), "purser-handoff.md"),
 		"triggers": triggers, "blocked": false, "notice_id": hex.EncodeToString(id),
-		"advice_written": false, "advice_turn": 0}
+		"advice_written": false, "advice_turn": 0, "auto_compact": autoCompactModActive()}
 	state["last_suggested_context"], state["reminder_messages"], state["notice_pending"] = context, 0, notice
 	if writeAdvisorState(statePath, state) != nil {
 		return ""
@@ -221,7 +221,7 @@ func compactionNoticeAdvice(notice map[string]any, triggers []string) string {
 	handoff := str(notice["handoff"])
 	advice := fmt.Sprintf("Purser: %s context tokens; trigger(s): %s. Handoff: %s. After answering the current message, update its Goal, State, Decisions, Next, Open risks, Files to load sections (under 4,000 characters total). End each State and Decisions line with its source (commit or job). Keep the first Goal line `User language: <language>` set to the language the user writes in. Link by path to any existing repository handoff such as NEXT.md or HANDOFF.md. If your reply asks the user a question, also write that question under Next in the handoff so it survives compaction.",
 		formatThousands(context), strings.Join(triggers, ", "), handoff)
-	if autoCompactModActive() {
+	if noticeUsesAutoCompact(notice) {
 		return advice + " Do not compact or clear context yourself."
 	}
 	return advice + fmt.Sprintf(" End your turn with this as the very last text, after every tool call and everything else including any question: a line `---` and then this four-line blockquote translated into the user's language (keep the markdown exactly):\n%s\nThe percentage is an estimate; keep the ~. Do not compact or clear context yourself.", compactionBlockquote(notice, false))

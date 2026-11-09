@@ -11,15 +11,18 @@ import (
 
 func TestStopAutoCompactSuppressesOnlyCompactionReason(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		env        string
-		logAge     time.Duration
-		otherBlock bool
-		wantBlock  bool
-		wantQuote  bool
+		name        string
+		env         string
+		logAge      time.Duration
+		otherBlock  bool
+		autoCompact bool
+		wantBlock   bool
+		wantQuote   bool
 	}{
 		{name: "fresh log with default env", logAge: 0},
-		{name: "stale log", logAge: 31 * time.Minute, wantBlock: true, wantQuote: true},
+		{name: "stale log with auto-compact notice", logAge: 31 * time.Minute, autoCompact: true},
+		{name: "explicitly disabled despite auto-compact notice", env: "OFF", logAge: 31 * time.Minute, autoCompact: true, wantBlock: true, wantQuote: true},
+		{name: "legacy notice with stale log", logAge: 31 * time.Minute, wantBlock: true, wantQuote: true},
 		{name: "disabled by env", env: "off", logAge: 0, wantBlock: true, wantQuote: true},
 		{name: "other reason still blocks", logAge: 0, otherBlock: true, wantBlock: true},
 	} {
@@ -50,6 +53,9 @@ func TestStopAutoCompactSuppressesOnlyCompactionReason(t *testing.T) {
 				"notice_id": "0123456789abcdef0123456789abcdef", "context": 250000,
 				"percentage": 70, "handoff": "handoff.md",
 			}}
+			if test.autoCompact {
+				state["notice_pending"].(map[string]any)["auto_compact"] = true
+			}
 			if test.otherBlock {
 				state["version_pending"] = map[string]any{"version": "v-next"}
 			}
@@ -80,7 +86,7 @@ func TestStopAutoCompactSuppressesOnlyCompactionReason(t *testing.T) {
 	}
 }
 
-func TestCompactionNoticeAdviceOmitsBlockquoteWhenAutoCompactActive(t *testing.T) {
+func TestCompactionNoticeAdviceUsesNoticeAutoCompactState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -93,12 +99,35 @@ func TestCompactionNoticeAdviceOmitsBlockquoteWhenAutoCompactActive(t *testing.T
 	if err := os.WriteFile(logPath, []byte("decision\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	got := compactionNoticeAdvice(map[string]any{"context": 250000, "percentage": 70, "handoff": "handoff.md"}, []string{"threshold"})
-	if strings.Contains(got, "Type `/compact` now") || strings.Contains(got, "four-line blockquote") {
-		t.Fatalf("active auto-compact advice still requests a blockquote: %q", got)
+	stale := time.Now().Add(-31 * time.Minute)
+	if err := os.Chtimes(logPath, stale, stale); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(got, "Handoff: handoff.md") || !strings.Contains(got, "update its Goal, State, Decisions, Next") {
-		t.Fatalf("handoff instructions were lost: %q", got)
+	for _, test := range []struct {
+		name        string
+		env         string
+		autoCompact any
+		wantQuote   bool
+	}{
+		{name: "saved auto-compact state", autoCompact: true},
+		{name: "explicit env off", env: "off", autoCompact: true, wantQuote: true},
+		{name: "legacy notice", wantQuote: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("PURSER_AUTO_COMPACT_TOKENS", test.env)
+			notice := map[string]any{"context": 250000, "percentage": 70, "handoff": "handoff.md"}
+			if test.autoCompact != nil {
+				notice["auto_compact"] = test.autoCompact
+			}
+			got := compactionNoticeAdvice(notice, []string{"threshold"})
+			gotQuote := strings.Contains(got, "Type `/compact` now") || strings.Contains(got, "four-line blockquote")
+			if gotQuote != test.wantQuote {
+				t.Fatalf("blockquote present = %v, want %v: %q", gotQuote, test.wantQuote, got)
+			}
+			if !strings.Contains(got, "Handoff: handoff.md") || !strings.Contains(got, "update its Goal, State, Decisions, Next") {
+				t.Fatalf("handoff instructions were lost: %q", got)
+			}
+		})
 	}
 }
 
