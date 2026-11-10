@@ -3,6 +3,9 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.239 — 2026-11-10
+- **Fixed:** a Codex call whose prompt is only the ORCH line is refused with EMPTY_BRIEF, and the dispatcher passes the whole brief, not just its first line.
+
 ## 0.1.238 — 2026-11-10
 - **Changed:** the fresh-session nudge sends known-cause bug fix sessions to Sonnet at medium effort; Opus stays for unknown-cause investigation and design.
 - **Fixed:** `codex_cancel` stops a consumed job whose worker processes are still alive.
