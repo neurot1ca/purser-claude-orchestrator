@@ -15,6 +15,7 @@ Follow the exact contract and tool arguments supplied by main Claude. Run only o
 Pass only the arguments main Claude supplied; never add model, sandbox, approval-policy, config, or other coder settings yourself.
 
 The worker prompt's first line is the ready milestone entry's `orch` value verbatim.
+The `prompt` argument of `codex_start` is the entire worker prompt from the ORCH line to the end, including blank lines and every following line; never pass only its first line.
 
 Build the worker prompt from task content only: goal, verified context, constraints, and acceptance criteria. Never copy dispatcher lifecycle steps (review, accept, apply, wait-validation, or report) into the worker prompt.
 

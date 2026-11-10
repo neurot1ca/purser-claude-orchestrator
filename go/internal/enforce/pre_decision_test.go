@@ -1045,6 +1045,50 @@ func TestPreInvalidOrchWithoutTask(t *testing.T) {
 	}
 }
 
+func TestPreDeniesEmptyOrchBrief(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool, mode, threadID, prompt string
+		wantDeny                           bool
+	}{
+		{name: "LF after codex ORCH", tool: "mcp__codex-main__codex", prompt: "ORCH|task=empty-brief|phase=implementation|route=subtle|reason=new_task|basis=design boundary|scope=src/a.go\n", wantDeny: true},
+		{name: "CRLF after codex_start ORCH", tool: "mcp__codex-main__codex_start", mode: "new", prompt: "ORCH|task=empty-brief|phase=implementation|route=subtle|reason=new_task|basis=design boundary|scope=src/a.go\r\n", wantDeny: true},
+		{name: "spaces after ORCH", tool: "mcp__codex-main__codex_start", mode: "new", prompt: "ORCH|task=empty-brief|phase=implementation|route=subtle|reason=new_task|basis=design boundary|scope=src/a.go\n \t ", wantDeny: true},
+		{name: "reply mode", tool: "mcp__codex-main__codex_start", mode: "reply", prompt: "ORCH|task=task-recorded|phase=implementation|route=subtle|reason=continue|basis=continue implementation|scope=src/a.go\r\n", wantDeny: true},
+		{name: "codex-reply", tool: "mcp__codex-main__codex-reply", threadID: "thread-p63", prompt: "ORCH|task=task-recorded|phase=implementation|route=subtle|reason=continue|basis=continue implementation|scope=src/a.go\n", wantDeny: true},
+		{name: "brief body", tool: "mcp__codex-main__codex_start", mode: "new", prompt: "ORCH|task=empty-brief|phase=implementation|route=subtle|reason=new_task|basis=design boundary|scope=src/a.go\nImplement the change.", wantDeny: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, repo, state := setupRecordedReply(t, "gpt-6-luna", "high", "gpt-6-luna", "high")
+			for key, value := range map[string]string{"HOME": root, "USERPROFILE": root, "PURSER_STATE_DIR": state, "CODEX_HOME": root, "CLAUDE_PLUGIN_ROOT": root} {
+				t.Setenv(key, value)
+			}
+			input := map[string]any{"prompt": tc.prompt, "cwd": repo}
+			if tc.mode != "" {
+				input["mode"] = tc.mode
+			}
+			if tc.threadID != "" || tc.mode == "reply" {
+				input["threadId"] = tc.threadID
+				if tc.mode == "reply" {
+					input["threadId"] = "thread-p63"
+				}
+			}
+			got, err := Pre(map[string]any{"hook_event_name": "PreToolUse", "tool_name": tc.tool,
+				"tool_input": input, "cwd": repo, "session_id": "empty-brief", "tool_use_id": "empty-brief-" + tc.name}, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hook := mapValue(got["hookSpecificOutput"])
+			denied := hook["permissionDecision"] == "deny"
+			if denied != tc.wantDeny {
+				t.Fatalf("denied = %v, want %v: %#v", denied, tc.wantDeny, got)
+			}
+			if tc.wantDeny && !strings.HasPrefix(stringValue(hook["permissionDecisionReason"]), "EMPTY_BRIEF:") {
+				t.Fatalf("empty brief denial code = %q", hook["permissionDecisionReason"])
+			}
+		})
+	}
+}
+
 func TestDenyPreRoutingHelpTargetsORCHErrors(t *testing.T) {
 	malformed := mapValue(mapValue(denyPre("MALFORMED_ORCH_LINE", "Each ORCH field must use key=value syntax.")["hookSpecificOutput"]))
 	if reason := stringValue(malformed["permissionDecisionReason"]); !strings.Contains(reason, "Prepend this as the FIRST line") {
