@@ -16,7 +16,7 @@ const planningHintText = "Before drafting any plan yourself, ask the user whethe
 
 const freshSessionNudgeTokens = 150000
 
-const freshSessionNudgeText = "Purser: long session. If the start_session tool is available, do code changes, bug investigations and multi-file work in a fresh session opened with it; answer short questions and single edits here. When that session ends, check its result: if its work is committed or complete, nothing awaits the user and no related job or validation is pending, archive it with archive_session; otherwise leave it and tell the user."
+const freshSessionNudgeText = "Purser: long session. If the start_session tool is available, do code changes, bug investigations and multi-file work in a fresh session opened with it; answer short questions and single edits here. When that session ends, check its result: if its work is committed or complete, nothing awaits the user and no related job or validation is pending, archive it with archive_session; otherwise leave it and tell the user. Pass model and effort by work class: runbook, release, CI rerun and measurement sessions use model claude-sonnet-5-5 with effort medium; bug investigation and design sessions use model claude-opus-5-5 with effort medium; when the class is unclear, omit both so the session inherits this one."
 
 func UserPromptSubmit(event map[string]any, processStart time.Time) []byte {
 	recordPromptTurn(event, processStart)

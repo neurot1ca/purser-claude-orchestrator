@@ -1,6 +1,21 @@
 package contextio
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestFreshSessionNudgeWorkClassModels(t *testing.T) {
+	for _, want := range []string{
+		"runbook, release, CI rerun and measurement sessions use model claude-sonnet-5-5 with effort medium",
+		"bug investigation and design sessions use model claude-opus-5-5 with effort medium",
+		"when the class is unclear, omit both so the session inherits this one",
+	} {
+		if !strings.Contains(freshSessionNudgeText, want) {
+			t.Errorf("freshSessionNudgeText does not contain %q", want)
+		}
+	}
+}
 
 func TestPlanningHint(t *testing.T) {
 	tests := []struct {
