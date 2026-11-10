@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.238 — 2026-11-10
+- **Changed:** the fresh-session nudge sends known-cause bug fix sessions to Sonnet at medium effort; Opus stays for unknown-cause investigation and design.
+- **Fixed:** `codex_cancel` stops a consumed job whose worker processes are still alive.
+- **Fixed:** an ORCH-less reply is refused while a job on the same thread is running or has just finished.
+- **Fixed:** the detached POSIX test marker is written atomically.
+
 ## 0.1.237 — 2026-11-10
 - **Fixed:** a synchronous operation runbook call opens a fresh thread instead of being denied with USE_CODEX_REPLY when an earlier compatible live thread exists.
 
