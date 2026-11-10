@@ -3,6 +3,14 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.232 — 2026-11-10
+- **Changed:** routing guidance tells main Claude to write a delegation brief from the task text plus at most one locating search, without reading implementation code or trying an edit first.
+- **Changed:** session start points to the Purser handoff instead of repeating its body; compact and clear still restore it in full.
+- **Changed:** the dispatcher wait label names the worker instead of Codex.
+- **Fixed:** a `codex_result` call denied while a job is still running no longer consumes its result or leaves the thread unusable for replies.
+- **Fixed:** in auto-compact mode a pending compact notice is no longer rewritten after the mod log goes stale.
+- **Fixed:** Cursor shim launches get a 30 s bound, and a stale host validation keeps its precise reason.
+
 ## 0.1.231 — 2026-11-09
 - **Added:** a long desktop session is told to send code changes, bug investigations and multi-file work to a fresh session, and to archive that session once its work has landed.
 - **Changed:** the edit delegation guard also covers Bash and PowerShell commands that write to tracked code.
