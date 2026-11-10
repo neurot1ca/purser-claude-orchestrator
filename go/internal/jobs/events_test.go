@@ -197,6 +197,53 @@ func TestTestEvidenceFailedUsesLatestRunPerTargetExitCode(t *testing.T) {
 	}
 }
 
+func TestTestEvidenceRejectsStaleAmbiguousAndMalformedRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		latest map[string]any
+		want   any
+		stale  bool
+		failed bool
+	}{
+		{name: "edit after pass", latest: map[string]any{"type": "file_change", "status": "completed"}, stale: true},
+		{name: "compound success", latest: map[string]any{"command": `pwsh -Command "go test ./...; echo done"`, "exit_code": float64(0)}},
+		{name: "compound failure", latest: map[string]any{"command": `cmd /c "go test ./... || echo failed"`, "exit_code": float64(1)}, want: 1, failed: true},
+		{name: "missing latest exit", latest: map[string]any{"command": "go test ./..."}},
+		{name: "malformed latest exit", latest: map[string]any{"command": "go test ./...", "exit_code": "bad"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.latest["type"] == nil {
+				tc.latest["type"] = "command_execution"
+			}
+			events := []map[string]any{
+				{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "go test ./...", "exit_code": float64(0)}},
+				{"type": "item.completed", "item": tc.latest},
+			}
+			evidence := TestEvidence(events)
+			if tc.stale {
+				if len(evidence) != 0 {
+					t.Fatalf("stale evidence survived an edit: %#v", evidence)
+				}
+			} else if len(evidence) != 1 || evidence[0]["exit_code"] != tc.want {
+				t.Fatalf("latest evidence = %#v, want exit_code %v", evidence, tc.want)
+			}
+			if got := TestEvidenceFailed(events); got != tc.failed {
+				t.Fatalf("failure = %v, want %v", got, tc.failed)
+			}
+		})
+	}
+}
+
+func TestTestEvidencePartialRerunKeepsChainFailure(t *testing.T) {
+	events := []map[string]any{
+		{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "go test ./a && go test ./b", "exit_code": float64(1)}},
+		{"type": "item.completed", "item": map[string]any{"type": "command_execution", "command": "go test ./a", "exit_code": float64(0)}},
+	}
+	if evidence := TestEvidence(events); len(evidence) != 2 || !TestEvidenceFailed(events) {
+		t.Fatalf("partial rerun cleared a failing test chain: %#v", evidence)
+	}
+}
+
 func TestOpenCodeToolErrorIsNoteBeforeSuccessfulCompletion(t *testing.T) {
 	stream := NewEventStream("opencode")
 	stream.Write([]byte("{" +

@@ -5,7 +5,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,31 +13,8 @@ import (
 const postQuotaTailBytes = 256 << 10
 
 func postReadQuota(threadID string) map[string]any {
-	if threadID == "" || strings.ContainsAny(threadID, `/\\*?[]`) {
-		return nil
-	}
-	home := os.Getenv("CODEX_HOME")
-	if home == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			return nil
-		}
-		home = filepath.Join(userHome, ".codex")
-	}
-	now := time.Now()
-	for _, day := range []time.Time{now, now.AddDate(0, 0, -1)} {
-		folder := filepath.Join(home, "sessions", day.Format("2006"), day.Format("01"), day.Format("02"))
-		paths, _ := filepath.Glob(filepath.Join(folder, "rollout-*-"+threadID+".jsonl"))
-		if len(paths) > 0 {
-			return postReadQuotaPath(paths[0])
-		}
-	}
-	for _, year := range []int{now.Year(), now.Year() - 1} {
-		pattern := filepath.Join(home, "sessions", strconv.Itoa(year), "[0-1][0-9]", "[0-3][0-9]", "rollout-*-"+threadID+".jsonl")
-		paths, _ := filepath.Glob(pattern)
-		if len(paths) > 0 {
-			return postReadQuotaPath(paths[0])
-		}
+	if path := postCodexSessionPath(threadID); path != "" {
+		return postReadQuotaPath(path)
 	}
 	return nil
 }

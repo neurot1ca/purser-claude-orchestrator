@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"purser-hook/internal/testevidence"
 )
 
 const AgyBackgroundTaskAbandonedCode = "AGY_BACKGROUND_TASK_ABANDONED"
@@ -212,7 +213,7 @@ type testEvidenceRun struct {
 func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 	latest := make(map[string]testEvidenceRun)
 	outputs := make(map[string]string)
-	lastEdit, lastRun := -1, -1
+	lastEdit := -1
 	for i, event := range events {
 		kind, _ := event["type"].(string)
 		item, _ := event["item"].(map[string]any)
@@ -229,21 +230,17 @@ func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 		if kind != "item.completed" {
 			continue
 		}
-		if item["type"] == "file_change" && item["status"] == "completed" {
+		if item["type"] == "file_change" {
 			lastEdit = i
 		}
 		if item["type"] != "command_execution" {
 			continue
 		}
 		command, _ := item["command"].(string)
-		if !testRunnerCommand(command) {
+		target, exitCode := testevidence.ExitCode(command, item["exit_code"])
+		if target == "" {
 			continue
 		}
-		exitCode, ok := item["exit_code"].(float64)
-		if !ok || exitCode != float64(int(exitCode)) {
-			continue
-		}
-		lastRun = i
 		output := commandOutput(item)
 		if output == "" {
 			if id, _ := item["id"].(string); id != "" {
@@ -269,20 +266,18 @@ func collectTestEvidence(events []map[string]any) ([]testEvidenceRun, bool) {
 				tail = tail[1:]
 			}
 		}
-		latest[testRunnerTarget(command)] = testEvidenceRun{index: i, value: map[string]any{
-			"command": command, "exit_code": int(exitCode), "output_tail": tail,
+		latest[target] = testEvidenceRun{index: i, value: map[string]any{
+			"command": command, "exit_code": exitCode, "output_tail": tail,
 		}}
 	}
 	runs := make([]testEvidenceRun, 0, len(latest))
 	failed := false
 	for _, item := range latest {
-		// Post-edit checks supersede pre-fix runs, regardless of command or tool.
-		// Without a later check, retain the earlier evidence conservatively.
-		if lastEdit >= 0 && lastRun > lastEdit && item.index < lastEdit {
+		if item.index < lastEdit {
 			continue
 		}
 		runs = append(runs, item)
-		if item.value["exit_code"].(int) != 0 {
+		if code, ok := item.value["exit_code"].(int); ok && code != 0 {
 			failed = true
 		}
 	}
@@ -300,18 +295,15 @@ func commandOutput(item map[string]any) string {
 }
 
 // TestEvidence returns the latest completed test-runner command for each
-// distinct command string after the last completed file change when checks
-// follow that change, keeping only the six most recent runs.
+// distinct command string after the last file change, keeping at most six
+// runs without dropping an unknown status.
 func TestEvidence(events []map[string]any) []map[string]any {
 	runs, _ := collectTestEvidence(events)
-	if len(runs) > 6 {
-		runs = runs[len(runs)-6:]
-	}
 	out := make([]map[string]any, len(runs))
 	for i, item := range runs {
 		out[i] = item.value
 	}
-	return out
+	return testevidence.Limit(out)
 }
 
 // TestEvidenceFailed reports whether any latest-per-command test run failed,
@@ -326,86 +318,8 @@ func testRunnerCommand(command string) bool {
 }
 
 func testRunnerTarget(command string) string {
-	words := shellWords(command)
-	if len(words) == 0 {
-		return ""
-	}
-	base := func(path string) string {
-		path = strings.ToLower(strings.TrimSuffix(path, ".exe"))
-		if i := strings.LastIndexAny(path, `/\\`); i >= 0 {
-			path = path[i+1:]
-		}
-		return path
-	}
-	inner := command
-	if shell := base(words[0]); shell == "pwsh" || shell == "powershell" || shell == "bash" || shell == "sh" || shell == "zsh" || shell == "cmd" {
-		for i := 1; i < len(words)-1; i++ {
-			flag := strings.ToLower(words[i])
-			if shell != "cmd" && (flag == "-command" || flag == "-c" || flag == "-lc") || shell == "cmd" && flag == "/c" {
-				inner = words[i+1]
-				break
-			}
-		}
-	}
-	for _, segment := range shellSeparator.Split(inner, -1) {
-		tokens := shellWords(segment)
-		for len(tokens) > 0 {
-			if strings.HasPrefix(tokens[0], "$env:") && len(tokens) >= 3 && tokens[1] == "=" {
-				tokens = tokens[3:]
-				continue
-			}
-			if strings.Contains(tokens[0], "=") && !strings.HasPrefix(tokens[0], "=") {
-				tokens = tokens[1:]
-				continue
-			}
-			break
-		}
-		if len(tokens) == 0 {
-			continue
-		}
-		cmd := base(tokens[0])
-		if cmd == "go" && len(tokens) > 1 && tokens[1] == "test" ||
-			cmd == "pytest" || cmd == "uv" && len(tokens) > 2 && tokens[1] == "run" && base(tokens[2]) == "pytest" ||
-			(cmd == "npm" || cmd == "pnpm" || cmd == "yarn" || cmd == "cargo") && len(tokens) > 1 && (tokens[1] == "test") ||
-			(cmd == "python" || cmd == "python3" || cmd == "py") && len(tokens) > 2 && tokens[1] == "-m" && tokens[2] == "pytest" {
-			return strings.Join(tokens, " ")
-		}
-	}
-	return ""
+	return testevidence.Target(command)
 }
-
-func shellWords(command string) []string {
-	var words []string
-	var word strings.Builder
-	var quote rune
-	flush := func() {
-		if word.Len() > 0 {
-			words = append(words, word.String())
-			word.Reset()
-		}
-	}
-	for _, r := range command {
-		if quote != 0 {
-			if r == quote {
-				quote = 0
-			} else {
-				word.WriteRune(r)
-			}
-			continue
-		}
-		if r == '\'' || r == '"' {
-			quote = r
-		} else if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
-			flush()
-		} else {
-			word.WriteRune(r)
-		}
-	}
-	flush()
-	return words
-}
-
-var shellSeparator = regexp.MustCompile(`;|&&|\|\||\n`)
 
 // Result flushes an unterminated final line and returns a snapshot.
 func (s *EventStream) Result(interrupted bool, exitCode int, stderr string) EventResult {

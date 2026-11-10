@@ -138,8 +138,7 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 		bundle["codex_quota"] = postReadQuota(intake.ThreadID)
 	}
 	if stringValue(pending["phase"]) != "plan" {
-		worker := parseWorkerValidation(intake.Report)
-		bundle["worker_validation"] = worker
+		bundle["worker_validation"] = syncWorkerValidation(intake.ThreadID, intake.Report, bundle)
 	}
 	var deltaBundle map[string]any
 	foreignOwners := []map[string]any{}
@@ -215,6 +214,14 @@ func postSyncDispatch(event map[string]any, root string) (map[string]any, error)
 		response = appendPostDispatchReceipt(response, root, event, pending, repoRoot)
 	}
 	return response, err
+}
+
+func syncWorkerValidation(threadID, report string, bundle map[string]any) map[string]any {
+	worker := parseWorkerValidation(report)
+	bundle["worker_validation"] = worker
+	evidence, failed := postReadTestEvidence(threadID)
+	applyHostTestEvidence(bundle, evidence, failed)
+	return mapValue(bundle["worker_validation"])
 }
 
 func postReviewerStarted(bundle map[string]any) bool {

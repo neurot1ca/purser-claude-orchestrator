@@ -44,6 +44,83 @@ func TestPostToolUseSyncBypassDispatch(t *testing.T) {
 	}
 }
 
+func TestSyncHostTestEvidenceValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, status string
+		evidence     []any
+	}{
+		{name: "pass", status: "PASS", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(0)}}},
+		{name: "failure", status: "FAIL", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(1)}}},
+		{name: "no evidence", status: "UNKNOWN"},
+		{name: "stale after edit", status: "UNKNOWN", evidence: []any{
+			map[string]any{"command": "go test ./...", "exit_code": float64(0)},
+			map[string]any{"type": "file_change", "status": "completed"},
+		}},
+		{name: "compound success", status: "UNKNOWN", evidence: []any{
+			map[string]any{"command": "go test ./...", "exit_code": float64(0)},
+			map[string]any{"command": `pwsh -Command "go test ./...; echo done"`, "exit_code": float64(0)},
+		}},
+		{name: "compound failure", status: "FAIL", evidence: []any{
+			map[string]any{"command": `cmd /c "go test ./... || echo failed"`, "exit_code": float64(1)},
+		}},
+		{name: "partial rerun cannot clear chain failure", status: "FAIL", evidence: []any{
+			map[string]any{"command": "go test ./a && go test ./b", "exit_code": float64(1)},
+			map[string]any{"command": "go test ./a", "exit_code": float64(0)},
+		}},
+		{name: "latest missing exit", status: "UNKNOWN", evidence: []any{
+			map[string]any{"command": "go test ./...", "exit_code": float64(0)},
+			map[string]any{"command": "go test ./..."},
+		}},
+		{name: "latest malformed exit", status: "UNKNOWN", evidence: []any{
+			map[string]any{"command": "go test ./...", "exit_code": float64(0)},
+			map[string]any{"command": "go test ./...", "exit_code": "bad"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", home)
+			threadID := "sync-evidence"
+			day := time.Now()
+			folder := filepath.Join(home, "sessions", day.Format("2006"), day.Format("01"), day.Format("02"))
+			if err := os.MkdirAll(folder, 0700); err != nil {
+				t.Fatal(err)
+			}
+			var transcript strings.Builder
+			for _, raw := range tc.evidence {
+				entry := mapValue(raw)
+				if entry["type"] == nil {
+					entry["type"] = "command_execution"
+				}
+				event := map[string]any{"type": "event_msg", "payload": map[string]any{"type": "item_completed", "item": entry}}
+				data, err := json.Marshal(event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				transcript.Write(data)
+				transcript.WriteByte('\n')
+			}
+			if err := os.WriteFile(filepath.Join(folder, "rollout-sync-evidence-"+threadID+".jsonl"), []byte(transcript.String()), 0600); err != nil {
+				t.Fatal(err)
+			}
+			bundle := baseBundle("")
+			worker := syncWorkerValidation(threadID, `VALIDATION: {"source":"WORKER_REPORTED","status":"UNKNOWN","commands":[],"exit_codes":[]}`, bundle)
+			if worker["status"] != tc.status {
+				t.Fatalf("worker validation = %#v, want %s", worker, tc.status)
+			}
+			wantHost := tc.evidence != nil && tc.name != "stale after edit"
+			if wantHost && worker["source"] != "HOST_TEST_EVIDENCE" {
+				t.Fatalf("worker evidence source = %#v", worker["source"])
+			}
+			if !wantHost && worker["source"] != "WORKER_REPORTED" {
+				t.Fatalf("no-evidence source = %#v", worker["source"])
+			}
+			if bundle["validation"] != tc.status {
+				t.Fatalf("bundle validation = %#v, want %s", bundle["validation"], tc.status)
+			}
+		})
+	}
+}
+
 func TestPostToolUseReviewerBridgeDispatch(t *testing.T) {
 	pluginRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {

@@ -29,6 +29,45 @@ func (e *asyncReplayPreparationError) Error() string {
 
 func (e *asyncReplayPreparationError) Unwrap() error { return e.err }
 
+func applyHostTestEvidence(bundle map[string]any, evidence []any, failed bool) {
+	if len(evidence) == 0 {
+		return
+	}
+	worker := mapValue(bundle["worker_validation"])
+	worker["test_evidence"] = evidence
+	worker["source"] = "HOST_TEST_EVIDENCE"
+	status := "PASS"
+	malformed := false
+	latest := make(map[string]map[string]any, len(evidence))
+	for _, raw := range evidence {
+		entry := mapValue(raw)
+		latest[stringValue(entry["command"])] = entry
+	}
+	for _, entry := range latest {
+		value := mapValue(entry)["exit_code"]
+		code, ok := value.(float64)
+		if !ok {
+			if integer, valid := value.(int); valid {
+				code, ok = float64(integer), true
+			}
+		}
+		if !ok || code != float64(int(code)) {
+			malformed = true
+			continue
+		}
+		if code != 0 {
+			failed = true
+		}
+	}
+	if failed {
+		status = "FAIL"
+	} else if malformed {
+		status = "UNKNOWN"
+	}
+	worker["status"] = status
+	bundle["validation"] = status
+}
+
 // WorktreeRetirementDispatcher is installed by jobs to keep enforce independent
 // of the package that owns retirement dispatch.
 var WorktreeRetirementDispatcher func(stateRoot, jobID string) error
@@ -109,42 +148,7 @@ func finishAsyncSuccess(root string, event, index, pending, original map[string]
 		}
 	}
 	evidence, _ := job["testEvidence"].([]any)
-	if len(evidence) > 0 {
-		worker := mapValue(bundle["worker_validation"])
-		worker["test_evidence"] = evidence
-		worker["source"] = "HOST_TEST_EVIDENCE"
-		status := "PASS"
-		malformed := false
-		failed := job["testEvidenceFailed"] == true
-		latest := make(map[string]map[string]any, len(evidence))
-		for _, raw := range evidence {
-			entry := mapValue(raw)
-			latest[stringValue(entry["command"])] = entry
-		}
-		for _, entry := range latest {
-			value := mapValue(entry)["exit_code"]
-			code, ok := value.(float64)
-			if !ok {
-				if integer, valid := value.(int); valid {
-					code, ok = float64(integer), true
-				}
-			}
-			if !ok || code != float64(int(code)) {
-				malformed = true
-				continue
-			}
-			if code != 0 {
-				failed = true
-			}
-		}
-		if failed {
-			status = "FAIL"
-		} else if malformed {
-			status = "UNKNOWN"
-		}
-		worker["status"] = status
-		bundle["validation"] = status
-	}
+	applyHostTestEvidence(bundle, evidence, job["testEvidenceFailed"] == true)
 	if stringValue(pending["phase"]) == "plan" {
 		if _, planErr := storePostPlan(root, original, pending["task_id"], content, bundle); planErr != nil {
 			return nil, planErr
