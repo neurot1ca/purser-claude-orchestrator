@@ -59,7 +59,7 @@ func TestSessionStartConfiguredCoderGuidance(t *testing.T) {
 			if len([]byte(routingGuidance)) > 2*1024 {
 				t.Fatalf("SessionStart routing guidance exceeds 2 KiB UTF-8: %d", len([]byte(routingGuidance)))
 			}
-			for _, required := range []string{"No ToolSearch or Skill turn", "task, phase, and route are required", "bounded repo-relative `scope`", "basis=design:<choice>", "short user-language `label`", "Start the dispatcher in the background and wait for its terminal result.", "Main Claude collects the result, reviews it, and accepts and applies the reviewed revision.", "focused validation", "only if guidance is missing or the case is exceptional", "older clients lacking loaded tools can use the Skill fallback"} {
+			for _, required := range []string{"No ToolSearch or Skill turn", "task, phase, and route are required", "bounded repo-relative `scope`", "For a delegated change, write the brief from the task text plus at most one locating search; do not read implementation code, try Edit/Write, or patch with Bash first, because the worker receives the code map and edits in its own worktree.", "basis=design:<choice>", "short user-language `label`", "Start the dispatcher in the background and wait for its terminal result.", "Main Claude collects the result, reviews it, and accepts and applies the reviewed revision.", "focused validation", "only if guidance is missing or the case is exceptional", "older clients lacking loaded tools can use the Skill fallback"} {
 				if !strings.Contains(routingGuidance, required) {
 					t.Errorf("routing guidance missing %q", required)
 				}
