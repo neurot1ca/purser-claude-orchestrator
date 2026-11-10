@@ -120,7 +120,7 @@ func SessionStart(event map[string]any) []byte {
 	}
 
 	additional := ""
-	if validSession && handoff != "" {
+	if validSession && handoff != "" && !freshDesktopSession(event) {
 		transcriptPath, _ := event["transcript_path"].(string)
 		additional = restoreHandoff(source, handoff, string(content), transcriptPath)
 	}
@@ -179,6 +179,46 @@ func SessionStart(event map[string]any) []byte {
 		}
 	}
 	return []byte(output)
+}
+
+func freshDesktopSession(event map[string]any) bool {
+	if event["source"] != "startup" {
+		return false
+	}
+	path, _ := event["transcript_path"].(string)
+	if path == "" {
+		return false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	const maxFirstLine = 4096
+	line := make([]byte, 0, maxFirstLine)
+	for len(line) < maxFirstLine {
+		var next [1]byte
+		read, err := file.Read(next[:])
+		if read == 1 {
+			if next[0] == '\n' {
+				break
+			}
+			line = append(line, next[0])
+			continue
+		}
+		if err != nil && err != io.EOF {
+			return false
+		}
+		break
+	}
+	if len(line) == maxFirstLine {
+		return false
+	}
+	var record struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(bytes.TrimSuffix(line, []byte{'\r'}), &record) == nil && record.Type == "bridge-session"
 }
 
 var finishedRoutes = []string{"mechanical", "subtle", "normal", "consequential", "escalated", "operation", "plan_standard", "research"}

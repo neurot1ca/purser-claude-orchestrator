@@ -77,6 +77,62 @@ func TestSessionStartConfiguredCoderGuidance(t *testing.T) {
 	})
 }
 
+func TestSessionStartFreshDesktopSkipsOnlyHandoff(t *testing.T) {
+	for _, tt := range []struct {
+		name, source, transcript string
+		wantHandoff              bool
+	}{
+		{name: "fresh startup", source: "startup", transcript: "{\"type\":\"bridge-session\",\"session_id\":\"desktop\"}\n", wantHandoff: false},
+		{name: "ordinary startup", source: "startup", transcript: "{\"type\":\"queue-operation\"}\n", wantHandoff: true},
+		{name: "missing transcript", source: "startup", wantHandoff: true},
+		{name: "resume", source: "resume", transcript: "{\"type\":\"bridge-session\"}\n", wantHandoff: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stateRoot := t.TempDir()
+			t.Setenv("PURSER_STATE_DIR", stateRoot)
+			repo := updateSessionTestRepo(t)
+			key := repositoryProjectKey(repo)
+			projectState := filepath.Join(stateRoot, "projects", key)
+			rolesPath := filepath.Join(projectState, "roles.toml")
+			if err := os.MkdirAll(filepath.Dir(rolesPath), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(rolesPath, []byte("[roles]\ncoder = \"codex\"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			handoffPath := filepath.Join(projectState, "telemetry", "purser-handoff.md")
+			if err := os.MkdirAll(filepath.Dir(handoffPath), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(handoffPath, []byte("# Purser handoff\n## Goal\nCurrent work.\n## State\nCurrent state.\n<!-- PURSER:STATE:START -->\nState marker.\n<!-- PURSER:STATE:END -->\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			transcriptPath := ""
+			if tt.transcript != "" {
+				transcriptPath = filepath.Join(t.TempDir(), "transcript with spaces.jsonl")
+				if err := os.WriteFile(transcriptPath, []byte(tt.transcript), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			event := map[string]any{"hook_event_name": "SessionStart", "session_id": "fresh-desktop-test", "source": tt.source, "cwd": repo}
+			if transcriptPath != "" {
+				event["transcript_path"] = transcriptPath
+			}
+			if tt.source == "resume" && freshDesktopSession(event) {
+				t.Fatal("resume was classified as a fresh desktop startup")
+			}
+			got := sessionStartContext(t, event)
+			containsHandoff := strings.Contains(got, "A Purser handoff from an earlier session exists") || strings.Contains(got, handoffHeader) || strings.Contains(got, "PURSER:STATE:") || strings.Contains(got, "Full file:")
+			if containsHandoff != tt.wantHandoff {
+				t.Fatalf("handoff presence = %v, want %v: %q", containsHandoff, tt.wantHandoff, got)
+			}
+			if !strings.Contains(got, coderGuidance) || !strings.Contains(got, routingGuidance) {
+				t.Fatalf("SessionStart omitted configured guidance: %q", got)
+			}
+		})
+	}
+}
+
 func TestSessionStartPluginVersionNoticeParity(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("PURSER_STATE_DIR", stateRoot)
