@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.236 — 2026-11-10
+- **Changed:** sessions spawned by the desktop `start_session` tool no longer get the earlier session's handoff at start; their brief is self-contained, and routing guidance stays.
+- **Fixed:** a Windows CI flake in the pending check snapshot test, which gave a real `git --version` check only one second.
+
 ## 0.1.235 — 2026-11-10
 - **Fixed:** host test evidence now matches live Codex rollouts that record a command as an argv array (`CommandExecution`), unwrapping the shell script argument; a multi-command `parsed_cmd` fallback stays UNKNOWN.
 
