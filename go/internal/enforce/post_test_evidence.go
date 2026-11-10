@@ -45,8 +45,8 @@ func postReadTestEvidence(threadID string) ([]any, bool) {
 		switch item["type"] {
 		case "file_change":
 			lastEdit = i
-		case "command_execution":
-			command := stringValue(item["command"])
+		case "command_execution", "CommandExecution":
+			command := postTestCommand(item)
 			target, code := testevidence.ExitCode(command, item["exit_code"])
 			if target == "" {
 				continue
@@ -80,6 +80,48 @@ func postReadTestEvidence(threadID string) ([]any, bool) {
 		evidence[i] = run
 	}
 	return evidence, failed
+}
+
+func postTestCommand(item map[string]any) string {
+	if command, ok := item["command"].(string); ok {
+		return command
+	}
+	argv, ok := item["command"].([]any)
+	if !ok {
+		return postParsedCommand(item["parsed_cmd"])
+	}
+	args := make([]string, 0, len(argv))
+	for _, arg := range argv {
+		value, ok := arg.(string)
+		if !ok {
+			return postParsedCommand(item["parsed_cmd"])
+		}
+		args = append(args, value)
+	}
+	if len(args) == 0 {
+		return postParsedCommand(item["parsed_cmd"])
+	}
+	shell := strings.ToLower(filepath.Base(strings.ReplaceAll(args[0], `\`, `/`)))
+	shell = strings.TrimSuffix(shell, ".exe")
+	for i, arg := range args[1:] {
+		flag := strings.ToLower(arg)
+		isCommand := shell == "pwsh" || shell == "powershell"
+		isCommand = isCommand && (flag == "-command" || flag == "-c")
+		isCommand = isCommand || shell == "cmd" && flag == "/c"
+		isCommand = isCommand || (shell == "bash" || shell == "zsh" || shell == "sh") && (flag == "-c" || flag == "-lc")
+		if isCommand && i+2 < len(args) {
+			return strings.Join(args[i+2:], " ")
+		}
+	}
+	return strings.Join(args, " ")
+}
+
+func postParsedCommand(raw any) string {
+	parsed, _ := raw.([]any)
+	if len(parsed) != 1 {
+		return ""
+	}
+	return stringValue(mapValue(parsed[0])["cmd"])
 }
 
 func postCodexSessionPath(threadID string) string {

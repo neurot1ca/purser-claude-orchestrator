@@ -44,12 +44,30 @@ func TestPostToolUseSyncBypassDispatch(t *testing.T) {
 	}
 }
 
-func TestSyncHostTestEvidenceValidation(t *testing.T) {
+func TestHostTestEvidenceValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name, status string
 		evidence     []any
 	}{
 		{name: "pass", status: "PASS", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(0)}}},
+		{name: "single parsed command", status: "PASS", evidence: []any{map[string]any{
+			"parsed_cmd": []any{map[string]any{"cmd": "go test ./..."}}, "exit_code": float64(0),
+		}}},
+		{name: "multiple parsed commands", status: "UNKNOWN", evidence: []any{map[string]any{
+			"parsed_cmd": []any{map[string]any{"cmd": "go test ./..."}, map[string]any{"cmd": "echo done"}}, "exit_code": float64(0),
+		}}},
+		{name: "live Codex event", status: "PASS", evidence: []any{map[string]any{
+			"type": "CommandExecution", "command": []any{`C:\Program Files\PowerShell\7\pwsh.exe`, "-Command", "go test ./internal/contextio/..."},
+			"cwd": "file:///C:/Projects/purser/go", "parsed_cmd": []any{map[string]any{"type": "unknown", "cmd": "go test ./internal/contextio/..."}}, "exit_code": float64(0),
+		}}},
+		{name: "live Codex failing event", status: "FAIL", evidence: []any{map[string]any{
+			"type": "CommandExecution", "command": []any{`C:\Program Files\PowerShell\7\pwsh.exe`, "-Command", "go test ./internal/contextio/..."},
+			"cwd": "file:///C:/Projects/purser/go", "exit_code": float64(1),
+		}}},
+		{name: "live Codex compound command", status: "UNKNOWN", evidence: []any{map[string]any{
+			"type": "CommandExecution", "command": []any{`C:\Program Files\PowerShell\7\pwsh.exe`, "-Command", "go test ./internal/contextio/...; echo done"},
+			"cwd": "file:///C:/Projects/purser/go", "exit_code": float64(0),
+		}}},
 		{name: "failure", status: "FAIL", evidence: []any{map[string]any{"command": "go test ./...", "exit_code": float64(1)}}},
 		{name: "no evidence", status: "UNKNOWN"},
 		{name: "stale after edit", status: "UNKNOWN", evidence: []any{
@@ -107,7 +125,7 @@ func TestSyncHostTestEvidenceValidation(t *testing.T) {
 			if worker["status"] != tc.status {
 				t.Fatalf("worker validation = %#v, want %s", worker, tc.status)
 			}
-			wantHost := tc.evidence != nil && tc.name != "stale after edit"
+			wantHost := tc.evidence != nil && tc.name != "stale after edit" && tc.name != "multiple parsed commands"
 			if wantHost && worker["source"] != "HOST_TEST_EVIDENCE" {
 				t.Fatalf("worker evidence source = %#v", worker["source"])
 			}
