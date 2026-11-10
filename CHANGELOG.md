@@ -3,6 +3,9 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.237 — 2026-11-10
+- **Fixed:** a synchronous operation runbook call opens a fresh thread instead of being denied with USE_CODEX_REPLY when an earlier compatible live thread exists.
+
 ## 0.1.236 — 2026-11-10
 - **Changed:** sessions spawned by the desktop `start_session` tool no longer get the earlier session's handoff at start; their brief is self-contained, and routing guidance stays.
 - **Fixed:** a Windows CI flake in the pending check snapshot test, which gave a real `git --version` check only one second.
