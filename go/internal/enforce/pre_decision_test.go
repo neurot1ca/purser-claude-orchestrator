@@ -253,6 +253,60 @@ func TestPreDeniesAgyResearchReply(t *testing.T) {
 	}
 }
 
+func TestPreBareReplyThreadBusyWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name, state string
+		finishedAt  float64
+		prompt      string
+		wantDeny    bool
+	}{
+		{name: "running", state: "RUNNING", wantDeny: true},
+		{name: "just finished", state: "FAILED", finishedAt: float64(time.Now().UnixNano()) / 1e9, wantDeny: true},
+		{name: "idle past window", state: "SUCCEEDED", finishedAt: float64(time.Now().Add(-bareReplyRecentTerminalWindow-time.Second).UnixNano()) / 1e9},
+		{name: "orch reply", state: "RUNNING", prompt: "ORCH|task=task-recorded|phase=implementation|route=subtle|reason=continue|basis=continue implementation|scope=src/a.go\nContinue.", wantDeny: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, repo, stateRoot := setupRecordedReply(t, "gpt-6-luna", "high", "gpt-6-luna", "high")
+			for key, value := range map[string]string{"HOME": root, "USERPROFILE": root, "PURSER_STATE_DIR": stateRoot, "CODEX_HOME": root, "CLAUDE_PLUGIN_ROOT": root} {
+				t.Setenv(key, value)
+			}
+			jobs := filepath.Join(stateRoot, "codex_exec_mcp", "jobs")
+			if err := os.MkdirAll(jobs, 0700); err != nil {
+				t.Fatal(err)
+			}
+			job := map[string]any{"jobId": "fixture", "state": tc.state, "threadId": "thread-p63"}
+			if tc.finishedAt != 0 {
+				job["finishedAt"] = tc.finishedAt
+			}
+			data, err := json.Marshal(job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(jobs, "fixture.json"), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			prompt := tc.prompt
+			if prompt == "" {
+				prompt = "Continue."
+			}
+			got, err := Pre(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__codex-main__codex_start",
+				"tool_input": map[string]any{"mode": "reply", "threadId": "thread-p63", "prompt": prompt},
+				"cwd":        repo, "session_id": "bare-reply-" + tc.name, "tool_use_id": "bare-reply-" + tc.name}, stateRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hook := mapValue(got["hookSpecificOutput"])
+			denied := hook["permissionDecision"] == "deny"
+			if denied != tc.wantDeny {
+				t.Fatalf("denied=%v, want %v: %#v", denied, tc.wantDeny, got)
+			}
+			if tc.wantDeny && !strings.HasPrefix(stringValue(hook["permissionDecisionReason"]), "BARE_REPLY_THREAD_BUSY: ") {
+				t.Fatalf("wrong refusal: %#v", got)
+			}
+		})
+	}
+}
+
 func setupRecordedReply(t *testing.T, routeModel, routeEffort, recordedModel, recordedEffort string) (string, string, string) {
 	t.Helper()
 	root := preTempDir(t)

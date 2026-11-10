@@ -83,6 +83,9 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 	}
 	parsed := policy.ParseOrchPrompt(input["prompt"], config)
 	bareReply := reply && parsed.Code == "MISSING_ORCH_LINE" && stringValue(input["prompt"]) != ""
+	if bareReply && isBareReplyThreadBusy(defaultPreStateRoot(runtimeRoot), stringValue(input["threadId"]), time.Now()) {
+		return denyPre("BARE_REPLY_THREAD_BUSY", "A reply while a job on this thread is running or just finished needs an ORCH first line; a single dispatch must not send a second start."), nil
+	}
 	if !parsed.Valid && !bareReply {
 		if parsed.Code == "CONFIG_INVALID" {
 			return nil, errors.New(parsed.Message)
@@ -1378,6 +1381,34 @@ func pointerValue(value *string) string {
 }
 
 const preCodeMapExcerptMaxBytes = 6000
+
+const bareReplyRecentTerminalWindow = 30 * time.Second
+
+func isBareReplyThreadBusy(stateRoot, threadID string, now time.Time) bool {
+	if stateRoot == "" || threadID == "" {
+		return false
+	}
+	paths, err := filepath.Glob(filepath.Join(stateRoot, "codex_exec_mcp", "jobs", "*.json"))
+	if err != nil {
+		return false
+	}
+	for _, path := range paths {
+		job, err := readAsyncObject(path)
+		if err != nil || stringValue(job["threadId"]) != threadID {
+			continue
+		}
+		switch stringValue(job["state"]) {
+		case "RUNNING", "QUEUED":
+			return true
+		case "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT":
+			finishedAt, ok := job["finishedAt"].(float64)
+			if ok && finishedAt > 0 && now.Sub(time.Unix(0, int64(finishedAt*float64(time.Second)))) <= bareReplyRecentTerminalWindow {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 const prePlanShapeMarker = "Required plan shape (Purser):"
 
