@@ -30,6 +30,9 @@ var codexTools = map[string]bool{
 var runPreDecision = preDecision
 var writePreBypass = writeBypass
 
+// JobHasLiveProcesses is supplied by jobs, which owns the platform probes.
+var JobHasLiveProcesses func(stateRoot, jobID string) bool
+
 // Pre owns the Go PreToolUse policy and recovers internal failures with the
 // synchronous bypass / async-start deny contract.
 func Pre(event map[string]any, root string) (response map[string]any, failure error) {
@@ -249,6 +252,9 @@ func asyncPreFollowup(event map[string]any, root string) map[string]any {
 	if index["stage"] == "CONSUMED" {
 		if strings.HasSuffix(stringValue(event["tool_name"]), "__codex_cancel") {
 			job := asyncJob(stateRoot, index)
+			if job != nil && JobHasLiveProcesses != nil && JobHasLiveProcesses(stateRoot, stringValue(index["jobId"])) {
+				return map[string]any{}
+			}
 			state := stringValue(job["state"])
 			terminal := state == "SUCCEEDED" || state == "FAILED" || state == "CANCELLED" || state == "TIMED_OUT"
 			_, hasWorktree := job["worktreePath"]

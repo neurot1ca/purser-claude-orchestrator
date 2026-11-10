@@ -66,7 +66,7 @@ func TestHostTreeOwner(t *testing.T) {
 }
 
 func TestHostDetachedLifetimeAndTreeStop(t *testing.T) {
-	for _, mode := range []string{"cancel", "host-death", "validation-death", "validation-completion"} {
+	for _, mode := range []string{"cancel", "consumed-cancel", "host-death", "validation-death", "validation-completion"} {
 		t.Run(mode, func(t *testing.T) {
 			root := jobsScratchDir(t, "host-lifetime-")
 			dir := filepath.Join(root, "codex_exec_mcp", "jobs")
@@ -160,10 +160,38 @@ func TestHostDetachedLifetimeAndTreeStop(t *testing.T) {
 			if _, alive := hostLeafIdentity(pid); !alive {
 				t.Fatal("session exit stopped durable work")
 			}
-			if mode == "cancel" {
-				got := Cancel(root, map[string]any{"jobId": hostTestID})["structuredContent"].(map[string]any)
+			if mode == "cancel" || mode == "consumed-cancel" {
+				guard := 0
+				if mode == "consumed-cancel" {
+					lock, err := AcquireOwnership(dir, hostTestID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					job := readJob(dir, hostTestID)
+					job.Get("pid", &guard)
+					_ = job.Set("state", "SUCCEEDED")
+					_ = job.Set("errorCode", "STALLED")
+					err = Write(filepath.Join(dir, hostTestID+".json"), job)
+					_ = lock.Release()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.MkdirAll(filepath.Join(root, "async_jobs"), 0700); err != nil {
+						t.Fatal(err)
+					}
+					writeHostTestJSON(t, filepath.Join(root, "async_jobs", hostTestID+".json"), map[string]any{"stage": "CONSUMED"})
+				}
+				got := Cancel(root, map[string]any{"jobId": hostTestID, "reason": "stop consumed job"})["structuredContent"].(map[string]any)
 				if got["state"] != "CANCELLED" {
 					t.Fatalf("cancel: %#v", got)
+				}
+				if mode == "consumed-cancel" {
+					job := recordMap(readJob(dir, hostTestID))
+					if job["state"] != "CANCELLED" || job["cancellationReason"] != "stop consumed job" || job["errorCode"] != "CANCELLED" {
+						t.Fatalf("cancel record: %#v", job)
+					}
+					awaitHostLeafStopped(t, owner)
+					awaitHostLeafStopped(t, guard)
 				}
 			} else {
 				if err := p.Kill(); err != nil {

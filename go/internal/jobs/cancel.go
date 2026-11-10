@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -15,11 +16,39 @@ import (
 	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/models"
+	"purser-hook/internal/proc"
 )
 
 const cancelMessage = "Codex cancelled"
 
 var cancelSignalTimeout = 5 * time.Second
+
+var recordedProcessFields = [][2]string{
+	{"hostPid", "hostCreatedAt"},
+	{"supervisorPid", "supervisorCreatedAt"},
+	{"pid", "pidCreatedAt"},
+	{"agentPid", "agentCreatedAt"},
+}
+
+func init() {
+	enforce.JobHasLiveProcesses = func(root, id string) bool {
+		return jobHasLiveProcesses(readJob(filepath.Join(root, "codex_exec_mcp", "jobs"), id))
+	}
+}
+
+func jobHasLiveProcesses(job *Record) bool {
+	if job == nil {
+		return false
+	}
+	for _, fields := range recordedProcessFields {
+		pid, ok := recoveryInteger(job, fields[0])
+		created, createdOK := recoveryInteger(job, fields[1])
+		if ok && pid > 0 && pid <= 2147483647 && createdOK && created > 0 && IdentityMatches(int(pid), created) {
+			return true
+		}
+	}
+	return false
+}
 
 type CancelOptions struct {
 	RecordDecision             func(job map[string]any, decision, kind, sourceJobID string)
@@ -60,19 +89,26 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 	}
 	values := recordMap(job)
 	state, _ := values["state"].(string)
-	if _, supervised := values["treeReceipt"]; supervised && terminalJobState(state) {
+	index := readCleanupJSON(filepath.Join(stateRoot, "async_jobs", id+".json"))
+	liveProcesses := index["stage"] == "CONSUMED" && jobHasLiveProcesses(job)
+	if liveProcesses && terminalJobState(state) {
+		if _, supervised := values["treeReceipt"]; !supervised {
+			return cancelLiveJob(stateRoot, dir, id, job, args)
+		}
+	}
+	if _, supervised := values["treeReceipt"]; supervised && terminalJobState(state) && !liveProcesses {
 		if stopped, err := recordedTreeStopped(dir, job); !stopped {
 			return processUnconfirmedError(id, err)
 		}
 	}
-	if values["discarded"] == true {
+	if values["discarded"] == true && !liveProcesses {
 		if err := persistCancellationAttempt(stateRoot, values); err != nil {
 			log.Printf("task attempt persistence failed for cancelled job %s: %v", id, err)
 		}
 		dispatchWorktreeRetirement(stateRoot, id)
 		return jobResult(map[string]any{"jobId": id, "state": state, "discarded": true})
 	}
-	if terminalJobState(state) && values["applyState"] != "applied" && nonemptyString(args["reason"]) != "failed" {
+	if terminalJobState(state) && !liveProcesses && values["applyState"] != "applied" && nonemptyString(args["reason"]) != "failed" {
 		lock, err := AcquireOwnership(dir, id)
 		if err != nil {
 			return jobUpdateFailed(id, state)
@@ -111,7 +147,7 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		return cancelRecordResult(m)
 	}
 	worktree, _ := values["worktreePath"].(string)
-	if terminalJobState(state) && worktree != "" && values["applyState"] != "applied" {
+	if terminalJobState(state) && !liveProcesses && worktree != "" && values["applyState"] != "applied" {
 		discardedPersisted := false
 		lock, err := AcquireOwnership(dir, id)
 		if err != nil {
@@ -181,12 +217,12 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 			if err := persistCancellationAttempt(stateRoot, values); err != nil {
 				log.Printf("task attempt persistence failed for cancelled job %s: %v", id, err)
 			}
-			stopRecordedHost(current)
+			stopRecordedProcesses(current)
 			dispatchWorktreeRetirement(stateRoot, id)
 			return jobResult(map[string]any{"jobId": id, "state": state, "errorCode": "CANCELLED", "message": cancelMessage})
 		}
 	}
-	if terminalJobState(state) {
+	if terminalJobState(state) && !liveProcesses {
 		if state == "CANCELLED" {
 			if reason, ok := args["reason"].(string); ok {
 				values["cancellationReason"] = reason
@@ -240,7 +276,7 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		return cancellationUnconfirmed(dir, id, err)
 	}
 	current := readJob(dir, id)
-	if current != nil {
+	if current != nil && !liveProcesses {
 		var currentState string
 		current.Get("state", &currentState)
 		if terminalJobState(currentState) {
@@ -268,6 +304,9 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 	if err != nil || !confirmed {
 		return cancellationUnconfirmed(dir, id, err)
 	}
+	if liveProcesses {
+		return cancelLiveJob(stateRoot, dir, id, job, args)
+	}
 	current = readJob(dir, id)
 	if current != nil {
 		var currentState string
@@ -294,6 +333,46 @@ func Cancel(stateRoot string, args map[string]any, options ...CancelOptions) map
 		}
 	}
 	return processUnconfirmed(id)
+}
+
+func cancelLiveJob(stateRoot, dir, id string, original *Record, args map[string]any) map[string]any {
+	lock, err := AcquireOwnership(dir, id)
+	if err != nil {
+		return processUnconfirmedError(id, err)
+	}
+	current := readJob(dir, id)
+	if current == nil || string(current.values["generation"]) != string(original.values["generation"]) ||
+		string(current.values["ownershipToken"]) != string(original.values["ownershipToken"]) {
+		_ = lock.Release()
+		return processUnconfirmed(id)
+	}
+	if _, supervised := current.values["treeReceipt"]; supervised {
+		if stopped, err := recordedTreeStopped(dir, current); !stopped {
+			_ = lock.Release()
+			return processUnconfirmedError(id, err)
+		}
+	}
+	if !stopRecordedProcesses(current) {
+		_ = lock.Release()
+		return processUnconfirmed(id)
+	}
+	finishCancelled(current)
+	reason := nonemptyString(args["reason"])
+	if reason == "" {
+		reason = cancelMessage
+	}
+	_ = current.Set("cancellationReason", reason)
+	err = Write(filepath.Join(dir, id+".json"), current)
+	err = errors.Join(err, lock.Release())
+	if err != nil {
+		return jobUpdateFailed(id, "CANCELLED")
+	}
+	values := recordMap(current)
+	if err := persistCancellationAttempt(stateRoot, values); err != nil {
+		log.Printf("task attempt persistence failed for cancelled job %s: %v", id, err)
+	}
+	dispatchWorktreeRetirement(stateRoot, id)
+	return cancelRecordResult(values)
 }
 
 func persistCancellationAttempt(root string, job map[string]any) error {
@@ -365,21 +444,48 @@ func deadHostTreeConfirmed(dir string, record *Record) bool {
 	return true
 }
 
-func stopRecordedHost(record *Record) bool {
+func stopRecordedProcesses(record *Record) bool {
 	if record == nil {
 		return false
 	}
-	pidValue, pidOK := recoveryInteger(record, "hostPid")
-	created, createdOK := recoveryInteger(record, "hostCreatedAt")
-	pid := int(pidValue)
-	if !pidOK || !createdOK || pidValue <= 0 || int64(pid) != pidValue || created <= 0 || !IdentityMatches(pid, created) {
-		return false
+	for _, fields := range recordedProcessFields {
+		pidValue, pidOK := recoveryInteger(record, fields[0])
+		created, createdOK := recoveryInteger(record, fields[1])
+		if !pidOK || pidValue <= 0 || pidValue > 2147483647 || !createdOK || created <= 0 || !IdentityMatches(int(pidValue), created) {
+			continue
+		}
+		pid := int(pidValue)
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			return false
+		}
+		command := &exec.Cmd{Process: process}
+		proc.ConfigureProcessTreeKill(command)
+		// A parent's tree kill may already have stopped this recorded child.
+		if IdentityMatches(pid, created) {
+			err = command.Cancel()
+			if err != nil && IdentityMatches(pid, created) {
+				var state string
+				record.Get("state", &state)
+				// Preserve queued cancellation's root fallback after it was recorded.
+				if state == "CANCELLED" {
+					err = process.Kill()
+				}
+			}
+		}
+		_ = process.Release()
+		if err != nil && IdentityMatches(pid, created) {
+			return false
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for recoveryProcessState(pid, uint64(created)) != "DEAD" || runtime.GOOS != "windows" && !recoveryGroupStopped(pid) {
+			if time.Now().After(deadline) {
+				return false
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return process.Kill() == nil
+	return true
 }
 
 func finishCancelled(record *Record) {

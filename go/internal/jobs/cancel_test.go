@@ -52,6 +52,122 @@ func TestCancelDeadWorkerHelper(t *testing.T) {
 	}
 }
 
+func TestCancelConsumedTerminalProcesses(t *testing.T) {
+	root := jobsScratchDir(t, "consumed-terminal-")
+	fields := [][2]string{{"hostPid", "hostCreatedAt"}, {"supervisorPid", "supervisorCreatedAt"}, {"agentPid", "agentCreatedAt"}}
+	type childIdentity struct {
+		pid     int
+		created int64
+	}
+	children := make([]childIdentity, len(fields))
+	for i := range fields {
+		env := append(os.Environ(), "PURSER_CANCEL_HOST_MARKER="+filepath.Join(root, fields[i][0]+".json"))
+		pid, created, err := LaunchDetached([]string{os.Args[0], "-test.run=^TestCancelHostProcessHelper$"}, env, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		children[i] = childIdentity{pid, created}
+		t.Cleanup(func() {
+			if IdentityMatches(pid, created) {
+				process, _ := os.FindProcess(pid)
+				if process != nil {
+					_ = process.Kill()
+					_ = process.Release()
+				}
+			}
+		})
+	}
+	for _, mode := range []string{"reused", "unidentified", "unconsumed", "discarded", "applied", "matching"} {
+		t.Run(mode, func(t *testing.T) {
+			values := map[string]any{"jobId": hostTestID, "state": "SUCCEEDED", "generation": 1, "ownershipToken": "owner"}
+			if mode == "discarded" {
+				values["discarded"] = true
+			}
+			if mode == "applied" {
+				values["applyState"] = "applied"
+			}
+			for i, field := range fields {
+				values[field[0]] = children[i].pid
+				if mode != "unidentified" {
+					identity := children[i].created
+					if mode == "reused" {
+						identity++
+					}
+					values[field[1]] = identity
+				}
+			}
+			// The legacy supervisor PID aliases the same tree: do not signal it twice.
+			values["pid"], values["pidCreatedAt"] = values["supervisorPid"], values["supervisorCreatedAt"]
+			data, _ := json.Marshal(values)
+			record, err := Decode(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, "codex_exec_mcp", "jobs", hostTestID+".json")
+			if err := Write(path, record); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(root, "async_jobs"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			stage := "CONSUMED"
+			if mode == "unconsumed" || mode == "discarded" || mode == "applied" {
+				stage = "READY"
+			}
+			writeHostTestJSON(t, filepath.Join(root, "async_jobs", hostTestID+".json"), map[string]any{"stage": stage})
+			if mode == "reused" || mode == "unidentified" {
+				if jobHasLiveProcesses(record) {
+					t.Fatal("unproven process identity counted as live")
+				}
+				if !stopRecordedProcesses(record) {
+					t.Fatal("unproven process identity was signalled")
+				}
+				for _, child := range children {
+					if !IdentityMatches(child.pid, child.created) {
+						t.Fatal("unrelated process was killed")
+					}
+				}
+				return
+			}
+			got := Cancel(root, map[string]any{"jobId": hostTestID, "reason": "stop consumed success"})["structuredContent"].(map[string]any)
+			if stage != "CONSUMED" {
+				if got["state"] != "SUCCEEDED" {
+					t.Fatalf("non-consumed terminal cancel: %#v", got)
+				}
+				if mode == "unconsumed" {
+					_ = record.Set("applyState", "rejected")
+				}
+				expected, err := record.Bytes()
+				if err != nil {
+					t.Fatal(err)
+				}
+				saved, err := os.ReadFile(path)
+				if err != nil || string(saved) != string(expected) {
+					t.Fatalf("previous terminal behavior changed: %s, %v", saved, err)
+				}
+				for _, child := range children {
+					if !IdentityMatches(child.pid, child.created) {
+						t.Fatal("non-consumed terminal process was killed")
+					}
+				}
+				return
+			}
+			if got["state"] != "CANCELLED" {
+				t.Fatalf("cancel: %#v", got)
+			}
+			saved := recordMap(readJob(filepath.Dir(path), hostTestID))
+			if saved["state"] != "CANCELLED" || saved["cancellationReason"] != "stop consumed success" {
+				t.Fatalf("cancel record: %#v", saved)
+			}
+			for _, child := range children {
+				if IdentityMatches(child.pid, child.created) {
+					t.Fatal("recorded process was left running")
+				}
+			}
+		})
+	}
+}
+
 func TestCancelQueuedStopsOnlyMatchingHostProcess(t *testing.T) {
 	for _, mismatch := range []bool{false, true} {
 		t.Run(map[bool]string{false: "matching_identity", true: "identity_mismatch"}[mismatch], func(t *testing.T) {
