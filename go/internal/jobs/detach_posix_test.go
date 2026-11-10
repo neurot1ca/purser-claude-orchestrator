@@ -17,7 +17,21 @@ func TestLaunchDetachedPosix(t *testing.T) {
 		data, _ := json.Marshal(map[string]string{
 			"cwd": cwd, "value": os.Getenv("PURSER_DETACHED_TEST_VALUE"),
 		})
-		_ = os.WriteFile(marker, data, 0600)
+		temp, err := os.CreateTemp(filepath.Dir(marker), ".child-*.tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(temp.Name())
+		if _, err := temp.Write(data); err != nil {
+			_ = temp.Close()
+			t.Fatal(err)
+		}
+		if err := temp.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(temp.Name(), marker); err != nil {
+			t.Fatal(err)
+		}
 		time.Sleep(time.Minute)
 		return
 	}
