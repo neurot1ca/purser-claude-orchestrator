@@ -18,7 +18,11 @@ import (
 
 func TestEditDelegation(t *testing.T) {
 	for _, name := range []string{
-		"write", "edit", "multi", "notebook", "trivial", "replace-one-line", "replace-many-lines",
+		"write", "edit", "multi", "notebook", "trivial", "insert-with-context", "replace-many-real-lines",
+		"insert-with-context-crlf", "replace-many-real-lines-crlf", "replace-one-line", "replace-many-lines",
+		"replace-one-multiline", "replace-many-multiline",
+		"line-ending-conversion", "mixed-line-endings", "bare-cr",
+		"insert-at-end", "insert-at-end-crlf", "remove-final-line", "remove-final-line-crlf",
 		"prose", "no-coder", "none", "claude", "opt-out", "missing-roles", "bad-roles", "bad-opt-out",
 		"unreadable-roles", "worker", "dispatcher", "ignored", "outside", "new-path", "subdirectory",
 		"git-failure", "missing-git", "failed-session", "other-session", "conflict", "bad-index", "other-tool",
@@ -58,6 +62,42 @@ func TestEditDelegation(t *testing.T) {
 				event["tool_name"], input["notebook_path"], deny = "NotebookEdit", "work.ipynb", true
 			case "trivial":
 				event["tool_name"], input["old_string"], input["new_string"] = "Edit", "old", "new"
+			case "line-ending-conversion":
+				event["tool_name"], input["old_string"], input["new_string"], deny = "Edit", "a\r\nb\r\nc", "a\nb\nc", true
+			case "mixed-line-endings":
+				event["tool_name"], input["old_string"], input["new_string"], deny = "Edit", "a\r\nb\nc", "a\nb\r\nc", true
+			case "bare-cr":
+				event["tool_name"], input["old_string"], input["new_string"], deny = "Edit", "a\rb\rc", "a\rX\rc", true
+			case "insert-at-end", "insert-at-end-crlf", "remove-final-line", "remove-final-line-crlf":
+				separator := "\n"
+				if strings.HasSuffix(name, "-crlf") {
+					separator = "\r\n"
+				}
+				old, newText := "a"+separator+"b", "a"+separator+"b"+separator+"X"
+				if strings.HasPrefix(name, "remove-") {
+					old, newText = newText, old
+				}
+				event["tool_name"], input["old_string"], input["new_string"] = "Edit", old, newText
+			case "insert-with-context", "insert-with-context-crlf":
+				separator := "\n"
+				if name == "insert-with-context-crlf" {
+					separator = "\r\n"
+				}
+				event["tool_name"], input["old_string"], input["new_string"] = "Edit", strings.Join([]string{"a", "b", "c"}, separator), strings.Join([]string{"a", "X", "b", "c"}, separator)
+			case "replace-many-real-lines", "replace-many-real-lines-crlf":
+				separator := "\n"
+				if name == "replace-many-real-lines-crlf" {
+					separator = "\r\n"
+				}
+				event["tool_name"], input["old_string"], input["new_string"], deny = "Edit", strings.Join([]string{"a", "b", "c"}, separator), strings.Join([]string{"a", "B", "C"}, separator), true
+			case "replace-one-multiline", "replace-many-multiline":
+				event["tool_name"], input["old_string"], input["new_string"], input["replace_all"] = "Edit", "a\nb\nc", "a\nX\nb\nc", true
+				content := "a\nb\nc\n"
+				if name == "replace-many-multiline" {
+					content += content
+					deny = true
+				}
+				write(filepath.Join(repo, "source.go"), content)
 			case "replace-one-line", "replace-many-lines":
 				event["tool_name"], input["old_string"], input["new_string"], input["replace_all"] = "Edit", "old", "new", true
 				if name == "replace-one-line" {

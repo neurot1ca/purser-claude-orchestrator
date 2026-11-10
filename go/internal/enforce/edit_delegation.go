@@ -50,7 +50,25 @@ func editDelegation(event map[string]any, state string) (response map[string]any
 	if event["tool_name"] == "Edit" {
 		old, oldOK := input["old_string"].(string)
 		newText, newOK := input["new_string"].(string)
-		if oldOK && newOK && old != "" && !strings.ContainsAny(old+newText, "\r\n") {
+		oldLines := strings.Split(old, "\n")
+		newLines := strings.Split(newText, "\n")
+		sameLine := func(i, j int) bool {
+			return strings.TrimSuffix(oldLines[i], "\r") == strings.TrimSuffix(newLines[j], "\r") &&
+				(i == len(oldLines)-1 || j == len(newLines)-1 ||
+					strings.HasSuffix(oldLines[i], "\r") == strings.HasSuffix(newLines[j], "\r"))
+		}
+		start := 0
+		for start < len(oldLines) && start < len(newLines) && sameLine(start, start) {
+			start++
+		}
+		oldEnd, newEnd := len(oldLines), len(newLines)
+		for oldEnd > start && newEnd > start && sameLine(oldEnd-1, newEnd-1) {
+			oldEnd--
+			newEnd--
+		}
+		bareCR := strings.Contains(strings.ReplaceAll(old, "\r\n", ""), "\r") ||
+			strings.Contains(strings.ReplaceAll(newText, "\r\n", ""), "\r")
+		if oldOK && newOK && old != "" && oldEnd-start <= 1 && newEnd-start <= 1 && !bareCR {
 			if input["replace_all"] != true {
 				return nil, nil
 			}
@@ -63,9 +81,13 @@ func editDelegation(event map[string]any, state string) (response map[string]any
 				return nil, err
 			}
 			lines := 0
-			for _, line := range strings.Split(string(content), "\n") {
-				if strings.Contains(line, old) {
-					lines++
+			if strings.Contains(old, "\n") {
+				lines = strings.Count(string(content), old)
+			} else {
+				for _, line := range strings.Split(string(content), "\n") {
+					if strings.Contains(line, old) {
+						lines++
+					}
 				}
 			}
 			if lines <= 1 {
