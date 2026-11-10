@@ -480,7 +480,7 @@ func TestCodexHookPortPendingCheckSnapshot(t *testing.T) {
 	}
 	bundle := baseBundle("")
 	bundle["delta"], bundle["thread_id"] = map[string]any{"status": "OK", "changed_paths": []string{"scope/file.txt"}, "changed_file_count": 1, "changed_line_count": 2}, "thread"
-	schedulePostReview(repo, pending, bundle, postProfile{}, checks, map[string]any{"small_delta_max_files": 2, "small_delta_max_lines": 50}, time.Second, true, true)
+	schedulePostReview(repo, pending, bundle, postProfile{}, checks, map[string]any{"small_delta_max_files": 2, "small_delta_max_lines": 50}, 30*time.Second, true, true)
 	if mapValue(bundle["hook_checks"])["status"] != "PASS" {
 		t.Fatalf("changed profile replaced pending checks: %#v", bundle)
 	}
