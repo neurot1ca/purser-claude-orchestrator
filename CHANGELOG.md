@@ -3,6 +3,9 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.233 — 2026-11-10
+- **Changed:** the fresh-session nudge tells main Claude to pass model and effort by work class: Sonnet at medium effort for runbook, release, CI rerun and measurement sessions, Opus at medium effort for bug investigation and design; an unclear class inherits the current session.
+
 ## 0.1.232 — 2026-11-10
 - **Changed:** routing guidance tells main Claude to write a delegation brief from the task text plus at most one locating search, without reading implementation code or trying an edit first.
 - **Changed:** session start points to the Purser handoff instead of repeating its body; compact and clear still restore it in full.
