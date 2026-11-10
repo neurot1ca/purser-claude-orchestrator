@@ -80,6 +80,30 @@ func TestThreadCompatibilityTypedNilRecordedThread(t *testing.T) {
 	}
 }
 
+func TestDecideFreshCodexTaskAndPhase(t *testing.T) {
+	thread := func(task, phase string) map[string]any {
+		return map[string]any{"task_id": task, "phase": phase, "route": "operation", "model": "gpt-6-luna", "effort": "high"}
+	}
+	for _, tc := range []struct {
+		name    string
+		request map[string]any
+		allowed bool
+		code    string
+	}{
+		{name: "operation with new task", request: thread("new-task", "operation"), allowed: true, code: "TASK_ID_MISMATCH"},
+		{name: "implementation with different task", request: thread("new-task", "implementation"), allowed: true, code: "TASK_ID_MISMATCH"},
+		{name: "implementation with same task", request: thread("same-task", "implementation"), allowed: false, code: "USE_CODEX_REPLY"},
+		{name: "operation with same task", request: thread("same-task", "operation"), allowed: true, code: "FRESH_OPERATION"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DecideFreshCodex(tc.request, thread("same-task", "implementation"), "new_task")
+			if got.Allowed != tc.allowed || got.Code != tc.code {
+				t.Fatalf("DecideFreshCodex() = %#v, want allowed=%v code=%q", got, tc.allowed, tc.code)
+			}
+		})
+	}
+}
+
 func TestGearEligibilityDiscoveryAndRestore(t *testing.T) {
 	data, err := os.ReadFile("../../../.claude/hooks/orchestrator/config.json")
 	if err != nil {

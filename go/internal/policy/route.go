@@ -244,6 +244,13 @@ func ThreadCompatibility(requested any, recorded any) ThreadCompatibilityDecisio
 func DecideFreshCodex(requested any, recorded any, reason any) FreshCodexDecision {
 	compatibility := ThreadCompatibility(requested, recorded)
 	if compatibility.Compatible {
+		identity, _ := requested.(map[string]any)
+		if identity["phase"] == "operation" {
+			return FreshCodexDecision{
+				Action: "allow fresh codex", Allowed: true, Code: "FRESH_OPERATION",
+				Message: "Operation calls allow a fresh thread despite a compatible live thread.",
+			}
+		}
 		if reason == "user_override" || reason == "reanchor" {
 			return FreshCodexDecision{
 				Action: "allow fresh codex", Allowed: true, Code: "FRESH_THREAD_OVERRIDE",

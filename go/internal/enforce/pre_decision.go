@@ -248,7 +248,7 @@ func preDecision(event map[string]any, runtimeRoot string, bypassMetadata map[st
 		bypassMetadata["prior_thread_id"] = live["thread_id"]
 	}
 	afterPreMetadata()
-	requested := map[string]any{"task_id": *parsed.TaskID, "route": *parsed.Route, "model": *route.Model, "effort": *route.Effort}
+	requested := map[string]any{"task_id": *parsed.TaskID, "phase": *parsed.Phase, "route": *parsed.Route, "model": *route.Model, "effort": *route.Effort}
 	if reply && (research || stringValue(live["agent"]) != stringValue(config["coder_agent"]) &&
 		supportedCoderModel(stringValue(live["agent"]), stringValue(live["model"]))) {
 		requested["model"], requested["effort"] = live["model"], live["effort"]
