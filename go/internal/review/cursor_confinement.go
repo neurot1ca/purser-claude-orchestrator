@@ -140,8 +140,9 @@ func cursorUserConfigHash(home string) (string, error) {
 			}
 			value, err := decodeUniqueJSON(string(data))
 			if err != nil {
-				// Cursor may briefly truncate this file while updating run state.
-				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				// Cursor may briefly truncate or tear this file during a concurrent rewrite.
+				var syntaxErr *json.SyntaxError
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &syntaxErr) {
 					return errors.Join(os.ErrPermission, err)
 				}
 				return err
