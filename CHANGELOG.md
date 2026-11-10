@@ -3,6 +3,9 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.235 — 2026-11-10
+- **Fixed:** host test evidence now matches live Codex rollouts that record a command as an argv array (`CommandExecution`), unwrapping the shell script argument; a multi-command `parsed_cmd` fallback stays UNKNOWN.
+
 ## 0.1.234 — 2026-11-10
 - **Changed:** routing guidance sends operation runbooks (CI reruns, measurements, releases, tests) through one synchronous `codex` call, without a dispatcher or fresh session.
 - **Fixed:** synchronous `codex` results get host test evidence like async jobs; a test run followed by an edit, a compound command whose exit code does not reflect the tests, or a malformed latest exit code no longer counts as a pass.
