@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.240 — 2026-11-11
+- **Fixed:** a Cursor config read that fails on a torn JSON write is retried instead of failing.
+- **Fixed:** the trivial-edit guard counts an edit's real line delta.
+
 ## 0.1.239 — 2026-11-10
 - **Fixed:** a Codex call whose prompt is only the ORCH line is refused with EMPTY_BRIEF, and the dispatcher passes the whole brief, not just its first line.
 
