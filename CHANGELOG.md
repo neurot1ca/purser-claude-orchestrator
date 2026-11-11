@@ -3,6 +3,9 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.241 — 2026-11-11
+- **Fixed:** the Reviewer's validation summary carries up to four host test evidence lines (command, exit code, last output line) instead of only the worker's own report.
+
 ## 0.1.240 — 2026-11-11
 - **Fixed:** a Cursor config read that fails on a torn JSON write is retried instead of failing.
 - **Fixed:** the trivial-edit guard counts an edit's real line delta.
