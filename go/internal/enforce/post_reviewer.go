@@ -381,7 +381,67 @@ func reviewerValidationSummary(bundle map[string]any) string {
 		runes := []rune(summary)
 		summary = string(runes[:1200])
 	}
-	return fmt.Sprintf("Worker-reported validation summary (status=%s): %s", status, summary)
+	result := fmt.Sprintf("Worker-reported validation summary (status=%s): %s", status, summary)
+	var evidence []map[string]any
+	switch entries := worker["test_evidence"].(type) {
+	case []any:
+		for _, entry := range entries {
+			if item := mapValue(entry); item != nil {
+				evidence = append(evidence, item)
+			}
+		}
+	case []map[string]any:
+		evidence = entries
+	}
+	if len(evidence) > 4 {
+		evidence = evidence[:4]
+	}
+	if len(evidence) == 0 {
+		return result
+	}
+	addition := strings.Builder{}
+	lineBudget := 800 / len(evidence)
+	for _, item := range evidence {
+		command := strings.Join(strings.Fields(stringValue(item["command"])), " ")
+		command = truncateReviewerText(command, 160)
+		exitCode := "unknown"
+		if code := item["exit_code"]; code != nil {
+			exitCode = fmt.Sprint(code)
+		}
+		output := stringValue(item["output_tail"])
+		lines := strings.Split(strings.TrimRight(output, "\r\n"), "\n")
+		output = strings.TrimSpace(lines[len(lines)-1])
+		output = truncateReviewerText(output, 120)
+		line := fmt.Sprintf("\nTest: %s; exit=%s; output=%s", command, exitCode, output)
+		if len(line) > lineBudget {
+			// Shorten the command to 40 runes first, then output, preserving its last rune.
+			for len(line) > lineBudget && utf8.RuneCountInString(command) > 40 {
+				command = truncateReviewerText(command, utf8.RuneCountInString(command)-1)
+				line = fmt.Sprintf("\nTest: %s; exit=%s; output=%s", command, exitCode, output)
+			}
+			for len(line) > lineBudget && utf8.RuneCountInString(output) > 1 {
+				output = truncateReviewerText(output, utf8.RuneCountInString(output)-1)
+				line = fmt.Sprintf("\nTest: %s; exit=%s; output=%s", command, exitCode, output)
+			}
+			for len(line) > lineBudget && exitCode != "" {
+				exitCode = truncateReviewerText(exitCode, utf8.RuneCountInString(exitCode)-1)
+				line = fmt.Sprintf("\nTest: %s; exit=%s; output=%s", command, exitCode, output)
+			}
+		}
+		addition.WriteString(line)
+	}
+	return result + addition.String()
+}
+
+func truncateReviewerText(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) > limit {
+		return string(runes[:limit])
+	}
+	return value
 }
 
 func clonePostMap(source map[string]any) map[string]any {

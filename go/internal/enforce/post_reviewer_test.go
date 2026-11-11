@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"purser-hook/internal/contextio"
 	"purser-hook/internal/profile"
@@ -590,4 +591,80 @@ func TestRunPostReviewerUsesConfiguredJSONNumberTimeout(t *testing.T) {
 			t.Errorf("reviewer_timeout_seconds=%v, want %v capped by hook budget", gotTimeout, tc.want.Seconds())
 		}
 	}
+}
+
+func TestReviewerValidationSummary(t *testing.T) {
+	base := "Worker-reported validation summary (status=PASS): ok"
+	t.Run("no evidence leaves output unchanged", func(t *testing.T) {
+		got := reviewerValidationSummary(map[string]any{"worker_validation": map[string]any{"status": "PASS", "summary": "ok"}})
+		if got != base {
+			t.Fatalf("summary=%q, want %q", got, base)
+		}
+	})
+	t.Run("exit code and last output line", func(t *testing.T) {
+		got := reviewerValidationSummary(map[string]any{"worker_validation": map[string]any{
+			"status": "PASS", "summary": "ok", "test_evidence": []any{map[string]any{
+				"command": "go   test\t./internal/enforce", "exit_code": 0, "output_tail": "first line\nPASS",
+			}},
+		}})
+		want := base + "\nTest: go test ./internal/enforce; exit=0; output=PASS"
+		if got != want {
+			t.Fatalf("summary=%q, want %q", got, want)
+		}
+	})
+	t.Run("null exit code is unknown", func(t *testing.T) {
+		got := reviewerValidationSummary(map[string]any{"worker_validation": map[string]any{
+			"status": "PASS", "summary": "ok", "test_evidence": []any{map[string]any{
+				"command": "go test", "exit_code": nil, "output_tail": "tail",
+			}},
+		}})
+		if !strings.HasSuffix(got, "\nTest: go test; exit=unknown; output=tail") {
+			t.Fatalf("summary=%q, want null exit code shown as unknown", got)
+		}
+	})
+	t.Run("long fields are truncated", func(t *testing.T) {
+		got := reviewerValidationSummary(map[string]any{"worker_validation": map[string]any{
+			"status": "PASS", "summary": "ok", "test_evidence": []any{map[string]any{
+				"command": strings.Repeat("c", 200), "exit_code": 0, "output_tail": strings.Repeat("o", 200),
+			}},
+		}})
+		addition := strings.TrimPrefix(got, base)
+		commandAndOutput := strings.SplitN(strings.TrimPrefix(addition, "\nTest: "), "; exit=0; output=", 2)
+		if len(commandAndOutput) != 2 || utf8.RuneCountInString(commandAndOutput[0]) != 160 || utf8.RuneCountInString(commandAndOutput[1]) != 120 {
+			t.Fatalf("evidence fields not truncated as requested: command/output=%#v", commandAndOutput)
+		}
+	})
+	t.Run("more than four entries and total cap", func(t *testing.T) {
+		evidence := make([]any, 6)
+		for i := range evidence {
+			evidence[i] = map[string]any{"command": strings.Repeat("c", 160), "exit_code": 0, "output_tail": strings.Repeat("o", 120)}
+		}
+		got := reviewerValidationSummary(map[string]any{"worker_validation": map[string]any{
+			"status": "PASS", "summary": "ok", "test_evidence": evidence,
+		}})
+		addition := strings.TrimPrefix(got, base)
+		if len([]byte(addition)) > 800 || strings.Count(addition, "\nTest: ") != 4 || strings.Count(addition, "Test:") != 4 {
+			t.Fatalf("addition bytes=%d, want four separate evidence lines: %q", len([]byte(addition)), addition)
+		}
+	})
+	t.Run("multibyte evidence preserves output", func(t *testing.T) {
+		evidence := make([]any, 4)
+		for i := range evidence {
+			evidence[i] = map[string]any{"command": strings.Repeat("界", 160), "exit_code": 0, "output_tail": strings.Repeat("好", 120)}
+		}
+		got := reviewerValidationSummary(map[string]any{"worker_validation": map[string]any{
+			"status": "PASS", "summary": "ok", "test_evidence": evidence,
+		}})
+		addition := strings.TrimPrefix(got, base)
+		lines := strings.Split(strings.TrimPrefix(addition, "\n"), "\n")
+		if len(addition) > 800 || !utf8.ValidString(got) || len(lines) != 4 {
+			t.Fatalf("invalid multibyte evidence addition: %q", addition)
+		}
+		for _, line := range lines {
+			_, output, found := strings.Cut(line, "; output=")
+			if !found || output == "" {
+				t.Fatalf("output dropped from evidence line: %q", line)
+			}
+		}
+	})
 }
