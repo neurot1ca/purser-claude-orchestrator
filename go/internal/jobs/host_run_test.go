@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -552,6 +553,89 @@ func TestRunHostGenerationPreservesPromptBytesOnStdin(t *testing.T) {
 	}
 	if string(got) != prompt {
 		t.Fatalf("worker stdin bytes = %q, want %q", got, prompt)
+	}
+}
+
+func TestRewriteCheckoutPaths(t *testing.T) {
+	worktree := filepath.Clean(string(filepath.Separator) + "worktree")
+	wantCase := worktree + `\src\main.go`
+	if runtime.GOOS != "windows" {
+		wantCase = `c:\ai-operations\src\main.go`
+	}
+	tests := []struct {
+		name, input, want string
+	}{
+		{"boundary", `C:\AI-Operations\src`, worktree + `\src`},
+		{"forward separators", `C:/AI-Operations/src`, worktree + `/src`},
+		{"trailing separator", `C:\AI-Operations\`, worktree + `\`},
+		{"longer sibling", `C:\AI-Operations2\src C:\AI-Operations-extra\x`, `C:\AI-Operations2\src C:\AI-Operations-extra\x`},
+		{"unlisted sibling characters", `C:\AI-Operations+backup\x C:\AI-Operations.old\x C:\AI-Operations@backup`, `C:\AI-Operations+backup\x C:\AI-Operations.old\x C:\AI-Operations@backup`},
+		{"whitespace", `C:\AI-Operations backup`, worktree + ` backup`},
+		{"prose colon", `in vault C:\AI-Operations: document`, `in vault ` + worktree + `: document`},
+		{"sentence end", `C:\AI-Operations.`, worktree + `.`},
+		{"sentence whitespace", "C:\\AI-Operations.\nContinue", worktree + ".\nContinue"},
+		{"prose delimiters", "C:\\AI-Operations\" C:\\AI-Operations' C:\\AI-Operations` C:\\AI-Operations) C:\\AI-Operations, C:\\AI-Operations; C:\\AI-Operations: C:\\AI-Operations] C:\\AI-Operations>", worktree + "\" " + worktree + "' " + worktree + "` " + worktree + ") " + worktree + ", " + worktree + "; " + worktree + ": " + worktree + "] " + worktree + ">"},
+		{"case", `c:\ai-operations\src\main.go`, wantCase},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := rewriteCheckoutPaths(test.input, `C:\AI-Operations`, worktree)
+			if got != test.want {
+				t.Fatalf("rewriteCheckoutPaths() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunHostGenerationRewritesLaunchedWorktreePrompt(t *testing.T) {
+	root := t.TempDir()
+	repo, worktree := filepath.Join(root, "main-checkout"), filepath.Join(root, "job-worktree")
+	for _, directory := range []string{repo, worktree} {
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	deadline := float64(time.Now().Add(time.Minute).UnixNano()) / 1e9
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".json"), map[string]any{
+		"jobId": hostTestID, "state": "QUEUED", "generation": 1, "ownershipToken": "owner",
+		"signalToken": "signal", "deadlineAt": deadline, "repoRoot": repo, "worktreePath": worktree,
+	})
+	prompt := "Edit " + filepath.Join(repo, "src", "main.go")
+	writeHostTestJSON(t, filepath.Join(dir, hostTestID+".launch"), map[string]any{
+		"name": "codex", "agent": "codex", "args": map[string]any{
+			"cwd": repo, "prompt": prompt, "developer_instructions": "Work in " + repo,
+		},
+	})
+	t.Setenv("PURSER_HOST_FAKE_WORKER", "1")
+	t.Setenv("PURSER_HOST_FAKE_MODE", "stdin")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = RunHostGeneration(dir, hostTestID, 1, "owner", HostOptions{WorkerCommand: func(args LaunchArgs) ([]string, error) {
+		if args.DeveloperInstructions == nil || strings.Contains(*args.DeveloperInstructions, repo) || !strings.Contains(*args.DeveloperInstructions, worktree) {
+			t.Fatalf("launched developer instructions = %v", args.DeveloperInstructions)
+		}
+		return []string{executable, "-test.run=TestHostFakeWorker", "--", args.OutputPath}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := readJob(dir, hostTestID)
+	var output string
+	if !job.Get("outputFile", &output) {
+		t.Fatal("completed job has no output file")
+	}
+	got, err := os.ReadFile(filepath.Join(dir, output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), repo) || !strings.Contains(string(got), filepath.Join(worktree, "src", "main.go")) {
+		t.Fatalf("launched prompt = %q; want worktree path and no main checkout root", got)
 	}
 }
 

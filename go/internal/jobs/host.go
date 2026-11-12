@@ -12,10 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"purser-hook/internal/contextio"
@@ -355,7 +357,12 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 			}
 		}
 		args.Cwd = mapped
-		prompt += "\nUse the job worktree as project root; map absolute checkout paths to the same relative path here."
+		prompt += worktreeRootNote
+		prompt = rewriteCheckoutPaths(prompt, repoRoot, worktreePath)
+		if args.DeveloperInstructions != nil {
+			instructions := rewriteCheckoutPaths(*args.DeveloperInstructions, repoRoot, worktreePath)
+			args.DeveloperInstructions = &instructions
+		}
 	}
 	if research {
 		stateRoot := opt.StateRoot
@@ -842,6 +849,90 @@ func RunHostGeneration(dir, jobID string, generation int64, token string, option
 		return nil, err
 	}
 	return map[string]any{"status": "ok"}, nil
+}
+
+func rewriteCheckoutPaths(text, checkoutRoot, worktreeRoot string) string {
+	if checkoutRoot == "" || worktreeRoot == "" {
+		return text
+	}
+	roots := []string{filepath.Clean(checkoutRoot)}
+	if resolved, err := filepath.EvalSymlinks(checkoutRoot); err == nil && filepath.Clean(resolved) != roots[0] {
+		roots = append(roots, filepath.Clean(resolved))
+	}
+	worktreeRoot = filepath.Clean(worktreeRoot)
+	var out strings.Builder
+	for i := 0; i < len(text); {
+		matched := 0
+		for _, root := range roots {
+			if length, ok := checkoutPathMatch(text[i:], root); ok &&
+				(i == 0 || text[i-1] != '/' && text[i-1] != '\\' && !checkoutPathAtomBefore(text, i)) &&
+				checkoutPathEnd(text, i+length) {
+				matched = length
+				break
+			}
+		}
+		if matched == 0 {
+			out.WriteByte(text[i])
+			i++
+			continue
+		}
+		out.WriteString(worktreeRoot)
+		i += matched
+		if i < len(text) && (text[i] == '/' || text[i] == '\\') {
+			out.WriteByte(text[i])
+			i++
+		}
+	}
+	return out.String()
+}
+
+func checkoutPathMatch(value, root string) (int, bool) {
+	valueIndex := 0
+	for rootIndex := 0; rootIndex < len(root); {
+		if valueIndex == len(value) {
+			return 0, false
+		}
+		v, valueSize := utf8.DecodeRuneInString(value[valueIndex:])
+		r, rootSize := utf8.DecodeRuneInString(root[rootIndex:])
+		if v == '/' || v == '\\' {
+			if r != '/' && r != '\\' {
+				return 0, false
+			}
+		} else if runtime.GOOS == "windows" {
+			if !strings.EqualFold(value[valueIndex:valueIndex+valueSize], root[rootIndex:rootIndex+rootSize]) {
+				return 0, false
+			}
+		} else if v != r {
+			return 0, false
+		}
+		valueIndex += valueSize
+		rootIndex += rootSize
+	}
+	return valueIndex, true
+}
+
+func checkoutPathAtomBefore(value string, index int) bool {
+	r, _ := utf8.DecodeLastRuneInString(value[:index])
+	return checkoutPathAtom(r)
+}
+
+func checkoutPathEnd(value string, index int) bool {
+	if index == len(value) {
+		return true
+	}
+	r, size := utf8.DecodeRuneInString(value[index:])
+	if r == '.' {
+		if index+size == len(value) {
+			return true
+		}
+		next, _ := utf8.DecodeRuneInString(value[index+size:])
+		return unicode.IsSpace(next)
+	}
+	return unicode.IsSpace(r) || strings.ContainsRune("/\\\"'`),;:]>", r)
+}
+
+func checkoutPathAtom(value rune) bool {
+	return unicode.IsLetter(value) || unicode.IsDigit(value) || value == '_' || value == '-' || value == '.'
 }
 
 func boundedOpenCodeNotes(notes []string) []string {
