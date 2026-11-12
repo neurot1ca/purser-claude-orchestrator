@@ -8,13 +8,14 @@ import (
 )
 
 var (
-	contractBullet    = regexp.MustCompile(`^([-*+]|\d+[.)])\s+`)
-	contractStop      = regexp.MustCompile(`^(task objective|objective|goal|acceptance criteria|acceptance|requirements|required changes?|done when|definition of done|tests?|validation|verified context|report):`)
-	contractCriteria  = regexp.MustCompile(`^(acceptance criteria|acceptance|requirements|required changes?|done when|definition of done):`)
-	contractHead      = regexp.MustCompile(`^(#{1,3})[ \t]+(.+?)\s*$`)
-	contractCount     = regexp.MustCompile(`\b(count|counting|number of|how many)\b`)
-	contractRunbook   = regexp.MustCompile(`\b(established|documented) runbook\b`)
-	contractOperation = regexp.MustCompile(`\b(deploy|runner control|fetch|package|packaging)\b`)
+	contractBullet         = regexp.MustCompile(`^([-*+]|\d+[.)])\s+`)
+	contractStop           = regexp.MustCompile(`^(task objective|objective|goal|acceptance criteria|acceptance|requirements|required changes?|done when|definition of done|tests?|validation|verified context|report):`)
+	contractCriteria       = regexp.MustCompile(`^(acceptance criteria|acceptance|requirements|required changes?|done when|definition of done):`)
+	contractInlineCriteria = regexp.MustCompile(`(?i)\b(acceptance\s+criteria:)|(?:^|[.;]\s+)(criteria:)`)
+	contractHead           = regexp.MustCompile(`^(#{1,3})[ \t]+(.+?)\s*$`)
+	contractCount          = regexp.MustCompile(`\b(count|counting|number of|how many)\b`)
+	contractRunbook        = regexp.MustCompile(`\b(established|documented) runbook\b`)
+	contractOperation      = regexp.MustCompile(`\b(deploy|runner control|fetch|package|packaging)\b`)
 )
 
 type contractSection struct {
@@ -86,12 +87,17 @@ func parseTaskContract(prompt, taskID, phase string, scope []string) (string, st
 					value = strings.TrimSpace(lines[i+1])
 				}
 			}
-			if at := strings.Index(strings.ToLower(value), "acceptance criteria:"); at >= 0 {
-				part := strings.Trim(value[at+len("acceptance criteria:"):], ". ")
+			if match := contractInlineCriteria.FindStringSubmatchIndex(value); match != nil {
+				labelStart, labelEnd := match[2], match[3]
+				if labelStart < 0 {
+					labelStart, labelEnd = match[4], match[5]
+				}
+				part := strings.Trim(value[labelEnd:], ". ")
 				if part != "" {
 					criteriaLines = append(criteriaLines, part)
 				}
-				value = strings.Trim(value[:at], ". ")
+				value = strings.TrimRight(value[:labelStart], ". ,")
+				collecting = true
 			}
 			if objective == "" && value != "" {
 				objective = value

@@ -11,6 +11,7 @@ func TestTaskContractRequirementsLabelAndMissingCriteria(t *testing.T) {
 	tests := []struct {
 		name       string
 		prompt     string
+		wantObj    string
 		wantCrit   string
 		wantGround bool
 	}{
@@ -38,12 +39,46 @@ func TestTaskContractRequirementsLabelAndMissingCriteria(t *testing.T) {
 			wantCrit:   "Verify correct implementation within declared scope () with no material regression or scope expansion.",
 			wantGround: false,
 		},
+		{
+			name:       "inline criteria continues onto following lines",
+			prompt:     "Objective: prepare release X. Criteria: version is \"X\"; CHANGELOG.md has a new section, exactly:\n## X — date\n- **Fixed:** issue",
+			wantObj:    "prepare release X",
+			wantCrit:   "version is \"X\"; CHANGELOG.md has a new section, exactly:; ## X — date; **Fixed:** issue",
+			wantGround: true,
+		},
+		{
+			name:       "inline acceptance criteria continues onto following lines",
+			prompt:     "Objective: prepare release X. Acceptance criteria: version is \"X\"\n- changelog updated",
+			wantObj:    "prepare release X",
+			wantCrit:   "version is \"X\"; changelog updated",
+			wantGround: true,
+		},
+		{
+			name:       "subcriteria is not an inline criteria label",
+			prompt:     "Objective: prepare release X. Subcriteria: version is \"X\"",
+			wantCrit:   "Verify correct implementation within declared scope () with no material regression or scope expansion.",
+			wantGround: false,
+		},
+		{
+			name:       "selection criteria prose is not an inline criteria label",
+			prompt:     "Objective: define selection criteria: speed and reliability",
+			wantObj:    "define selection criteria: speed and reliability",
+			wantCrit:   "Verify correct implementation within declared scope () with no material regression or scope expansion.",
+			wantGround: false,
+		},
+		{
+			name:       "inline acceptance criteria after comma",
+			prompt:     "Objective: prepare release X, acceptance criteria: version is \"X\"",
+			wantObj:    "prepare release X",
+			wantCrit:   "version is \"X\"",
+			wantGround: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, criteria, grounded := parseTaskContract(test.prompt, "requirements", "implementation", nil)
-			if criteria != test.wantCrit || grounded != test.wantGround {
-				t.Fatalf("got (%q, %t), want (%q, %t)", criteria, grounded, test.wantCrit, test.wantGround)
+			objective, criteria, grounded := parseTaskContract(test.prompt, "requirements", "implementation", nil)
+			if (test.wantObj != "" && objective != test.wantObj) || criteria != test.wantCrit || grounded != test.wantGround {
+				t.Fatalf("got (%q, %q, %t), want (%q, %q, %t)", objective, criteria, grounded, test.wantObj, test.wantCrit, test.wantGround)
 			}
 		})
 	}
