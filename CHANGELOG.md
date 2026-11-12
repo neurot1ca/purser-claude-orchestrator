@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.243 — 2026-11-12
+- **Fixed:** applying one job no longer makes other worktree jobs still awaiting their result report the applied paths as main-checkout changes; a later write to those paths is still reported.
+- **Fixed:** host test evidence reports the test's exit code when the test follows setup commands such as `gofmt -w` in a `;` or `&&` chain, instead of leaving it unknown.
+
 ## 0.1.242 — 2026-11-12
 - **Fixed:** a worktree job's launch prompt and developer instructions name the job worktree instead of the main checkout, so a brief with absolute checkout paths no longer makes the coder write into the main checkout.
 - **Fixed:** the benchmark Go contract audit reports unrecognized compile errors that appear next to a recognized missing identifier.
