@@ -46,6 +46,8 @@ func TestExitCodeReflectsTestRunner(t *testing.T) {
 		{`go test ./a && if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } && go test ./b`, float64(0), nil},
 		{`gofmt -w a.go; if ($LASTEXITCODE -ne 0) { exit 1 }; go test ./x`, float64(0), nil},
 		{`pwsh -Command "go test ./a && go test ./b"`, float64(0), 0},
+		{`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "go test ./internal/jobs -run 'TestApply(A|B)"'$'"' -count=1 -timeout=90s"`, float64(0), 0},
+		{`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "go test ./internal/jobs -run 'TestApply(A|B)"'$'"' -count=1 -timeout=90s"`, float64(1), 1},
 		{`cmd /c go test ./...`, float64(0), 0},
 		{`/bin/sh -c 'go test ./...'`, float64(0), 0},
 		{`bash -lc 'go test ./...'`, float64(0), 0},
@@ -76,6 +78,10 @@ func TestExitCodeReflectsTestRunner(t *testing.T) {
 				t.Fatalf("ExitCode(%q, %v) = %q, %v; want recognized runner, %v", tc.command, tc.code, target, got, tc.want)
 			}
 		})
+	}
+	command := `"C:\Program Files\PowerShell\7\pwsh.exe" -Command "go test ./internal/jobs -run 'TestApply(A|B)"'$'"' -count=1 -timeout=90s"`
+	if target := Target(command); target != "go test ./internal/jobs -run TestApply(A|B)$ -count=1 -timeout=90s" {
+		t.Fatalf("Target(%q) = %q", command, target)
 	}
 	if target, code := ExitCode(`echo "note; go test ./..."`, float64(0)); target != "" || code != nil {
 		t.Fatalf("quoted test text became evidence: %q, %v", target, code)

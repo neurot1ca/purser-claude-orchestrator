@@ -42,14 +42,30 @@ func unwrap(command string) string {
 		if loc := shellFlag.FindStringIndex(command); loc != nil {
 			inner := strings.TrimSpace(command[loc[1]:])
 			if len(inner) >= 2 && (inner[0] == '\'' || inner[0] == '"') {
-				if end := strings.IndexByte(inner[1:], inner[0]); end >= 0 {
-					inner = inner[1:end+1] + inner[end+2:]
-				}
+				inner = unwrapShellArgument(inner)
 			}
 			return inner
 		}
 	}
 	return command
+}
+
+func unwrapShellArgument(argument string) string {
+	var word strings.Builder
+	for len(argument) > 0 && (argument[0] == '\'' || argument[0] == '"') {
+		quote := argument[0]
+		end := strings.IndexByte(argument[1:], quote)
+		if end < 0 {
+			return argument
+		}
+		word.WriteString(argument[1 : end+1])
+		argument = argument[end+2:]
+		if len(argument) == 0 || argument[0] != '\'' && argument[0] != '"' {
+			word.WriteString(argument)
+			return word.String()
+		}
+	}
+	return argument
 }
 
 // ExitCode keeps recognized runs even when their status cannot prove success.
