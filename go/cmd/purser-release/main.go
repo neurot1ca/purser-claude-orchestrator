@@ -5,8 +5,10 @@ import "purser-hook/internal/proc"
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -148,9 +150,10 @@ func runPluginUpdates(root, claude string) error {
 	for i, args := range [][]string{{"plugin", "marketplace", "update", "purser-local"}, {"plugin", "update", "purser@purser-local"}} {
 		cmd := proc.Hide(exec.Command(claude, args...))
 		cmd.Dir = root
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		cmd.Stdout = outputWriter{os.Stdout}
+		cmd.Stderr = outputWriter{os.Stderr}
+		cmd.WaitDelay = 10 * time.Second
+		if err := cmd.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 			return fmt.Errorf("%s: %w", strings.Join(args, " "), err)
 		}
 		if i == 0 {
@@ -161,6 +164,8 @@ func runPluginUpdates(root, claude string) error {
 	}
 	return nil
 }
+
+type outputWriter struct{ io.Writer }
 
 func expandPaths(args []string) ([]string, error) {
 	out := make([]string, 0, len(args))

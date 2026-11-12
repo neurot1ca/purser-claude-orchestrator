@@ -7,9 +7,71 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"purser-hook/internal/proc"
 )
+
+const waitDelayHelperEnv = "PURSER_RELEASE_WAIT_DELAY_HELPER"
+
+func TestMain(m *testing.M) {
+	switch os.Getenv(waitDelayHelperEnv) {
+	case "grandchild":
+		for {
+			time.Sleep(time.Hour)
+		}
+	case "parent":
+		if strings.Join(os.Args[1:], " ") == "plugin update purser@purser-local" {
+			if err := os.Setenv(waitDelayHelperEnv, "grandchild"); err != nil {
+				os.Exit(1)
+			}
+			child := proc.Hide(exec.Command(os.Args[0], "-test.run=^TestWaitDelayHelper$"))
+			child.Stdout, child.Stderr = os.Stdout, os.Stderr
+			if err := child.Start(); err != nil {
+				os.Exit(1)
+			}
+			if err := os.WriteFile(os.Getenv(waitDelayHelperEnv+"_PID_FILE"), []byte(strconv.Itoa(child.Process.Pid)), 0600); err != nil {
+				_ = child.Process.Kill()
+				os.Exit(1)
+			}
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func TestWaitDelayHelper(t *testing.T) {}
+
+func TestPluginUpdateWaitDelayClosesInheritedPipe(t *testing.T) {
+	root := t.TempDir()
+	pidFile := filepath.Join(root, "grandchild.pid")
+	t.Setenv(waitDelayHelperEnv, "parent")
+	t.Setenv(waitDelayHelperEnv+"_PID_FILE", pidFile)
+	t.Cleanup(func() {
+		data, err := os.ReadFile(pidFile)
+		if err != nil {
+			return
+		}
+		pid, err := strconv.Atoi(string(data))
+		if err == nil {
+			if process, err := os.FindProcess(pid); err == nil {
+				_ = process.Kill()
+			}
+		}
+	})
+
+	start := time.Now()
+	err := runPluginUpdates(root, os.Args[0])
+	if elapsed := time.Since(start); elapsed > 15*time.Second {
+		t.Fatalf("runPluginUpdates took %s; want it to return within 15s", elapsed)
+	}
+	if err != nil {
+		t.Fatalf("runPluginUpdates: %v", err)
+	}
+}
 
 func releaseFixture(t *testing.T) string {
 	t.Helper()
