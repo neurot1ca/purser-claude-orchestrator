@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.242 — 2026-11-12
+- **Fixed:** a worktree job's launch prompt and developer instructions name the job worktree instead of the main checkout, so a brief with absolute checkout paths no longer makes the coder write into the main checkout.
+- **Fixed:** the benchmark Go contract audit reports unrecognized compile errors that appear next to a recognized missing identifier.
+- **Added:** `PURSER_DISABLE_CATALOG_REFRESH=1` turns off the session-start catalog refresh; benchmark attempts set it so free OpenCode model runs stay out of the measurement.
+
 ## 0.1.241 — 2026-11-11
 - **Fixed:** the Reviewer's validation summary carries up to four host test evidence lines (command, exit code, last output line) instead of only the worker's own report.
 
