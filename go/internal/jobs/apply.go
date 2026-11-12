@@ -317,20 +317,61 @@ func refreshOtherMainCheckoutBaselines(stateRoot, repo, appliedID string, paths 
 			}
 			job := readJob(filepath.Join(stateRoot, "codex_exec_mcp", "jobs"), id)
 			var root, worktree string
-			if job == nil || !job.Get("repoRoot", &root) || !sameApplyProjectPath(root, repo) || !job.Get("worktreePath", &worktree) || worktree == "" {
+			if job == nil || !job.Get("repoRoot", &root) || !sameApplyProjectPath(root, repo) {
 				return
 			}
+			job.Get("worktreePath", &worktree)
 			path := filepath.Join(stateRoot, "pending", key+".json")
 			pending, err := Read(path)
 			var pendingID string
 			var baseline map[string]any
-			if err != nil || !pending.Get("job_id", &pendingID) || pendingID != id || !pending.Get("main_checkout_baseline", &baseline) {
+			var phase string
+			if err != nil || !pending.Get("job_id", &pendingID) || pendingID != id {
 				return
 			}
-			if refreshed := enforce.RefreshMainCheckoutBaseline(repo, baseline, paths); refreshed != nil {
-				if pending.Set("main_checkout_baseline", refreshed) == nil {
-					_ = Write(path, pending)
+			pending.Get("phase", &phase)
+			refreshedPending := false
+			if worktree != "" && pending.Get("main_checkout_baseline", &baseline) {
+				if refreshed := enforce.RefreshMainCheckoutBaseline(repo, baseline, paths); refreshed != nil {
+					if pending.Set("main_checkout_baseline", refreshed) == nil {
+						refreshedPending = true
+					}
 				}
+			}
+			if phase == "plan" && pending.Get("baseline", &baseline) {
+				refreshed := ledger.CaptureBaseline(repo, nil, 0)
+				previous, previousOK := baseline["tracked_snapshots"].(map[string]any)
+				current, currentOK := refreshed["tracked_snapshots"].(map[string]map[string]any)
+				if baseline["status"] != ledger.OK || refreshed["status"] != ledger.OK || !previousOK || !currentOK {
+					return
+				}
+				for _, appliedPath := range paths {
+					key := strings.ReplaceAll(appliedPath, `\`, "/")
+					currentKey, previousKey := key, key
+					if runtime.GOOS == "windows" {
+						for existing := range current {
+							if strings.EqualFold(existing, key) {
+								currentKey = existing
+								break
+							}
+						}
+						for existing := range previous {
+							if strings.EqualFold(existing, key) {
+								previousKey = existing
+								break
+							}
+						}
+					}
+					if snapshot, ok := current[currentKey]; ok {
+						previous[previousKey] = snapshot
+					}
+				}
+				if pending.Set("baseline", baseline) == nil {
+					refreshedPending = true
+				}
+			}
+			if refreshedPending {
+				_ = Write(path, pending)
 			}
 		}()
 	}

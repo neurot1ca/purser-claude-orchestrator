@@ -355,6 +355,39 @@ func TestApplyRefreshesOnlyOtherInFlightMainCheckoutBaselines(t *testing.T) {
 	}
 }
 
+func TestApplyRefreshesInFlightPlanBaselineWithoutHidingLaterEdit(t *testing.T) {
+	applyID, planID := strings.Repeat("a", 64), strings.Repeat("f", 64)
+	state, repo, _, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), applyID)
+	baseline := ledger.CaptureBaseline(repo, nil, 0)
+	index, _ := json.Marshal(map[string]any{"jobId": planID, "call_key": planID, "stage": "RUNNING"})
+	write(t, filepath.Join(state, "async_jobs", planID+".json"), string(index))
+	job, _ := json.Marshal(map[string]any{"jobId": planID, "state": "RUNNING", "repoRoot": repo})
+	write(t, filepath.Join(state, "codex_exec_mcp", "jobs", planID+".json"), string(job))
+	pending, _ := json.Marshal(map[string]any{"job_id": planID, "phase": "plan", "baseline": baseline})
+	write(t, filepath.Join(state, "pending", planID+".json"), string(pending))
+
+	result := applyAtCurrentRevision(t, state, applyID)
+	if result["structuredContent"].(map[string]any)["applied"] != true {
+		t.Fatalf("apply failed: %#v", result)
+	}
+	readPending, err := Read(filepath.Join(state, "pending", planID+".json"))
+	var refreshed map[string]any
+	if err != nil || !readPending.Get("baseline", &refreshed) {
+		t.Fatalf("read refreshed plan baseline: %v", err)
+	}
+	delta := ledger.ComputeDelta(repo, refreshed, nil)
+	if delta["status"] != ledger.OK || len(delta["changed_paths"].([]string)) != 0 {
+		t.Fatalf("own apply remains in plan delta: %#v", delta)
+	}
+
+	write(t, filepath.Join(repo, "tracked.txt"), "manual edit after apply\n")
+	delta = ledger.ComputeDelta(repo, refreshed, nil)
+	changed, _ := delta["changed_paths"].([]string)
+	if delta["status"] != ledger.OK || !reflect.DeepEqual(changed, []string{"tracked.txt"}) {
+		t.Fatalf("later manual edit was hidden: %#v", delta)
+	}
+}
+
 func TestApplyAcceptanceAndForegroundPaths(t *testing.T) {
 	t.Run("main acceptance then apply", func(t *testing.T) {
 		id := strings.Repeat("a", 64)
