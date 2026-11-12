@@ -205,6 +205,12 @@ func TestSessionStartLaunchesCatalogRefreshAfterOutput(t *testing.T) {
 		started = true
 		return nil
 	}
+	t.Setenv("PURSER_DISABLE_CATALOG_REFRESH", "1")
+	launchCatalogRefresh(resolved)
+	if started {
+		t.Fatal("catalog refresh launched while disabled")
+	}
+	t.Setenv("PURSER_DISABLE_CATALOG_REFRESH", "")
 	requestCleanup = func(string) error { return nil }
 	handleSessionStart(map[string]any{"cwd": repo})
 	if !started {

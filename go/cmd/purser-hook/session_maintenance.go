@@ -38,7 +38,7 @@ func sessionMaintenance(event map[string]any) {
 }
 
 func launchCatalogRefresh(repository string) {
-	if os.Getenv("PURSER_TEST_DISABLE_CHILD_LAUNCH") == "1" {
+	if os.Getenv("PURSER_DISABLE_CATALOG_REFRESH") == "1" || os.Getenv("PURSER_TEST_DISABLE_CHILD_LAUNCH") == "1" {
 		return
 	}
 	root, err := maintenance.CanonicalRepository(repository)
