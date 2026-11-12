@@ -3,6 +3,10 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.244 — 2026-11-12
+- **Fixed:** host test evidence reads the exit code of a `-Command` test whose argument the coder log shows as adjacent quoted parts.
+- **Fixed:** a brief that writes `Objective: ... Criteria: ...` on one line now counts as a grounded task contract, including criteria lines that follow.
+
 ## 0.1.243 — 2026-11-12
 - **Fixed:** applying one job no longer makes other worktree jobs still awaiting their result report the applied paths as main-checkout changes; a later write to those paths is still reported.
 - **Fixed:** host test evidence reports the test's exit code when the test follows setup commands such as `gofmt -w` in a `;` or `&&` chain, instead of leaving it unknown.
