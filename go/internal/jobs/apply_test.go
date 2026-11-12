@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/enforce"
 	"purser-hook/internal/lease"
 	"purser-hook/internal/ledger"
 )
@@ -311,6 +312,47 @@ func applyAtCurrentRevision(t *testing.T, state, id string) map[string]any {
 		t.Fatal(err)
 	}
 	return Apply(state, map[string]any{"jobId": id, "revision": revision})
+}
+
+func TestApplyRefreshesOnlyOtherInFlightMainCheckoutBaselines(t *testing.T) {
+	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	state, repo, worktree, _ := acceptanceJob(t, filepath.Join(t.TempDir(), "state"), a)
+	baseline := enforce.CaptureMainCheckoutBaseline(repo, nil)
+	for _, tc := range []struct{ id, jobState, stage, root string }{
+		{a, "SUCCEEDED", "RUNNING", repo}, {b, "RUNNING", "RUNNING", repo},
+		{strings.Repeat("c", 64), "SUCCEEDED", "RUNNING", repo},
+		{strings.Repeat("d", 64), "RUNNING", "RUNNING", t.TempDir()},
+		{strings.Repeat("e", 64), "SUCCEEDED", "CONSUMED", repo},
+	} {
+		index, _ := json.Marshal(map[string]any{"jobId": tc.id, "call_key": tc.id, "stage": tc.stage})
+		write(t, filepath.Join(state, "async_jobs", tc.id+".json"), string(index))
+		pending, _ := json.Marshal(map[string]any{"job_id": tc.id, "main_checkout_baseline": baseline})
+		write(t, filepath.Join(state, "pending", tc.id+".json"), string(pending))
+		if tc.id != a {
+			job, _ := json.Marshal(map[string]any{"jobId": tc.id, "state": tc.jobState, "repoRoot": tc.root, "worktreePath": worktree})
+			write(t, filepath.Join(state, "codex_exec_mcp", "jobs", tc.id+".json"), string(job))
+		}
+	}
+	result := applyAtCurrentRevision(t, state, a)
+	if structured, _ := result["structuredContent"].(map[string]any); structured["applied"] != true {
+		t.Fatalf("apply failed: %#v", result)
+	}
+	for _, id := range []string{a, b, strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64)} {
+		pending, err := Read(filepath.Join(state, "pending", id+".json"))
+		var got map[string]any
+		if err != nil || !pending.Get("main_checkout_baseline", &got) {
+			t.Fatalf("read pending baseline: %v", err)
+		}
+		want := baseline
+		if id == b || id == strings.Repeat("c", 64) {
+			want = enforce.RefreshMainCheckoutBaseline(repo, baseline, []string{"tracked.txt"})
+		}
+		encoded, _ := json.Marshal(want)
+		var normalized map[string]any
+		if json.Unmarshal(encoded, &normalized) != nil || !reflect.DeepEqual(got, normalized) {
+			t.Fatalf("job %s baseline = %#v, want %#v", id, got, normalized)
+		}
+	}
 }
 
 func TestApplyAcceptanceAndForegroundPaths(t *testing.T) {

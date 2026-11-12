@@ -245,6 +245,7 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 	value := map[string]any{"applied": applied}
 	if applied {
 		value["paths"] = paths
+		refreshOtherMainCheckoutBaselines(stateRoot, root, jobID, paths)
 	} else {
 		value["conflicts"] = outcome["conflicts"]
 		value["applicable"] = outcome["applicable"]
@@ -287,6 +288,52 @@ func Apply(stateRoot string, args map[string]any, options ...ApplyOptions) map[s
 		dispatchWorktreeRetirement(stateRoot, jobID)
 	}
 	return result(value)
+}
+
+func refreshOtherMainCheckoutBaselines(stateRoot, repo, appliedID string, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	dir := filepath.Join(stateRoot, "async_jobs")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		if entry.IsDir() || !validJobID(id) || id == appliedID || entry.Name() != id+".json" {
+			continue
+		}
+		func() {
+			unlock, err := contextio.LockFile(filepath.Join(dir, id+".claim.lock"))
+			if err != nil {
+				return
+			}
+			defer func() { _ = unlock() }()
+			index, err := Read(filepath.Join(dir, entry.Name()))
+			var key, stage, indexedID string
+			if err != nil || !index.Get("jobId", &indexedID) || indexedID != id || !index.Get("call_key", &key) || !validJobID(key) || !index.Get("stage", &stage) || stage == "CONSUMED" || stage == "FAILED" {
+				return
+			}
+			job := readJob(filepath.Join(stateRoot, "codex_exec_mcp", "jobs"), id)
+			var root, worktree string
+			if job == nil || !job.Get("repoRoot", &root) || !sameApplyProjectPath(root, repo) || !job.Get("worktreePath", &worktree) || worktree == "" {
+				return
+			}
+			path := filepath.Join(stateRoot, "pending", key+".json")
+			pending, err := Read(path)
+			var pendingID string
+			var baseline map[string]any
+			if err != nil || !pending.Get("job_id", &pendingID) || pendingID != id || !pending.Get("main_checkout_baseline", &baseline) {
+				return
+			}
+			if refreshed := enforce.RefreshMainCheckoutBaseline(repo, baseline, paths); refreshed != nil {
+				if pending.Set("main_checkout_baseline", refreshed) == nil {
+					_ = Write(path, pending)
+				}
+			}
+		}()
+	}
 }
 
 func maintenanceTestJob(job *Record) bool {

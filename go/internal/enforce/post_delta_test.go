@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"purser-hook/internal/testutil"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -179,6 +181,85 @@ func TestAssemblePostDeltaReportsMainCheckoutChangesDuringWorktreeJob(t *testing
 	}
 	if got := finding["paths"].([]string); len(got) != 1 || got[0] != "outside/file.txt" {
 		t.Fatalf("reported paths = %#v", got)
+	}
+}
+
+func TestRefreshMainCheckoutBaselineAfterApply(t *testing.T) {
+	for _, workerWrite := range []bool{false, true} {
+		t.Run(fmt.Sprintf("worker_write_%t", workerWrite), func(t *testing.T) {
+			repo := postDeltaRepo(t)
+			baseline := CaptureMainCheckoutBaseline(repo, nil)
+			applied := "scope/file.txt"
+			if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(applied)), []byte("host applied change\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// A separate outside write must survive the targeted refresh.
+			if err := os.WriteFile(filepath.Join(repo, "outside", "file.txt"), []byte("outside write\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			path := applied
+			if runtime.GOOS == "windows" {
+				path = strings.ToUpper(strings.ReplaceAll(path, "/", `\`))
+			}
+			refreshed := RefreshMainCheckoutBaseline(repo, baseline, []string{path})
+			if refreshed == nil {
+				t.Fatal("refresh failed")
+			}
+			want := []string{"outside/file.txt"}
+			if workerWrite {
+				if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(applied)), []byte("later worker write with different size\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				want = append(want, applied)
+			}
+			bundle := baseBundle("")
+			inspectMainCheckout(repo, refreshed, nil, map[string]any{}, bundle)
+			findings := bundle["findings"].([]any)
+			if len(findings) != 1 || findings[0].(map[string]any)["code"] != "MAIN_CHECKOUT_CHANGED_DURING_WORKTREE_JOB" || !reflect.DeepEqual(findings[0].(map[string]any)["paths"], want) {
+				t.Fatalf("findings = %#v, want changed paths %v", findings, want)
+			}
+		})
+	}
+	t.Run("windows_previous_key_spelling", func(t *testing.T) {
+		if runtime.GOOS != "windows" {
+			t.Skip("case-insensitive matching is Windows-only")
+		}
+		repo := postDeltaRepo(t)
+		path := "scope/file.txt"
+		previousKey := strings.ToUpper(path)
+		baseline := CaptureMainCheckoutBaseline(repo, []map[string]string{{"path": previousKey, "state": " M"}})
+		if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(path)), []byte("host applied change\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		refreshed := RefreshMainCheckoutBaseline(repo, baseline, []string{path})
+		if refreshed == nil {
+			t.Fatal("refresh failed")
+		}
+		statuses, ok := postStatusEntries(refreshed["status_entries"])
+		if !ok || len(statuses) != 1 || statuses[previousKey] != " M" {
+			t.Fatalf("current status not preserved under previous key: %#v", statuses)
+		}
+		fingerprint, err := mainCheckoutFingerprint(repo, path)
+		fingerprints := refreshed["fingerprints"].(map[string]any)
+		if err != nil || len(fingerprints) != 1 || fingerprints[previousKey] != fingerprint {
+			t.Fatalf("fingerprint not refreshed under previous key: %#v, %v", fingerprints, err)
+		}
+	})
+}
+
+func TestRefreshMainCheckoutBaselineFailureKeepsEvidence(t *testing.T) {
+	repo := postDeltaRepo(t)
+	baseline := CaptureMainCheckoutBaseline(repo, nil)
+	before, err := json.Marshal(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := RefreshMainCheckoutBaseline(repo, baseline, []string{"scope/file.txt", "../outside.txt"}); got != nil {
+		t.Fatalf("invalid fingerprint path produced replacement: %#v", got)
+	}
+	after, err := json.Marshal(baseline)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("failed refresh mutated baseline: %s, %v", after, err)
 	}
 }
 

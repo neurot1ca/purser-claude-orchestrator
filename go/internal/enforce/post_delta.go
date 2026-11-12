@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -223,6 +224,65 @@ func CaptureMainCheckoutBaseline(root string, entries any) map[string]any {
 		fingerprints[path] = fingerprint
 	}
 	return map[string]any{"status": status, "status_entries": recorded, "fingerprints": fingerprints, "truncated": truncated}
+}
+
+// RefreshMainCheckoutBaseline acknowledges only paths written by a host apply.
+// Return no replacement on inspection failure so callers retain the old evidence.
+func RefreshMainCheckoutBaseline(root string, baseline map[string]any, paths []string) map[string]any {
+	previous, ok := postStatusEntries(baseline["status_entries"])
+	fingerprints, fingerprintsOK := baseline["fingerprints"].(map[string]any)
+	if !ok || !fingerprintsOK {
+		return nil
+	}
+	entries, err := ledger.StatusEntries(root)
+	current, currentOK := postStatusEntries(entries)
+	if err != nil || !currentOK {
+		return nil
+	}
+	updated := make(map[string]any, len(fingerprints)+len(paths))
+	for path, fingerprint := range fingerprints {
+		updated[path] = fingerprint
+	}
+	for _, path := range paths {
+		path = strings.ReplaceAll(path, `\`, "/")
+		currentKey := path
+		// Preserve Git's spelling, including existing baseline keys on Windows.
+		if runtime.GOOS == "windows" {
+			for key := range current {
+				if strings.EqualFold(key, path) {
+					currentKey = key
+					break
+				}
+			}
+			path = currentKey
+			for key := range previous {
+				if strings.EqualFold(key, path) {
+					path = key
+					break
+				}
+			}
+		}
+		fingerprint, err := mainCheckoutFingerprint(root, path)
+		if err != nil {
+			return nil
+		}
+		previous[path], updated[path] = current[currentKey], fingerprint
+	}
+	recorded := make([]map[string]string, 0, len(previous))
+	keys := make([]string, 0, len(previous))
+	for path := range previous {
+		keys = append(keys, path)
+	}
+	sort.Strings(keys)
+	for _, path := range keys {
+		recorded = append(recorded, map[string]string{"path": path, "state": previous[path]})
+	}
+	result := make(map[string]any, len(baseline))
+	for key, value := range baseline {
+		result[key] = value
+	}
+	result["status_entries"], result["fingerprints"] = recorded, updated
+	return result
 }
 
 func mainCheckoutFingerprint(root, path string) (string, error) {
