@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.245 — 2026-11-12
+- **Fixed:** `purser-release` no longer leaves its caller waiting after “plugin update ok” when a process left by `claude plugin update` keeps the inherited output open.
+- **Fixed:** job cleanup continues past an unreadable job record; shared-worktree cleanup and size-pressure deletion wait until the record is readable.
+- **Fixed:** a read-only plan job no longer reports a repository mutation when another Purser job is applied while it runs.
+- **Changed:** bench protocol acceptance uses thresholds instead of requiring the aggregate on/off ratio to stay below 1; savings claims use total cost.
+
 ## 0.1.244 — 2026-11-12
 - **Fixed:** host test evidence reads the exit code of a `-Command` test whose argument the coder log shows as adjacent quoted parts.
 - **Fixed:** a brief that writes `Objective: ... Criteria: ...` on one line now counts as a grounded task contract, including criteria lines that follow.
