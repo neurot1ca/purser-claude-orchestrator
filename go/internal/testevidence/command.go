@@ -6,6 +6,7 @@ import (
 )
 
 var shellFlag = regexp.MustCompile(`(?i)\s(?:-command|-lc|-c|/c)\s+`)
+var exitOnFailureGuard = regexp.MustCompile(`(?i)^\s*if\s*\(\s*\$LASTEXITCODE\s+-ne\s+0\s*\)\s*\{\s*exit\s+\$LASTEXITCODE\s*\}\s*$`)
 
 // Limit preserves an unknown status when bounding the evidence to six runs.
 func Limit(runs []map[string]any) []map[string]any {
@@ -68,15 +69,32 @@ func ExitCode(command string, raw any) (string, any) {
 	if strings.Contains(command, `\"`) || strings.Contains(command, `\'`) || strings.ContainsRune(command, '`') {
 		return target, nil
 	}
-	segments, reliable := shellSegments(unwrap(command))
+	segments, separators, reliable := shellSegments(unwrap(command))
 	if !reliable {
 		return target, nil
 	}
-	for _, segment := range segments {
-		if Target(segment) == "" {
+	seenTest := false
+	for i, segment := range segments {
+		isTest := Target(segment) != ""
+		seenTest = seenTest || isTest
+		if i == len(segments)-1 && !isTest || seenTest && !isTest || i < len(separators) && separators[i] != "&&" && (seenTest || separators[i] != ";") {
 			return target, nil
 		}
-		for _, word := range shellWords(segment) {
+		if !seenTest && exitOnFailureGuard.MatchString(segment) {
+			continue
+		}
+		words := shellWords(segment)
+		if !isTest {
+			if len(words) == 0 {
+				return target, nil
+			}
+			switch strings.ToLower(words[0]) {
+			case "gofmt", "goimports", "go", "cd", "set-location", "push-location", "mkdir":
+			default:
+				return target, nil
+			}
+		}
+		for _, word := range words {
 			if strings.EqualFold(word, "if") || strings.Contains(strings.ToLower(word), "$lastexitcode") {
 				return target, nil
 			}
@@ -85,12 +103,20 @@ func ExitCode(command string, raw any) (string, any) {
 	return target, 0
 }
 
-func shellSegments(command string) ([]string, bool) {
+func shellSegments(command string) ([]string, []string, bool) {
 	var segments []string
+	var separators []string
 	var quote rune
 	reliable := true
 	start := 0
 	for i := 0; i < len(command); i++ {
+		// Keep the exact PowerShell guard intact for ExitCode's setup check.
+		if i == start {
+			if end := strings.IndexByte(command[start:], '}'); end >= 0 && exitOnFailureGuard.MatchString(command[start:start+end+1]) {
+				i = start + end
+				continue
+			}
+		}
 		r := rune(command[i])
 		if r == '\n' || r == '\r' {
 			reliable = false
@@ -105,17 +131,27 @@ func shellSegments(command string) ([]string, bool) {
 			quote = r
 			continue
 		}
+		if r == '#' {
+			reliable = false
+		}
 		if strings.ContainsRune(";&|\n\r<>`(){}", r) {
 			segments = append(segments, command[start:i])
+			separator := string(r)
 			if r == '&' && i+1 < len(command) && command[i+1] == '&' {
+				separator = "&&"
 				i++
-			} else {
+			} else if r == '|' && i+1 < len(command) && command[i+1] == '|' {
+				separator = "||"
+				i++
+			}
+			separators = append(separators, separator)
+			if separator != ";" && separator != "&&" {
 				reliable = false
 			}
 			start = i + 1
 		}
 	}
-	return append(segments, command[start:]), reliable && quote == 0
+	return append(segments, command[start:]), separators, reliable && quote == 0
 }
 
 // Target returns the test-runner command within a shell invocation.
@@ -132,7 +168,7 @@ func Target(command string) string {
 		return path
 	}
 	inner := unwrap(command)
-	segments, _ := shellSegments(inner)
+	segments, _, _ := shellSegments(inner)
 	var targets []string
 	for _, segment := range segments {
 		tokens := shellWords(segment)
