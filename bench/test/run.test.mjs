@@ -410,8 +410,39 @@ test('Go contract audit fails unrecognized compile failures and timeouts with th
   assert.match(goCheckContract({ code: null, timedOut: true, stdout: '', stderr: 'setup stalled' }, '').detail, /timed out:\nsetup stalled/);
 });
 
+test('Go contract audit reports unrecognized compiler errors alongside recognized identifiers', () => {
+  const result = goCheckContract({ code: 1, stdout: '', stderr: [
+    '# example/pkg',
+    'C:\\repo\\pkg\\check.go:4:2: undefined: Foo',
+    'C:\\repo\\pkg\\check.go:5:9: cannot use value (variable of type string) as int value in assignment',
+    'FAIL\texample/pkg [build failed]'
+  ].join('\r\n') }, '');
+  assert.deepEqual(result.needed, ['Foo']);
+  assert.match(result.detail, /^Go contract compile exited 1:/);
+  assert.match(result.detail, /cannot use value .* as int value in assignment/);
+  assert.doesNotMatch(result.detail, /undefined: Foo|# example\/pkg|FAIL/);
+});
+
 test('Go contract audit passes a successful compile with no undefined identifiers', () => {
   assert.deepEqual(goCheckContract({ code: 0, stdout: 'ok package [no tests to run]', stderr: '' }, ''), { needed: [], detail: '' });
+});
+
+test('Go contract audit reports package-level failures alongside prompted identifiers', () => {
+  const result = goCheckContract({ code: 1, stdout: '', stderr: 'undefined: Foo\ncompile: signal: killed' }, 'Foo');
+  assert.deepEqual(result.needed, ['Foo']);
+  assert.equal(result.detail, 'Go contract compile exited 1:\ncompile: signal: killed');
+});
+
+test('Go contract audit ignores indented call-signature continuations and package summaries', () => {
+  const compiled = { code: 1, stdout: '', stderr: [
+    '# example/pkg',
+    'not enough arguments in call to Foo',
+    '\thave (string)',
+    '\twant (string, int)',
+    'FAIL\texample/pkg [build failed]',
+    'ok\texample/other'
+  ].join('\r\n') };
+  assert.deepEqual(goCheckContract(compiled, 'Foo'), { needed: ['Foo'], detail: '' });
 });
 
 test('Go contract audit requires prompted identifiers for changed call signatures', () => {

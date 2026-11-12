@@ -580,12 +580,18 @@ export function promptNeedsIdentifiers(identifiers, prompt) {
 }
 
 export function goCheckContract(compiled, prompt) {
-  const output = `${compiled.stdout}\n${compiled.stderr}`.trim();
+  const output = `${compiled.stdout}\n${compiled.stderr}`;
   const needed = undefinedGoIdentifiers(output);
   const uncovered = promptNeedsIdentifiers(needed, prompt);
   let detail = uncovered.length ? `prompt omits trusted Go check identifier(s): ${uncovered.join(', ')}` : '';
-  if (compiled.timedOut || (compiled.code !== 0 && !needed.length)) {
-    detail = `Go contract compile ${compiled.timedOut ? 'timed out' : `exited ${compiled.code}`}:\n${output.split(/\r?\n/).slice(-20).join('\n')}`;
+  const unrecognizedErrors = output.split(/\r?\n/).flatMap(line => {
+    if (!line || /^(?:\s|#\s|(?:FAIL|ok)(?:\s|$))/.test(line)) return [];
+    const match = line.match(/^(.+?\.go):(\d+)(?::\d+)?:\s*(.*)$/);
+    return !undefinedGoIdentifiers(match ? match[3] : line).length ? [line] : [];
+  });
+  if (compiled.timedOut || (compiled.code !== 0 && (!needed.length || unrecognizedErrors.length))) {
+    const diagnostics = unrecognizedErrors.length ? unrecognizedErrors : output.trim().split(/\r?\n/);
+    detail = `Go contract compile ${compiled.timedOut ? 'timed out' : `exited ${compiled.code}`}:\n${diagnostics.slice(-20).join('\n')}`;
   }
   return { needed, detail };
 }
