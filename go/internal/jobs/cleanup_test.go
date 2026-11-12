@@ -385,6 +385,87 @@ func TestCleanupKeepsSourceWhenCheckpointIsCorrupt(t *testing.T) {
 	}
 }
 
+func TestCleanupUnreadableRecordAllowsIndependentProgress(t *testing.T) {
+	root := t.TempDir()
+	badID := strings.Repeat("a", 64)
+	goodID := strings.Repeat("b", 64)
+	jobsDir := filepath.Join(root, "codex_exec_mcp", "jobs")
+	if err := os.MkdirAll(jobsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	badPath := filepath.Join(jobsDir, badID+".json")
+	if err := os.WriteFile(badPath, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cleanupJob(t, root, goodID, "SUCCEEDED", map[string]any{
+		"applyState": "applied", "finishedAt": float64(cleanupNow().Unix()) - 8*86400,
+	})
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
+	if _, err := os.Stat(badPath); err != nil {
+		t.Fatalf("unreadable job record was not retained: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(jobsDir, goodID+".json")); !os.IsNotExist(err) {
+		t.Fatalf("independent checkpointed job was not cleaned: %v", err)
+	}
+}
+
+func TestCleanupIncompleteInventoryProtectsSharedData(t *testing.T) {
+	root := t.TempDir()
+	repo := cleanupRepo(t, root)
+	wt := cleanupWT(t, root, repo, "protected")
+	id := strings.Repeat("c", 64)
+	cleanupJob(t, root, id, "SUPERSEDED", map[string]any{
+		"applyState": "superseded", "repoRoot": repo, "worktreePath": wt,
+		"finishedAt": float64(cleanupNow().Unix()) - 8*86400,
+	})
+	badPath := filepath.Join(root, "codex_exec_mcp", "jobs", strings.Repeat("d", 64)+".json")
+	if err := os.WriteFile(badPath, []byte(`{"jobId":"wrong"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatalf("cleanupJobs() error = %v", err)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("shared worktree removed with incomplete inventory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "codex_exec_mcp", "jobs", id+".json")); err != nil {
+		t.Fatalf("job owning protected worktree was removed: %v", err)
+	}
+}
+
+func TestCleanupRepairedInventoryResumes(t *testing.T) {
+	root := t.TempDir()
+	repo := cleanupRepo(t, root)
+	wt := cleanupWT(t, root, repo, "resumed")
+	id := strings.Repeat("e", 64)
+	cleanupJob(t, root, id, "SUCCEEDED", map[string]any{
+		"repoRoot": repo, "worktreePath": wt,
+		"finishedAt": float64(cleanupNow().Unix()) - 8*86400,
+	})
+	badID := strings.Repeat("f", 64)
+	badPath := filepath.Join(root, "codex_exec_mcp", "jobs", badID+".json")
+	if err := os.WriteFile(badPath, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatalf("cleanupJobs() with bad inventory: %v", err)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("worktree removed before inventory repair: %v", err)
+	}
+	if err := os.WriteFile(badPath, []byte(fmt.Sprintf(`{"jobId":%q,"state":"RUNNING"}`, badID)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupJobs(root, t.TempDir(), cleanupNow(), true); err != nil {
+		t.Fatalf("cleanupJobs() after inventory repair: %v", err)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Fatalf("worktree was not eligible after inventory repair: %v", err)
+	}
+}
+
 func TestCleanupKeepsSourceWhenCheckpointLockCannotOpen(t *testing.T) {
 	root := t.TempDir()
 	id := strings.Repeat("8", 64)
