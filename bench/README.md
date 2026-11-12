@@ -74,6 +74,10 @@ Choose integer $R \ge 1$ and confirmation task count $K$ (constrained to be a **
 
 $$K \ge \frac{\left(t_{0.975,\,K-1} + z_{0.90}\right)^2 \left(\tau_T^2 + \sigma_T^2 / R\right)}{\left|\log(1 - \delta_T)\right|^2}$$
 
+### Acceptance thresholds
+
+Operational targets are **main-Claude calls per task <= 9** and **weighted main-Claude on/off ratio <= 1.2** (last 12-task measurement: 8.75 calls/task). An aggregate main-Claude on/off token ratio below 1 is not expected because Purser runs with a paid Codex worker. Savings claims must use **total cost (main Claude plus worker tokens)** and require worker token usage recorded for **both arms**. The 40% prospective reduction and existing power targets remain calibration and power-planning inputs, not acceptance targets; the analysis and report behavior is unchanged.
+
 ### Hard Floor $K_{\min} = 12$
 
 Confirmation requires at least **$K_{\min} = 12$ tasks** (3 per class). Under approximately normal independent task effects, the relative standard error of the sample variance is:
