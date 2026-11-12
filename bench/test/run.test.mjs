@@ -472,7 +472,7 @@ test('child environment strips Claude parent-session variables and keeps provide
     CLAUDECODE: 'parent', CLAUDE_CODE_SESSION_ID: 'session', CLAUDE_CODE_ENTRYPOINT: 'cli',
     CLAUDE_EFFORT: 'high', CLAUDE_PID: '123', ANTHROPIC_API_KEY: 'untouched', KEEP: 'yes'
   }, 'state-dir');
-  assert.deepEqual(env, { ANTHROPIC_API_KEY: 'untouched', KEEP: 'yes', PURSER_STATE_DIR: 'state-dir' });
+  assert.deepEqual(env, { ANTHROPIC_API_KEY: 'untouched', KEEP: 'yes', PURSER_STATE_DIR: 'state-dir', PURSER_DISABLE_CATALOG_REFRESH: '1' });
   assert.equal('CLAUDE_CONFIG_DIR' in childEnvironment({ KEEP: 'yes' }, 'state'), false);
 });
 

@@ -104,7 +104,7 @@ export function armSettings(arm, disabledPlugins = []) {
 }
 
 export function childEnvironment(env, stateDir) {
-  return { ...Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'CLAUDECODE' && !key.startsWith('CLAUDE_CODE_') && key !== 'CLAUDE_EFFORT' && key !== 'CLAUDE_PID')), PURSER_STATE_DIR: stateDir };
+  return { ...Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'CLAUDECODE' && !key.startsWith('CLAUDE_CODE_') && key !== 'CLAUDE_EFFORT' && key !== 'CLAUDE_PID')), PURSER_STATE_DIR: stateDir, PURSER_DISABLE_CATALOG_REFRESH: '1' };
 }
 
 function gitEnvironment(env) {
