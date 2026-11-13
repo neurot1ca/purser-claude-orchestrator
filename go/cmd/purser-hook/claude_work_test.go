@@ -139,8 +139,12 @@ func TestClaudeWorkSubagentUsesAgentTranscript(t *testing.T) {
 	if err := os.WriteFile(transcript, []byte(`{"type":"assistant","sessionId":"s3","agentId":"agent-1","isSidechain":true,"message":{"id":"m3","role":"assistant","content":[{"type":"text","text":"agent result"}]}}`+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	parent := filepath.Join(project, "parent.jsonl")
+	if err := os.WriteFile(parent, []byte(`{"type":"assistant","sessionId":"s3","message":{"id":"m4","role":"assistant","content":[{"type":"text","text":"parent result"}]}}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	start := map[string]any{"hook_event_name": "SubagentStart", "session_id": "s3", "cwd": project, "agent_id": "agent-1", "agent_type": "general-purpose"}
-	stop := map[string]any{"hook_event_name": "SubagentStop", "session_id": "s3", "cwd": project, "agent_id": "agent-1", "agent_transcript_path": transcript}
+	stop := map[string]any{"hook_event_name": "SubagentStop", "session_id": "s3", "cwd": project, "agent_id": "agent-1", "agent_transcript_path": transcript, "transcript_path": parent}
 	if err := captureClaudeWork(start); err != nil {
 		t.Fatal(err)
 	}

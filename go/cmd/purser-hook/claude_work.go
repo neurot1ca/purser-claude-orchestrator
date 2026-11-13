@@ -60,8 +60,11 @@ func captureClaudeWork(event map[string]any) error {
 		return nil
 	}
 	record := claudework.Record{ProjectKey: contextio.ProjectKey(repository), Kind: kind, State: state, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), MetadataStatus: "partial"}
-	if event["hook_event_name"] == "SubagentStop" && event["transcript_path"] == nil {
-		event["transcript_path"] = event["agent_transcript_path"]
+	// SubagentStop's transcript_path is the parent session, so prefer the agent's own transcript.
+	if event["hook_event_name"] == "SubagentStop" {
+		if path, ok := event["agent_transcript_path"].(string); ok && path != "" {
+			event["transcript_path"] = path
+		}
 	}
 	record = claudework.CaptureHookFields(record, event)
 	if state == "running" {
