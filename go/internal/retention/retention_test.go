@@ -1,7 +1,9 @@
 package retention
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -115,6 +117,135 @@ func TestRemoveOldPrefixedEntriesDoesNotFollowSymlink(t *testing.T) {
 	RemoveOldPrefixedEntries(root, now, 24*time.Hour, []string{"go-build"})
 	if _, err := os.Stat(entry); !os.IsNotExist(err) {
 		t.Fatalf("stale entry was kept by a fresh symlink target: %v", err)
+	}
+}
+
+func TestPruneClaudeWorkOwnershipAndLimits(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now()
+	owned := func(n int) string {
+		return filepath.Join(root, "project-"+strings.Repeat("a", 60)+fmt.Sprintf("%04x", n)+".json")
+	}
+	old := now.Add(-8 * 24 * time.Hour)
+	putFile(t, owned(1), []byte("old"), old.Unix())
+	for i := 0; i < 2048; i++ {
+		putFile(t, owned(i+2), []byte("record"), now.Add(-20*time.Minute).Unix())
+	}
+	transcript := filepath.Join(root, "session.jsonl")
+	putFile(t, transcript, []byte("transcript"), old.Unix())
+	link := filepath.Join(root, "project-"+strings.Repeat("c", 64)+".json")
+	linkCreated := os.Symlink(transcript, link) == nil
+	oldRemove := removeRetainedFile
+	attempts := 0
+	removeRetainedFile = func(path string) error {
+		attempts++
+		if attempts == 1 {
+			return os.ErrPermission
+		}
+		return oldRemove(path)
+	}
+	t.Cleanup(func() { removeRetainedFile = oldRemove })
+	if !PruneClaudeWork(root, now, 8*1024, "", time.Now().Add(time.Second)) {
+		t.Fatal("room was not reclaimed")
+	}
+	if attempts < 2 {
+		t.Fatal("transient deletion failure was not retried")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownedCount := 0
+	for _, entry := range entries {
+		if claudeWorkName.MatchString(entry.Name()) {
+			info, e := os.Lstat(filepath.Join(root, entry.Name()))
+			if e == nil && info.Mode().IsRegular() && !isReparseInfo(info) {
+				ownedCount++
+			}
+		}
+	}
+	if ownedCount != 2047 {
+		t.Fatalf("owned files remaining = %d, want 2047", ownedCount)
+	}
+	if _, err = os.Stat(transcript); err != nil {
+		t.Fatalf("transcript was removed: %v", err)
+	}
+	if linkCreated {
+		if _, err = os.Lstat(link); err != nil {
+			t.Fatalf("observer symlink was removed: %v", err)
+		}
+	}
+
+	byteRoot := t.TempDir()
+	for i := 0; i < 2; i++ {
+		path := filepath.Join(byteRoot, "project-"+strings.Repeat("b", 63)+strconv.Itoa(i)+".json")
+		f, e := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0600)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = f.Truncate(8 * 1024 * 1024); e != nil {
+			t.Fatal(e)
+		}
+		_ = f.Close()
+		when := now.Add(-20 * time.Minute)
+		_ = os.Chtimes(path, when, when)
+	}
+	if !PruneClaudeWork(byteRoot, now, 8*1024*1024, "", time.Now().Add(time.Second)) {
+		t.Fatal("byte limit was not reclaimed")
+	}
+	byteEntries, _ := os.ReadDir(byteRoot)
+	if len(byteEntries) != 1 {
+		t.Fatalf("byte limit left %d records, want 1", len(byteEntries))
+	}
+}
+
+func TestPruneClaudeWorkReplacementAtCountLimit(t *testing.T) {
+	root, now := t.TempDir(), time.Now()
+	var replacing string
+	for i := 0; i < claudeWorkMaxFiles; i++ {
+		path := filepath.Join(root, fmt.Sprintf("project-%064x.json", i))
+		putFile(t, path, []byte("old"), now.Add(-20*time.Minute).Unix())
+		replacing = path
+	}
+	oldRemove := removeRetainedFile
+	t.Cleanup(func() { removeRetainedFile = oldRemove })
+	removeRetainedFile = func(string) error { t.Fatal("replacement attempted to evict a record"); return nil }
+	if !PruneClaudeWork(root, now, 4, replacing, time.Now().Add(time.Second)) {
+		t.Fatal("replacement at count limit was rejected")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != claudeWorkMaxFiles {
+		t.Fatalf("replacement changed record count: %d, %v", len(entries), err)
+	}
+}
+
+func TestPruneClaudeWorkSharedUpdateDeadline(t *testing.T) {
+	root, start := t.TempDir(), time.Now()
+	for i := 0; i < 3; i++ {
+		putFile(t, filepath.Join(root, fmt.Sprintf("project-%064x.json", i)), []byte("locked"), start.Add(-8*24*time.Hour).Unix())
+	}
+	deadline := start.Add(100 * time.Millisecond)
+	now := start.Add(60 * time.Millisecond) // Earlier update steps consumed this budget.
+	oldNow, oldRemove := claudeWorkNow, removeRetainedFile
+	t.Cleanup(func() { claudeWorkNow, removeRetainedFile = oldNow, oldRemove })
+	claudeWorkNow = func() time.Time { return now }
+	attempts := 0
+	removeRetainedFile = func(string) error {
+		attempts++
+		now = deadline // The first locked file consumes the remaining allowance.
+		return os.ErrPermission
+	}
+	if PruneClaudeWork(root, start, 1, "", deadline) {
+		t.Fatal("expired update was admitted")
+	}
+	if attempts != 1 || now.Sub(start) != 100*time.Millisecond {
+		t.Fatalf("locked files received separate retry budgets: attempts=%d elapsed=%s", attempts, now.Sub(start))
+	}
+	// Publication and temporary cleanup receive the same exhausted deadline.
+	for i := 0; i < 2; i++ {
+		if err := RetryClaudeWork(deadline, func() error { t.Fatal("operation ran after deadline"); return nil }); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expired retry = %v", err)
+		}
 	}
 }
 

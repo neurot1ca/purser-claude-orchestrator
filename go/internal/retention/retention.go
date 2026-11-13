@@ -1,6 +1,7 @@
 package retention
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"purser-hook/internal/contextio"
+	"purser-hook/internal/fsretry"
 	"purser-hook/internal/telemetryhealth"
 )
 
@@ -32,6 +34,121 @@ var warningOnce sync.Once
 var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var renamePluginPath = os.Rename
 var removeRetainedFile = os.Remove
+var claudeWorkName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}-[0-9a-f]{64}\.json$`)
+var claudeWorkNow = time.Now
+
+const (
+	claudeWorkMaxAge   = 7 * 24 * time.Hour
+	claudeWorkMaxFiles = 2048
+	claudeWorkMaxBytes = int64(16 * mib)
+	claudeWorkGrace    = 10 * time.Minute
+)
+
+// PruneClaudeWork reclaims only flat, observer-owned records and reports
+// whether a proposed replacement fits within the global retention limits.
+func PruneClaudeWork(root string, now time.Time, incomingBytes int64, replacing string, deadline time.Time) bool {
+	if incomingBytes < 0 || incomingBytes > claudeWorkMaxBytes {
+		return false
+	}
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || isReparseInfo(info) {
+		return false
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	type candidate struct {
+		path  string
+		size  int64
+		stamp time.Time
+	}
+	var files []candidate
+	for _, entry := range entries {
+		if !claudeWorkNow().Before(deadline) {
+			return false
+		}
+		if !claudeWorkName.MatchString(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		info, e := os.Lstat(path)
+		if e != nil || !info.Mode().IsRegular() || isReparseInfo(info) {
+			continue
+		}
+		files = append(files, candidate{path, info.Size(), info.ModTime()})
+	}
+	remove := func(c candidate) bool {
+		if now.Sub(c.stamp) < claudeWorkGrace {
+			return false
+		}
+		if err := RetryClaudeWork(deadline, func() error { return removeRetainedFile(c.path) }); err != nil {
+			return false
+		}
+		return true
+	}
+	kept := files[:0]
+	for _, c := range files {
+		if !claudeWorkNow().Before(deadline) {
+			return false
+		}
+		if c.path == replacing {
+			kept = append(kept, c)
+			continue
+		}
+		if now.Sub(c.stamp) > claudeWorkMaxAge && remove(c) {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	files = kept
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].stamp.Equal(files[j].stamp) {
+			return files[i].path < files[j].path
+		}
+		return files[i].stamp.Before(files[j].stamp)
+	})
+	count, total := len(files)+1, incomingBytes
+	for _, c := range files {
+		total += c.size
+		if c.path == replacing {
+			count--
+			total -= c.size
+		}
+	}
+	for _, c := range files {
+		if !claudeWorkNow().Before(deadline) {
+			return false
+		}
+		if count <= claudeWorkMaxFiles && total <= claudeWorkMaxBytes {
+			break
+		}
+		if c.path == replacing || !remove(c) {
+			continue
+		}
+		count--
+		total -= c.size
+	}
+	return claudeWorkNow().Before(deadline) && count <= claudeWorkMaxFiles && total <= claudeWorkMaxBytes
+}
+
+// RetryClaudeWork keeps all filesystem retries within the update's shared deadline.
+func RetryClaudeWork(deadline time.Time, operation func() error) error {
+	remaining := deadline.Sub(claudeWorkNow())
+	if remaining <= 0 {
+		return context.DeadlineExceeded
+	}
+	return fsretry.Retry(func() error {
+		if !claudeWorkNow().Before(deadline) {
+			return context.DeadlineExceeded
+		}
+		err := operation()
+		if err != nil && !claudeWorkNow().Before(deadline) {
+			return context.DeadlineExceeded
+		}
+		return err
+	}, remaining)
+}
 
 type policy struct {
 	owner       string
