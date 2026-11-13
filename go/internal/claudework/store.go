@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -227,12 +228,20 @@ func mergeExisting(path string, next *Record) error {
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("existing Claude work path is unsafe")
 	}
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(f, maxRecordBytes+1))
+	closeErr := f.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 	var old Record
 	if len(data) > maxRecordBytes || json.Unmarshal(data, &old) != nil || old.Provider != "claude" || old.ID != next.ID || old.ID != Identity(old.Kind, old.SessionID, old.AgentID) || old.ProjectKey != next.ProjectKey {

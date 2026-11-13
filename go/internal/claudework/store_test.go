@@ -52,6 +52,23 @@ func TestUpdateRejectsMalformedAndOversized(t *testing.T) {
 	}
 }
 
+func TestUpdateRejectsOversizedExistingRecord(t *testing.T) {
+	root, record := t.TempDir(), sampleRecord()
+	path, err := Path(root, record.ProjectKey, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, make([]byte, maxRecordBytes+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = Update(root, record); err == nil {
+		t.Fatal("accepted oversized existing record")
+	}
+}
+
 func TestUpdateReclaimsOrphanFromInterruptedWrite(t *testing.T) {
 	root, record := t.TempDir(), sampleRecord()
 	if err := Update(root, record); err != nil {
