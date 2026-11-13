@@ -1,10 +1,30 @@
 package claudework
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
+
+// MergeExisting restores previously observed metadata for a terminal update.
+func MergeExisting(stateRoot string, record Record) (Record, error) {
+	if err := validate(&record); err != nil {
+		return record, err
+	}
+	target, err := Path(stateRoot, record.ProjectKey, record)
+	if err != nil {
+		return record, err
+	}
+	if _, err = os.Lstat(target); errors.Is(err, os.ErrNotExist) {
+		return record, nil
+	} else if err != nil {
+		return record, err
+	}
+	err = mergeExisting(target, &record)
+	return record, err
+}
 
 // CaptureHookFields copies only the Claude hook fields used by the record.
 func CaptureHookFields(record Record, event map[string]any) Record {

@@ -14,6 +14,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "claude-work" {
+		os.Exit(claudeWorkMain())
+	}
 	if len(os.Args) > 1 && os.Args[1] == "mcp-handoff" {
 		os.Exit(mcpHandoffMain())
 	}
@@ -152,6 +155,7 @@ func main() {
 		writeJSON(map[string]any{"written": true})
 	case "SessionStart":
 		handleSessionStart(event)
+		observeClaudeWork(event)
 	case "UserPromptSubmit":
 		if output := contextio.UserPromptSubmit(event, started); len(output) > 0 {
 			if written, err := os.Stdout.Write(output); err == nil && written == len(output) {
@@ -164,8 +168,10 @@ func main() {
 		if output := contextio.Stop(event, started); len(output) > 0 {
 			_, _ = os.Stdout.Write(output)
 		}
+		observeClaudeWork(event)
 		safeSessionMaintenanceStep(func() { stopMaintenance(event) })
 	case "SessionEnd":
+		observeClaudeWork(event)
 		defer enqueueCleanup(stateRoot())
 	}
 	if eventName, ok := event["hook_event_name"].(string); ok {

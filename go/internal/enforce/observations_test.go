@@ -27,7 +27,7 @@ func TestObservationEventTypesMatchPythonSchema(t *testing.T) {
 		"COMPACTION_ADVICE_OUTCOME", "STOP_BLOCKED", "SCOPE_CONFLICT_OUTCOME",
 		"REVIEWER1_SKIPPED", "REVIEWER1_FAILED", "ROUTING_PROTOCOL_VIOLATION",
 		"THREAD_CONTINUITY_VIOLATION", "UNKNOWN_CONCURRENT_WRITER", "WORKFLOW_VERDICT_RECORDED",
-		"TELEMETRY_WARNING", "CLAUDE_TASK_USAGE_RECORDED", "CONTEXT_IO_TURN_RECORDED",
+		"TELEMETRY_WARNING", "CLAUDE_TASK_USAGE_RECORDED", "CLAUDE_WORK_USAGE_RECORDED", "CONTEXT_IO_TURN_RECORDED",
 		"CODEX_RESULT_UNFETCHED", "CLAUDE_DECISION_RECORDED", "WORKER_REPLAY_CONFLICT",
 		"MECHANICAL_EDIT_OBSERVED", "MAINTENANCE_REPORT_FINISHED", "MAINTENANCE_REPORT_ACTED",
 		"READINESS_CHECK_OUTCOME", "APPLY_RECORDED", "APPLY_VALIDATION_FINISHED",
@@ -49,6 +49,45 @@ func TestObservationEventTypesMatchPythonSchema(t *testing.T) {
 	}
 	if !validObservationTaskEvent(event) {
 		t.Fatal("valid WORKER_REPLAY_CONFLICT observation was rejected")
+	}
+}
+
+func TestClaudeWorkUsageTelemetryIsIdempotentAndUnknownStaysNull(t *testing.T) {
+	state, repo := t.TempDir(), t.TempDir()
+	duration := int64(1)
+	if err := EmitClaudeWorkUsage(state, repo, "session-1", "stable-identity", "subagent", "dispatcher", "", "response_finished", "first response", nil, &duration); err != nil {
+		t.Fatal(err)
+	}
+	duration = 2
+	if err := EmitClaudeWorkUsage(state, repo, "session-1", "stable-identity", "subagent", "dispatcher", "", "response_finished", "first response", nil, &duration); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(state, "telemetry", "events", "????-??", "session_session-1.jsonl"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("telemetry files=%v err=%v", files, err)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("duplicate telemetry rows: %d", len(lines))
+	}
+	var event map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &event); err != nil {
+		t.Fatal(err)
+	}
+	payload := event["payload"].(map[string]any)
+	if payload["kind"] != "subagent" || payload["agent_type"] != "dispatcher" || payload["input_tokens"] != nil || payload["output_tokens"] != nil || payload["duration_ms"] != float64(1) || payload["work_id"] != "stable-identity" || payload["state"] != "response_finished" {
+		t.Fatalf("usage payload=%#v", payload)
+	}
+	if err := EmitClaudeWorkUsage(state, repo, "session-1", "stable-identity", "subagent", "dispatcher", "", "response_finished", "second response", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(files[0])
+	if err != nil || strings.Count(string(data), "CLAUDE_WORK_USAGE_RECORDED") != 2 {
+		t.Fatalf("new excerpt did not append an event: %s err=%v", data, err)
 	}
 }
 

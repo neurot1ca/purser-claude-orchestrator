@@ -4,6 +4,7 @@ import type { LifecycleEvent } from './mod/lifecycle.js'
 import { registerBoard } from './mod/board.js'
 import { registerUsage } from './mod/usage.js'
 import { register as registerEnforcement } from './mod/enforcement.js'
+import { registerClaudeWork } from './mod/claude-work.js'
 import { registerAutoCompact } from './mod/autocompact.js'
 import { registerLanguage } from './mod/language.js'
 import { cancelClaudeWake, registerClaudeWake, registerQuotaWake } from './mod/quotawake.js'
@@ -58,6 +59,14 @@ async function lifecycle($, e, next, name: LifecycleEvent) {
       timeoutMs: 60000,
     })
     if (result.exitCode !== 0) throw new Error(`Go ${name} helper exited ${result.exitCode}`)
+    if ((result.stderr ?? '').includes('Claude work observation failed')) {
+      const key = e.session_id || '<unknown>'
+      if (!lifecycleReported.has(key)) {
+        lifecycleReported.add(key)
+        try { await $.ui.log('Claude work observation failed; hook decision continued unchanged.') }
+        catch { /* Observation logging must not affect hooks. */ }
+      }
+    }
     mapped = mapHookOutput(name, result.stdout)
     if (mapped.systemMessage) {
       try { await $.ui.toast(mapped.systemMessage) }
@@ -77,6 +86,7 @@ async function lifecycle($, e, next, name: LifecycleEvent) {
 }
 
 export function register(on) {
+  registerClaudeWork(on)
   registerBoard(on)
   registerUsage(on)
   registerEnforcement(on)
