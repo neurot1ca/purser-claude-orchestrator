@@ -35,3 +35,20 @@ func TestCurrentShellQuote(t *testing.T) {
 		t.Fatalf("current shell quote = %q, want %q", got, want)
 	}
 }
+
+func TestCommandForPlatformPreservesShellQuotingWithBound(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		windows bool
+		want    string
+	}{
+		{name: "posix", want: `"/path with space/purser-hook" wait job --session-owner token --max-seconds 150`},
+		{name: "powershell", windows: true, want: `& '/path with space/purser-hook' wait job --session-owner token --max-seconds 150`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := commandForPlatform("/path with space/purser-hook", "job", "token", 150, tc.windows); got != tc.want {
+				t.Fatalf("command = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

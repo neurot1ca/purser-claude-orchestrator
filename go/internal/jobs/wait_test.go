@@ -93,6 +93,54 @@ func TestWaitReturnsStillWaitingAtConfiguredBound(t *testing.T) {
 	}
 }
 
+func TestWaitHonorsCallBoundWithoutRealSleep(t *testing.T) {
+	t.Setenv("PURSER_WAIT_MAX_SECONDS", "540")
+	root := t.TempDir()
+	writeWaitJob(t, root, "bounded", map[string]any{
+		"state": "QUEUED", "deadlineAt": float64(time.Now().Add(time.Hour).UnixNano()) / 1e9,
+	})
+	previousNow, previousSleep := waitNow, waitSleep
+	started := time.Now()
+	now := started
+	waitNow = func() time.Time { return now }
+	waitSleep = func(duration time.Duration) {
+		if duration <= 0 {
+			duration = time.Nanosecond
+		}
+		now = now.Add(duration)
+	}
+	defer func() { waitNow, waitSleep = previousNow, previousSleep }()
+
+	got := WaitContext(t.Context(), root, "bounded", 2)
+	if got.ExitCode != 0 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait bounded STILL_WAITING" || now.Sub(started) < 1800*time.Millisecond || now.Sub(started) > 2*time.Second {
+		t.Fatalf("result=%#v simulated elapsed=%s", got, now.Sub(started))
+	}
+}
+
+func TestWaitCallBoundDoesNotExtendConfiguredBound(t *testing.T) {
+	t.Setenv("PURSER_WAIT_MAX_SECONDS", "1")
+	root := t.TempDir()
+	writeWaitJob(t, root, "bounded", map[string]any{
+		"state": "QUEUED", "deadlineAt": float64(time.Now().Add(time.Hour).UnixNano()) / 1e9,
+	})
+	previousNow, previousSleep := waitNow, waitSleep
+	started := time.Now()
+	now := started
+	waitNow = func() time.Time { return now }
+	waitSleep = func(duration time.Duration) {
+		if duration <= 0 {
+			duration = time.Nanosecond
+		}
+		now = now.Add(duration)
+	}
+	defer func() { waitNow, waitSleep = previousNow, previousSleep }()
+
+	got := WaitContext(t.Context(), root, "bounded", 150)
+	if got.ExitCode != 0 || len(got.Lines) != 1 || got.Lines[0] != "purser-wait bounded STILL_WAITING" || now.Sub(started) > time.Second+time.Nanosecond {
+		t.Fatalf("result=%#v simulated elapsed=%s", got, now.Sub(started))
+	}
+}
+
 func TestWaitDoesNotSleepAfterSignalExhaustsBound(t *testing.T) {
 	t.Setenv("PURSER_WAIT_MAX_SECONDS", "1")
 	terminal := make(chan struct{})

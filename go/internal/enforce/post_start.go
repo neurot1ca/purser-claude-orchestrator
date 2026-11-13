@@ -92,7 +92,11 @@ func postStart(event map[string]any, root string) (map[string]any, error) {
 	if state == "SUCCEEDED" {
 		result["next"] = "Call codex_result with this jobId."
 	} else {
-		result["next"] = fmt.Sprintf("Run in the %s (use the PowerShell tool on Windows): %s ; if it prints STILL_WAITING, run it again; otherwise call codex_result with this jobId.", mode, waiter.Command(jobID))
+		waitCommand := waiter.Command(jobID)
+		if stringValue(event["agent_id"]) != "" {
+			waitCommand = waiter.Command(jobID, 150)
+		}
+		result["next"] = fmt.Sprintf("Run in the %s (use the PowerShell tool on Windows): %s ; if it prints STILL_WAITING, run it again; otherwise call codex_result with this jobId.", mode, waitCommand)
 	}
 	textValue, _ := canonicalJSON(result)
 	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse",

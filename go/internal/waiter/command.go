@@ -3,6 +3,7 @@ package waiter
 import (
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"purser-hook/internal/pluginroot"
@@ -10,7 +11,7 @@ import (
 )
 
 // Command returns the runnable command for the waiter of jobID.
-func Command(jobID string) string {
+func Command(jobID string, maxSeconds ...int64) string {
 	executable := "purser-hook"
 	if path, err := pluginroot.RuntimeExecutable(profile.StateRoot()); err == nil {
 		if path, err = filepath.Abs(path); err == nil {
@@ -23,10 +24,22 @@ func Command(jobID string) string {
 	if owner, err := SessionOwner(); err == nil {
 		token = owner.String()
 	}
-	if runtime.GOOS == "windows" {
-		return "& " + powerShellQuote(executable) + " wait " + jobID + " --session-owner " + token
+	seconds := int64(0)
+	if len(maxSeconds) > 0 {
+		seconds = maxSeconds[0]
 	}
-	return `"` + executable + `" wait ` + jobID + ` --session-owner ` + token
+	return commandForPlatform(executable, jobID, token, seconds, runtime.GOOS == "windows")
+}
+
+func commandForPlatform(executable, jobID, token string, maxSeconds int64, windows bool) string {
+	command := `"` + executable + `" wait ` + jobID + ` --session-owner ` + token
+	if windows {
+		command = "& " + powerShellQuote(executable) + " wait " + jobID + " --session-owner " + token
+	}
+	if maxSeconds > 0 {
+		command += " --max-seconds " + strconv.FormatInt(maxSeconds, 10)
+	}
+	return command
 }
 
 // ValidationCommand returns a shell-ready command for the bounded apply-validation waiter.

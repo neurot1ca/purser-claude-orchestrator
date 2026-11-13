@@ -26,6 +26,30 @@ func TestWaitReobserveProcess(t *testing.T) {
 	os.Exit(waitMain([]string{"samejob"}))
 }
 
+func TestParseWaitArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		id, owner string
+		seconds   int64
+		ok        bool
+	}{
+		{name: "plain", args: []string{"job"}, id: "job", ok: true},
+		{name: "owner then bound", args: []string{"job", "--session-owner", "owner", "--max-seconds", "150"}, id: "job", owner: "owner", seconds: 150, ok: true},
+		{name: "bound then owner", args: []string{"job", "--max-seconds", "150", "--session-owner", "owner"}, id: "job", owner: "owner", seconds: 150, ok: true},
+		{name: "invalid bound", args: []string{"job", "--max-seconds", "nope"}, id: "job", ok: false},
+		{name: "zero bound", args: []string{"job", "--max-seconds", "0"}, id: "job", ok: false},
+		{name: "duplicate bound", args: []string{"job", "--max-seconds", "1", "--max-seconds", "2"}, id: "job", ok: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, owner, seconds, ok := parseWaitArgs(tc.args)
+			if id != tc.id || owner != tc.owner || seconds != tc.seconds || ok != tc.ok {
+				t.Fatalf("parseWaitArgs(%v) = %q, %q, %d, %t", tc.args, id, owner, seconds, ok)
+			}
+		})
+	}
+}
+
 func TestWaitEmpty255ReobservesSameJob(t *testing.T) {
 	scratch, err := filepath.Abs("../../../.tmp")
 	if err != nil {

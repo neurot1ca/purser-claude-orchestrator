@@ -26,6 +26,7 @@ type WaitResult struct {
 }
 
 var waitSleep = time.Sleep
+var waitNow = time.Now
 
 // Wait follows a durable job record until it reaches the same outcome reported
 // by the Python waiter. SignalWait is bounded so replacement generations are
@@ -35,11 +36,14 @@ func Wait(stateRoot, jobID string) WaitResult {
 }
 
 // WaitContext stops observation only; session cancellation never cancels a job.
-func WaitContext(ctx context.Context, stateRoot, jobID string) WaitResult {
-	started := time.Now()
+func WaitContext(ctx context.Context, stateRoot, jobID string, maxSeconds ...int64) WaitResult {
+	started := waitNow()
 	maxWaitSeconds := int64(9 * 60)
 	if configured, err := strconv.ParseInt(os.Getenv("PURSER_WAIT_MAX_SECONDS"), 10, 64); err == nil && configured > 0 {
 		maxWaitSeconds = configured
+	}
+	if len(maxSeconds) > 0 && maxSeconds[0] > 0 && maxSeconds[0] < maxWaitSeconds {
+		maxWaitSeconds = maxSeconds[0]
 	}
 	if !validWaitID(jobID) {
 		return WaitResult{Lines: []string{"purser-wait " + jobID + " UNKNOWN_JOB"}, ExitCode: 2}
@@ -82,11 +86,11 @@ func WaitContext(ctx context.Context, stateRoot, jobID string) WaitResult {
 		if !portOK || !tokenOK || token == "" || !isASCII(token) || !deadlineOK || math.IsNaN(deadline) || math.IsInf(deadline, 0) {
 			return WaitResult{Lines: []string{"purser-wait " + jobID + " INVALID_JOB"}, ExitCode: 2}
 		}
-		remainingSeconds := deadline - float64(time.Now().UnixNano())/1e9
+		remainingSeconds := deadline - float64(waitNow().UnixNano())/1e9
 		if remainingSeconds <= 0 {
 			return reportWaitRecord(dir, jobID, nil)
 		}
-		remainingWaitSeconds := float64(maxWaitSeconds) - time.Since(started).Seconds()
+		remainingWaitSeconds := float64(maxWaitSeconds) - waitNow().Sub(started).Seconds()
 		if remainingWaitSeconds <= 0 {
 			return WaitResult{Lines: []string{"purser-wait " + jobID + " STILL_WAITING"}, ExitCode: 0}
 		}
@@ -94,8 +98,8 @@ func WaitContext(ctx context.Context, stateRoot, jobID string) WaitResult {
 			wait := time.Duration(math.Min(1, math.Min(remainingSeconds, remainingWaitSeconds)) * float64(time.Second))
 			_, _ = SignalWait("127.0.0.1:"+strconv.Itoa(port), jobID, token, wait)
 		}
-		remainingSeconds = deadline - float64(time.Now().UnixNano())/1e9
-		remainingWaitSeconds = float64(maxWaitSeconds) - time.Since(started).Seconds()
+		remainingSeconds = deadline - float64(waitNow().UnixNano())/1e9
+		remainingWaitSeconds = float64(maxWaitSeconds) - waitNow().Sub(started).Seconds()
 		pause := math.Min(0.1, math.Min(remainingSeconds, remainingWaitSeconds))
 		if pause > 0 {
 			waitSleep(time.Duration(pause * float64(time.Second)))

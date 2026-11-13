@@ -192,6 +192,39 @@ func TestPostStartWaiterUsesExecutablePath(t *testing.T) {
 	if !strings.Contains(next, command) || !strings.Contains(next, " wait ") || strings.Contains(strings.ToLower(next), "python") {
 		t.Fatalf("next command does not invoke Go waiter by executable path: %s", next)
 	}
+	if strings.Contains(next, "--max-seconds") {
+		t.Fatalf("main-Claude waiter unexpectedly has a bounded observation flag: %s", next)
+	}
+}
+
+func TestPostStartSubagentWaiterHasShortBound(t *testing.T) {
+	root := t.TempDir()
+	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "mcp__codex-main__codex_start",
+		"tool_use_id": "subagent-waiter", "session_id": "subagent-waiter-session", "agent_id": "dispatcher-1"}
+	call, _ := callKey(event)
+	jobID := jobHash("subagent-waiter-call")
+	pending := map[string]any{"async_call": "subagent-waiter-call", "async_ready": true,
+		"session_id": event["session_id"], "tool_use_id": event["tool_use_id"], "project_key": "project"}
+	path := filepath.Join(root, "pending", call+".json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFixtureJSON(path, pending); err != nil {
+		t.Fatal(err)
+	}
+	event["tool_response"] = map[string]any{"structuredContent": map[string]any{"jobId": jobID, "state": "RUNNING"}}
+	got, err := postStart(event, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, ok := mapValue(got["hookSpecificOutput"])["updatedToolOutput"].([]any)
+	if !ok || len(entries) == 0 {
+		t.Fatalf("post-start response has no output: %#v", got)
+	}
+	next := stringValue(mapValue(entries[0])["text"])
+	if !strings.Contains(next, "--max-seconds 150") || !strings.Contains(next, "wait "+jobID) {
+		t.Fatalf("subagent waiter lacks bounded command: %s", next)
+	}
 }
 
 func TestPostStartWaiterModeUsesClaudeEntrypoint(t *testing.T) {
