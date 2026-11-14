@@ -6,6 +6,7 @@ type Job = Record<string, any>
 type BoardFiles = {
   indexes: Job[]
   jobs: Job[]
+  claude?: Job[]
   leases?: Job
   bundles?: Record<string, Job>
 }
@@ -19,6 +20,12 @@ const routeMinutes: Record<string, number> = {
 }
 
 const clean = (value: unknown) => String(value ?? '—').replace(/\|/g, '\\|').replace(/[\r\n]/g, ' ')
+const safeClaudeText = (value: unknown) => String(value ?? 'unknown').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}\[\]()#+!~|]/g, '\\$&')
+const codePath = (value: unknown) => {
+  const path = String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ')
+  const ticks = '`'.repeat(Math.max(1, ...[...path.matchAll(/`+/g)].map(match => match[0].length + 1)))
+  return `${ticks} ${path.replace(/\|/g, '\\|')} ${ticks}`
+}
 const finiteTime = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 const duration = (seconds: number) => {
   const whole = Math.floor(Math.max(0, seconds))
@@ -29,6 +36,10 @@ const duration = (seconds: number) => {
 }
 
 export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windows = false): JobBoard | undefined {
+  const allClaude = (files.claude ?? []).filter(record => record.kind === 'subagent')
+    .sort((a, b) => Number(b.state === 'running') - Number(a.state === 'running') || Date.parse(b.observed_at) - Date.parse(a.observed_at))
+  const runningClaude = allClaude.filter(record => record.state === 'running').length
+  const claude = allClaude.slice(0, 100)
   const jobsById = new Map(files.jobs.filter(job => typeof job.jobId === 'string').map(job => [job.jobId, job]))
   const indexed = files.indexes.flatMap(index => {
     const jobId = index.jobId
@@ -74,7 +85,7 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
   })
   const active = visible.filter(({ job }) => job.state === 'QUEUED' || job.state === 'RUNNING')
   const finished = visible.filter(({ job }) => job.state !== 'QUEUED' && job.state !== 'RUNNING')
-  if (!active.length && !finished.some(({ job }) => job.boardDisplayCount === 0)) return undefined
+  if (!active.length && !finished.some(({ job }) => job.boardDisplayCount === 0) && !runningClaude) return undefined
 
   const applyOf = (job: Job, bundle: Job) => {
     const paths = Array.isArray(job.changed_paths) ? job.changed_paths : bundle.changed_paths
@@ -140,6 +151,7 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
   addCount(counts.cancelled, '−', 'cancelled', 'gray')
   if (nearestEta !== undefined) summary.push({ text: ' · ', dimColor: true }, { text: `next ${duration(nearestEta)}`, dimColor: true })
   if (quietSeconds >= 300) summary.push({ text: ' · ', dimColor: true }, { text: `quiet ${duration(quietSeconds)}`, dimColor: true })
+  if (runningClaude) summary.push({ text: ' · ', dimColor: true }, { text: `Claude subagents running ${runningClaude}`, dimColor: true })
 
   const rows = visible.map(({ job, index }) => {
     const raw = job.state
@@ -188,10 +200,22 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
     const rank = raw === 'RUNNING' ? 0 : stage && stage !== 'done' ? 1 : raw === 'QUEUED' ? 2 : 3
     return { line, rank, timestamp: finiteTime(timestamp) ? timestamp : 0 }
   }).sort((a, b) => a.rank - b.rank || b.timestamp - a.timestamp)
+  const claudeRows = claude.map(record => {
+    const state = ['running', 'response_finished', 'session_ended', 'unknown'].includes(record.state) ? record.state : 'unknown'
+    const elapsed = Number.isSafeInteger(record.duration_ms) && record.duration_ms >= 0 ? record.duration_ms / 1000 :
+      state === 'running' && typeof record.started_at === 'string' && Number.isFinite(Date.parse(record.started_at)) ? now - Date.parse(record.started_at) / 1000 : undefined
+    const usage = record.usage && typeof record.usage === 'object' ? record.usage : undefined
+    const count = (name: string) => Number.isSafeInteger(usage?.[name]) && usage[name] >= 0 ? String(usage[name]) : 'unknown'
+    const tokens = usage ? `${count('input_tokens')} / ${count('output_tokens')} / ${count('cache_read_input_tokens')} / ${count('cache_creation_input_tokens')} (${safeClaudeText(usage.completeness)})` : 'unknown'
+    return `| ${safeClaudeText(record.agent_type)} | ${safeClaudeText(record.model)} | ${state} | ${elapsed === undefined ? 'unknown' : duration(elapsed)} | ${tokens} | ${safeClaudeText(record.final_excerpt)} | ${record.transcript_path ? codePath(record.transcript_path) : 'unknown'} |`
+  })
   return {
     summary,
-    detail: ['| ⚓ Task | Model | State | ETA | Review | Apply |',
-      '| --- | --- | --- | --- | --- | --- |', ...rows.map(row => row.line)].join('\n'),
+    detail: [
+      ...(rows.length ? ['| ⚓ Task | Model | State | ETA | Review | Apply |', '| --- | --- | --- | --- | --- | --- |', ...rows.map(row => row.line)] : []),
+      ...(claude.length ? [...(rows.length ? [''] : []), '### Claude subagents', '| Agent type | Model | State | Duration | Tokens (in/out/cache read/cache create) | Excerpt | Transcript path |', '| --- | --- | --- | --- | --- | --- | --- |', ...claudeRows,
+        ...(allClaude.length > claude.length ? [`Omitted Claude subagents: ${allClaude.length - claude.length}`] : [])] : []),
+    ].join('\n'),
   }
 }
 
@@ -217,13 +241,14 @@ async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
     key = await projectKeyFromRoot(rootResult.stdout.trim(), os)
     projectKeys.set(cwd, key)
   }
+  const claude = await readClaudeWork($, runtime, key)
   let entries
   try { entries = await $.fs.list(`${runtime}/async_jobs`) }
   catch (error) {
     const failure = error as { code?: unknown; message?: unknown }
     if (failure?.code === 'ENOENT' ||
         (typeof failure?.message === 'string' && /\b(?:ENOENT|no such file or directory)\b/i.test(failure.message))) {
-      return undefined
+      return renderJobBoard({ indexes: [], jobs: [], claude }, Date.now() / 1000, os === 'Windows_NT')
     }
     throw error
   }
@@ -249,13 +274,46 @@ async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
     try { bundles[index.call_key] = JSON.parse(await $.fs.read(`${runtime}/bundle_artifacts/${index.call_key}.json`)) }
     catch { /* Review and apply fall back to the job record. */ }
   }
-  return renderJobBoard({ indexes, jobs, leases, bundles }, Date.now() / 1000, os === 'Windows_NT')
+  return renderJobBoard({ indexes, jobs, leases, bundles, claude }, Date.now() / 1000, os === 'Windows_NT')
+}
+
+async function readClaudeWork($, runtime: string, key: string): Promise<Job[]> {
+  try {
+    const entries = await $.fs.list(`${runtime}/claude_work`)
+    const candidates = entries.filter(entry => entry.kind === 'file' && !entry.isLink && typeof entry.size === 'number' && entry.size <= 8192 &&
+      entry.name.startsWith(`${key}-`) && /^[0-9a-f]{16}-[0-9a-f]{64}\.json$/.test(entry.name)).slice(0, 2048)
+    // Session rows wait for verified parent linkage; M4 did not establish this capability.
+    const found = await Promise.all(candidates.map(async entry => {
+      const raw = await $.fs.read(`${runtime}/claude_work/${entry.name}`)
+      try {
+        if (new TextEncoder().encode(raw).length > 8192) return undefined
+        const record = JSON.parse(raw)
+        if (record.schema_version !== 1 || record.provider !== 'claude' || record.project_key !== key || record.kind !== 'subagent' ||
+            !/^[0-9a-f]{64}$/.test(record.id) || entry.name !== `${key}-${record.id}.json` ||
+            !['running', 'response_finished', 'session_ended', 'unknown'].includes(record.state) ||
+            !['complete', 'partial', 'degraded'].includes(record.metadata_status) ||
+            (record.session_id != null && (typeof record.session_id !== 'string' || record.session_id.length > 512)) ||
+            (record.agent_id != null && (typeof record.agent_id !== 'string' || record.agent_id.length > 512)) ||
+            (record.agent_type != null && (typeof record.agent_type !== 'string' || record.agent_type.length > 512)) ||
+            typeof record.observed_at !== 'string' || !Number.isFinite(Date.parse(record.observed_at)) ||
+            (record.model != null && (typeof record.model !== 'string' || record.model.length > 512)) ||
+            (record.final_excerpt != null && (typeof record.final_excerpt !== 'string' || new TextEncoder().encode(record.final_excerpt).length > 240)) ||
+            (record.transcript_path != null && (typeof record.transcript_path !== 'string' || new TextEncoder().encode(record.transcript_path).length > 4096)) ||
+            (record.duration_ms != null && (!Number.isSafeInteger(record.duration_ms) || record.duration_ms < 0)) ||
+            (record.usage != null && (typeof record.usage !== 'object' || Array.isArray(record.usage) || ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'].some(name =>
+              record.usage[name] != null && (!Number.isSafeInteger(record.usage[name]) || record.usage[name] < 0))))) return undefined
+        return record
+      } catch { /* Malformed observer records are skipped. */ }
+      return undefined
+    }))
+    return found.filter((record): record is Job => record !== undefined)
+  } catch { return [] /* Observer read failures must not prevent Codex refreshes. */ }
 }
 
 let timerStarted = false
 const reported = new Set<string>()
 const detailsPaneId = 'purser-job-board'
-let latestBoard: JobBoard | undefined
+let latestBoard: { cwd: string; board: JobBoard | undefined } | undefined
 let consecutiveFailures = 0
 
 async function reportOnce($, diagnostic: string) {
@@ -288,12 +346,12 @@ export function registerBoard(on) {
       let board: JobBoard | undefined
       try {
         board = await readBoard($, target)
-        latestBoard = board
+        latestBoard = { cwd: target, board }
       } catch (error) {
         // A failed refresh keeps the last board on screen instead of hiding it.
         refreshFailed = true
         diagnostic = `board read: ${String(error)}`
-        board = latestBoard
+        board = latestBoard?.cwd === target ? latestBoard.board : undefined
       }
       if (!board) {
         if (refreshFailed) await failedRefresh($, diagnostic)
@@ -335,9 +393,12 @@ export function registerBoard(on) {
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== detailsPaneId) return next(e)
     const prior = await next(e)
-    if (!latestBoard) return prior
+    const cwd = await $.session.cwd()
+    try { latestBoard = { cwd, board: await readBoard($, cwd) } }
+    catch { if (latestBoard?.cwd !== cwd) latestBoard = undefined }
+    if (!latestBoard?.board) return prior
     const { Box, Markdown } = $.ui.resolve(e)
-    const detail = Markdown({ text: latestBoard.detail })
+    const detail = Markdown({ text: latestBoard.board.detail })
     return Box({ flexDirection: 'column', children: prior ? [prior, detail] : [detail] })
   })
 }

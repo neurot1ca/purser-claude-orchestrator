@@ -133,8 +133,8 @@ test('draws fixture job records in AbovePrompt and keeps the prior mod drawing',
     props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100, scroll: { offset: 0, bodyRows: 12 }, view: {} },
   })
   expect(logs).toEqual([])
-  expect(listed).toHaveLength(1)
-  expect(listed[0].replace(/\\/g, '/').toLowerCase().endsWith('/custom/claude/purser/async_jobs')).toBe(true)
+  expect(listed).toHaveLength(2)
+  expect(listed.some(path => path.replace(/\\/g, '/').toLowerCase().endsWith('/custom/claude/purser/async_jobs'))).toBe(true)
   const summary = await ui.find({ type: 'Text', text: '⚓' })
   expect(summary?.props.color).toBe('cyan')
   expect(summary?.props.wrap).toBe('truncate-end')
@@ -160,11 +160,167 @@ test('returns no board when this project has no jobs', () => {
   expect(renderJobBoard({ indexes: [], jobs: [] })).toBeUndefined()
 })
 
+const claudeRecord = {
+  schema_version: 1, id: 'd'.repeat(64), project_key: '0123456789abcdef', provider: 'claude', kind: 'subagent',
+  agent_type: 'Explore', model: 'claude-sonnet', state: 'response_finished', duration_ms: 125000,
+  usage: { input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 5, cache_creation_input_tokens: 2, completeness: 'complete' },
+  final_excerpt: 'Done', transcript_path: 'C:\\Users\\雪\\agent.jsonl', observed_at: '2026-11-14T10:00:00Z', metadata_status: 'complete',
+}
+
+test('renders Claude-only and mixed provider details without changing Codex rows', () => {
+  expect(renderJobBoard({ indexes: [], jobs: [], claude: [claudeRecord] }, 1000)).toBeUndefined()
+  expect(renderJobBoard({ indexes: [], jobs: [], claude: [{ ...claudeRecord, state: 'unknown' }] }, 1000)).toBeUndefined()
+  const only = renderJobBoard({ indexes: [], jobs: [], claude: [{ ...claudeRecord, state: 'running' }] }, 1000)
+  expect(only?.summary.map(part => part.text).join('')).toContain('Claude subagents running 1')
+  expect(only?.detail).toContain('| Explore | claude-sonnet | running | 2m 5s | 12 / 34 / 5 / 2 (complete) | Done |')
+  expect(only?.detail).toContain('C:\\Users\\雪\\agent.jsonl')
+  const mixed = renderJobBoard({ ...files, claude: [claudeRecord] }, 1000)
+  expect(mixed?.detail).toContain('| api fix | gpt-6-sol (high) | coding · codex-main active 3s ago |')
+  expect(mixed?.detail).toContain('| Explore | claude-sonnet | response_finished |')
+  expect(mixed?.summary.map(part => part.text).join('')).not.toContain('Claude subagents')
+  expect(mixed?.detail.indexOf('| api fix')).toBeLessThan(mixed?.detail.indexOf('### Claude subagents'))
+})
+
+test('sorts running Claude rows first and newest history before limiting to 100 rows', () => {
+  const history = Array.from({ length: 101 }, (_, index) => ({ ...claudeRecord,
+    id: String(index).padStart(64, '0'), final_excerpt: `history ${index}`,
+    observed_at: new Date(Date.parse(claudeRecord.observed_at) + index * 1000).toISOString() }))
+  const board = renderJobBoard({ indexes: [], jobs: [], claude: [...history,
+    { ...claudeRecord, state: 'running', final_excerpt: 'older running' },
+    { ...claudeRecord, state: 'running', observed_at: '2026-11-15T00:00:00Z', final_excerpt: 'newer running' },
+  ] })
+  expect(board?.detail.split('\n').filter(line => line.startsWith('| Explore |'))).toHaveLength(100)
+  const excerpts = board?.detail.split('\n').filter(line => line.startsWith('| Explore |')).map(line => line.split(' | ')[5])
+  expect(excerpts).toEqual(['newer running', 'older running', ...history.slice(3).reverse().map(record => record.final_excerpt)])
+  expect(board?.detail).toContain('Omitted Claude subagents: 3')
+  expect(board?.summary.map(part => part.text).join('')).toContain('Claude subagents running 2')
+})
+
+test('hides Claude sessions and escapes excerpt, path, and unknown metadata', () => {
+  const board = renderJobBoard({ ...files, claude: [
+    { ...claudeRecord, kind: 'session' },
+    { ...claudeRecord, id: 'e'.repeat(64), state: 'unknown', duration_ms: null,
+      model: '<model>|', usage: { input_tokens: null, output_tokens: 0, completeness: 'partial' },
+      final_excerpt: '<script>|*hi*', transcript_path: '/Users/雪/`agent`|.jsonl' },
+    { ...claudeRecord, id: 'f'.repeat(64), transcript_path: `\\\\server\\share\\${'x'.repeat(260)}.jsonl` },
+  ] }, 1000)
+  expect(board?.detail).not.toContain('session')
+  expect(board?.detail).toContain('unknown | unknown | unknown / 0 / unknown / unknown (partial)')
+  expect(board?.detail).toContain('&lt;script&gt;\\|\\*hi\\*')
+  expect(board?.detail).toContain('/Users/雪/')
+  expect(board?.detail).toContain('agent')
+  expect(board?.detail).toContain(`\\\\server\\share\\${'x'.repeat(260)}`)
+})
+
+test('reads only bounded current-project Claude subagents and refreshes both UI surfaces on pane open', async ($, on) => {
+  mock.clock(on)
+  let repoRoot = '/repo'
+  mock.env(on, { OS: 'Linux', HOME: '/home/test', OSTYPE: 'linux-gnu', HOSTTYPE: 'x86_64' })
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(repoRoot))
+  const key = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
+  const good = { ...claudeRecord, state: 'running', project_key: key, transcript_path: '/Users/雪/agent.jsonl' }
+  const filesByName = [
+    [`${key}-${good.id}.json`, JSON.stringify(good)],
+    [`${key}-${'e'.repeat(64)}.json`, JSON.stringify({ ...good, id: 'e'.repeat(64), kind: 'session' })],
+    [`${key}-${'f'.repeat(64)}.json`, JSON.stringify({ ...good, id: 'f'.repeat(64), project_key: 'ffffffffffffffff' })],
+    [`${key}-${'a'.repeat(64)}.json`, '{bad json'],
+    [`${key}-${'b'.repeat(64)}.json`, 'x'.repeat(8193)],
+  ]
+  const content = Object.fromEntries(filesByName.map(([name, raw]) => [`claude_work/${name}`, raw]))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: `${repoRoot}\n`, stderr: '' } }))
+  on('session.cwd', () => ({ value: repoRoot }))
+  on('fs.list', (_$, e) => e.path.replace(/\\/g, '/').endsWith('/claude_work')
+    ? { value: filesByName.map(([name, raw]) => ({ name, kind: 'file', size: raw.length, mtimeMs: 0, isLink: false })) }
+    : { deny: 'ENOENT: no such file or directory' })
+  on('fs.read', (_$, e) => {
+    const name = e.path.split(/[\\/]/).pop()!
+    const raw = content[`claude_work/${name}`]
+    return raw === undefined ? { deny: 'unexpected fixture path' } : { value: raw }
+  })
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: 'Other mod status' })
+  })
+  on('ui.render', { component: 'Pane' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: 'Other mod pane status' })
+  })
+  for (const surface of ['terminal', 'desktop']) {
+    const ui = await $.ui.mount({ plugin: 'purser', surface, component: 'AbovePrompt',
+      props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} } })
+    expect((await ui.find({ type: 'Text', text: /Claude subagents running 1/ }))?.text).toContain('Claude subagents running 1')
+    const pane = await $.ui.mount({ plugin: 'purser', surface, component: 'Pane', requestId: 'purser-job-board',
+      props: { title: 'Jobs', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 12 }, view: {} } })
+    const detail = (await pane.find({ type: 'Markdown' }))?.text
+    expect(detail).toContain('Claude subagents')
+    expect(detail).toContain('running')
+    expect(detail).toContain('/Users/雪/agent.jsonl')
+    expect(detail).not.toContain('session')
+    expect(detail).not.toContain('ffffffffffffffff')
+    await pane.unmount()
+    await ui.unmount()
+  }
+  repoRoot = '/other-project'
+  const other = await $.ui.mount({ plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} } })
+  expect(await other.find({ type: 'Text', text: /Claude subagents/ })).toBeUndefined()
+  const otherPane = await $.ui.mount({ plugin: 'purser', surface: 'terminal', component: 'Pane', requestId: 'purser-job-board',
+    props: { title: 'Jobs', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 12 }, view: {} } })
+  expect(await otherPane.find({ type: 'Markdown' })).toBeUndefined()
+  await otherPane.unmount()
+  await other.unmount()
+})
+
 test('ignores malformed or mismatched job records', () => {
   expect(renderJobBoard({
     indexes: [{ jobId: runningId, call: 'expected' }],
     jobs: [{ jobId: runningId, call: 'other', state: 'RUNNING', label: 'wrong project job' }],
   })).toBeUndefined()
+})
+
+test('Claude listing and read failures leave Codex rows refreshing', async ($, on) => {
+  mock.clock(on)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: 'Other mod status' })
+  })
+  mock.env(on, { OS: 'Linux', HOME: '/home/test' })
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('/repo'))
+  const key = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
+  let failure = 'EACCES'
+  let label = ''
+  on('session.cwd', () => ({ value: '/repo' }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '/repo\n', stderr: '' } }))
+  on('fs.list', (_$, e) => {
+    if (e.path.replace(/\\/g, '/').endsWith('/claude_work')) return failure === 'read'
+      ? { value: [{ name: `${key}-${claudeRecord.id}.json`, kind: 'file', size: 100, isLink: false }] }
+      : { deny: failure }
+    return { value: [{ name: `${runningId}.json`, kind: 'file' }] }
+  })
+  on('fs.read', (_$, e) => {
+    const path = e.path.replace(/\\/g, '/')
+    if (path.includes('/claude_work/')) return { deny: 'EBUSY' }
+    if (path.includes('/async_jobs/')) return { value: JSON.stringify({ ...files.indexes[0], project_key: key }) }
+    if (path.includes('/codex_exec_mcp/jobs/')) return { value: JSON.stringify({ ...files.jobs[0], label }) }
+    return { deny: 'ENOENT' }
+  })
+  const logs: string[] = []
+  on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
+  for (const mode of ['EACCES', 'EBUSY', 'read']) {
+    failure = mode
+    label = `Codex refresh ${mode}`
+    const ui = await $.ui.mount({ plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
+      props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} } })
+    expect(await ui.find({ type: 'Button', key: 'purser-board-details' })).toBeDefined()
+    const pane = await $.ui.mount({ plugin: 'purser', surface: 'terminal', component: 'Pane', requestId: 'purser-job-board',
+      props: { title: 'Jobs', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 12 }, view: {} } })
+    expect((await pane.find({ type: 'Markdown' }))?.text).toContain(label)
+    await pane.unmount()
+    await ui.unmount()
+  }
+  expect(logs).toEqual([])
 })
 
 test('leaves another mod drawing intact when Purser has no board', async ($, on) => {
