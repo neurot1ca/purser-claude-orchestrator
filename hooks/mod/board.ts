@@ -391,14 +391,26 @@ export function registerBoard(on) {
     }
   })
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
-    if (e.requestId !== detailsPaneId) return next(e)
-    const prior = await next(e)
-    const cwd = await $.session.cwd()
-    try { latestBoard = { cwd, board: await readBoard($, cwd) } }
-    catch { if (latestBoard?.cwd !== cwd) latestBoard = undefined }
-    if (!latestBoard?.board) return prior
-    const { Box, Markdown } = $.ui.resolve(e)
-    const detail = Markdown({ text: latestBoard.board.detail })
-    return Box({ flexDirection: 'column', children: prior ? [prior, detail] : [detail] })
+    let prior
+    try {
+      if (e.requestId !== detailsPaneId) return await next(e)
+      prior = await next(e)
+      let cwd: string | undefined
+      try { cwd = await $.session.cwd() } catch { /* Use the last available board when pane context has no cwd. */ }
+      let board = cwd === undefined ? latestBoard?.board : latestBoard?.cwd === cwd ? latestBoard.board : undefined
+      if (cwd !== undefined) {
+        try {
+          const refreshed = await readBoard($, cwd)
+          if (refreshed) {
+            latestBoard = { cwd, board: refreshed }
+            board = refreshed
+          }
+        } catch { /* A failed refresh keeps this project's cached board visible. */ }
+      }
+      if (!board) return prior
+      const { Box, Markdown } = $.ui.resolve(e)
+      const detail = Markdown({ text: board.detail })
+      return Box({ flexDirection: 'column', children: prior ? [prior, detail] : [detail] })
+    } catch { return prior }
   })
 }

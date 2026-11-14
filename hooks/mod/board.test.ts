@@ -77,13 +77,15 @@ test('omits activity text when the job has no activity or checkpoint timestamp',
   expect(board?.detail).not.toContain('active')
 })
 
-test('draws fixture job records in AbovePrompt and keeps the prior mod drawing', async ($, on) => {
+test('draws cached Codex and real-shaped Claude rows in the pane and keeps the prior mod drawing', async ($, on) => {
   mock.clock(on)
   const repoRoot = '/repo'
   mock.env(on, { OS: 'Linux', HOME: '/home/test', CLAUDE_CONFIG_DIR: '/custom/claude', OSTYPE: 'linux-gnu', HOSTTYPE: 'x86_64' })
   const logs: string[] = []
   const opened: string[] = []
   const listed: string[] = []
+  let paneCwdUnavailable = false
+  let paneReadFails = false
   const now = Date.now() / 1000
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(repoRoot))
   const projectKey = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
@@ -92,6 +94,9 @@ test('draws fixture job records in AbovePrompt and keeps the prior mod drawing',
     files.jobs[1],
     { ...files.jobs[2], finishedAt: now, appliedAt: now },
   ]
+  const claudeId = 'e'.repeat(64)
+  const realClaudeRecord = { schema_version: 1, id: claudeId, project_key: projectKey, provider: 'claude', kind: 'subagent',
+    state: 'running', started_at: new Date(now * 1000 - 60_000).toISOString(), observed_at: new Date(now * 1000).toISOString(), metadata_status: 'complete' }
   const indexes = files.indexes.map(index => ({ ...index, project_key: projectKey }))
   const values: Record<string, string> = {
     ...Object.fromEntries(indexes.map(index => [
@@ -102,12 +107,17 @@ test('draws fixture job records in AbovePrompt and keeps the prior mod drawing',
     ])),
     [`projects/${projectKey}/scope_leases.json`]: JSON.stringify(files.leases),
     ['bundle_artifacts/run-bundle.json']: JSON.stringify(files.bundles['run-bundle']),
+    [`claude_work/${projectKey}-${claudeId}.json`]: JSON.stringify(realClaudeRecord),
   }
   on('process.run', () => ({ value: { exitCode: 0, stdout: `${repoRoot}\n`, stderr: '' } }))
-  on('session.cwd', () => ({ value: repoRoot }))
+  on('session.cwd', () => paneCwdUnavailable ? { deny: 'cwd unavailable in pane' } : { value: repoRoot })
   on('session.id', () => ({ value: 'board-fixture' }))
   on('fs.list', (_$, e) => {
     listed.push(e.path)
+    if (paneReadFails) return { deny: 'fixture pane refresh failure' }
+    if (e.path.replace(/\\/g, '/').endsWith('/claude_work')) return ({
+      value: [{ name: `${projectKey}-${claudeId}.json`, kind: 'file', size: JSON.stringify(realClaudeRecord).length, mtimeMs: now, isLink: false }],
+    })
     return ({
     value: indexes.map(index => ({ name: `${index.jobId}.json`, kind: 'file', size: 1, mtimeMs: now, isLink: false })),
     })
@@ -143,6 +153,7 @@ test('draws fixture job records in AbovePrompt and keeps the prior mod drawing',
   expect((await ui.find({ type: 'Text', text: 'Other mod status' }))?.text).toBe('Other mod status')
   await ui.press({ key: 'purser-board-details' })
   expect(opened).toEqual(['purser-job-board'])
+  paneCwdUnavailable = true
   const pane = await $.ui.mount({
     plugin: 'purser', surface: 'terminal', component: 'Pane', requestId: 'purser-job-board',
     props: { title: 'Jobs', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 12 }, view: {} },
@@ -151,8 +162,20 @@ test('draws fixture job records in AbovePrompt and keeps the prior mod drawing',
   expect(detail?.text).toContain('| api fix | gpt-6-sol (high) |')
   expect(detail?.text).toContain('| test update | gpt-6-sol (medium) |')
   expect(detail?.text).toContain('| docs | gpt-6-sol (low) |')
+  expect(detail?.text).toContain('### Claude subagents')
+  expect(detail?.text).toContain('| unknown | unknown | running |')
   expect((await pane.find({ type: 'Text', text: 'Other mod pane status' }))?.text).toBe('Other mod pane status')
   await pane.unmount()
+  paneCwdUnavailable = false
+  paneReadFails = true
+  const failedRefreshPane = await $.ui.mount({
+    plugin: 'purser', surface: 'terminal', component: 'Pane', requestId: 'purser-job-board',
+    props: { title: 'Jobs', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 12 }, view: {} },
+  })
+  expect((await failedRefreshPane.find({ type: 'Markdown' }))?.text).toContain('| api fix | gpt-6-sol (high) |')
+  expect((await failedRefreshPane.find({ type: 'Markdown' }))?.text).toContain('| docs | gpt-6-sol (low) |')
+  expect((await failedRefreshPane.find({ type: 'Markdown' }))?.text).toContain('| unknown | unknown | running |')
+  await failedRefreshPane.unmount()
   await ui.unmount()
 })
 
