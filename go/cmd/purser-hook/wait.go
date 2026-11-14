@@ -1,11 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 
 	"purser-hook/internal/jobs"
+	"purser-hook/internal/waiter"
 )
 
 func waitMain(args []string) int {
@@ -15,16 +17,43 @@ func waitMain(args []string) int {
 		return 2
 	}
 	if owner != "" {
-		_ = os.Setenv("PURSER_SESSION_OWNER", owner)
+		parsed, err := waiter.ParseOwner(owner)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "purser-wait %s SESSION_OWNER_INVALID: %v; retry: purser-hook wait %s\n", id, err, id)
+			return 2
+		}
+		actual, err := waiter.PinOwner(parsed.PID)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				fmt.Fprintf(os.Stderr, "purser-wait %s SESSION_OWNER_DEAD: %v; retry: purser-hook wait %s\n", id, err, id)
+				return 2
+			}
+			fmt.Fprintf(os.Stderr, "purser-wait %s SESSION_OWNER_UNAVAILABLE: %v; retry: purser-hook wait %s --session-owner %s\n", id, err, id, owner)
+			return 2
+		}
+		if actual != parsed {
+			fmt.Fprintf(os.Stderr, "purser-wait %s SESSION_OWNER_STALE: process %d has a different start time; retry: purser-hook wait %s\n", id, parsed.PID, id)
+			return 2
+		}
+		if err := os.Setenv("PURSER_SESSION_OWNER", owner); err != nil {
+			fmt.Fprintf(os.Stderr, "purser-wait %s SESSION_OWNER_ERROR: %v; retry: purser-hook wait %s --session-owner %s\n", id, err, id, owner)
+			return 2
+		}
 	}
 	ctx, cancel, err := sessionContext(os.Stderr)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "purser-wait %s SESSION_OWNER_ERROR: %v; retry: purser-hook wait %s\n", id, err, id)
 		return 2
 	}
 	defer cancel()
 	result := jobs.WaitContext(ctx, stateRoot(), id, maxSeconds)
+	if result.ExitCode != 0 && len(result.Lines) == 0 {
+		fmt.Fprintf(os.Stderr, "purser-wait %s ERROR: wait ended without a result; retry: purser-hook wait %s\n", id, id)
+		return result.ExitCode
+	}
 	for _, line := range result.Lines {
 		if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
+			fmt.Fprintf(os.Stderr, "purser-wait %s ERROR: could not write wait result: %v\n", id, err)
 			return 1
 		}
 	}

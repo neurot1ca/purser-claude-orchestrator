@@ -4,6 +4,7 @@ package waiter
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"purser-hook/internal/proc"
 	"strconv"
@@ -12,6 +13,9 @@ import (
 
 func PinOwner(pid int) (Owner, error) {
 	state, created := proc.ProcessIdentity(pid)
+	if state == proc.ProcessDead {
+		return Owner{}, fmt.Errorf("session owner %d identity %s: %w", pid, state, os.ErrNotExist)
+	}
 	if state != proc.ProcessAlive || created == nil {
 		return Owner{}, fmt.Errorf("session owner %d identity %s", pid, state)
 	}

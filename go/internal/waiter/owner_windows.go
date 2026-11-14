@@ -4,6 +4,7 @@ package waiter
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -46,6 +47,9 @@ func PinOwner(pid int) (Owner, error) {
 	}
 	h, err := syscall.OpenProcess(0x100000|0x1000, false, uint32(pid))
 	if err != nil {
+		if err == syscall.Errno(87) { // ERROR_INVALID_PARAMETER: PID does not exist.
+			return Owner{}, fmt.Errorf("session owner %d does not exist: %w", pid, os.ErrNotExist)
+		}
 		return Owner{}, err
 	}
 	defer syscall.CloseHandle(h)
