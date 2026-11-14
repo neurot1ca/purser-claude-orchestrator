@@ -9,9 +9,10 @@ import (
 
 var (
 	contractBullet         = regexp.MustCompile(`^([-*+]|\d+[.)])\s+`)
+	contractParenNumbered  = regexp.MustCompile(`(?:^|\s)\(\d+\)\s+`)
 	contractStop           = regexp.MustCompile(`^(task objective|objective|goal|acceptance criteria|acceptance|requirements|required changes?|done when|definition of done|tests?|validation|verified context|report):`)
-	contractCriteria       = regexp.MustCompile(`^(acceptance criteria|acceptance|requirements|required changes?|done when|definition of done):`)
-	contractInlineCriteria = regexp.MustCompile(`(?i)\b(acceptance\s+criteria:)|(?:^|[.;]\s+)(criteria:)`)
+	contractCriteria       = regexp.MustCompile(`^(criteria|acceptance criteria|acceptance|requirements|required changes?|done when|definition of done):`)
+	contractInlineCriteria = regexp.MustCompile(`(?i:\b(acceptance\s+criteria:))|(?:^|[.;]\s+)(?i:(criteria:))|\s(Criteria:)`)
 	contractHead           = regexp.MustCompile(`^(#{1,3})[ \t]+(.+?)\s*$`)
 	contractCount          = regexp.MustCompile(`\b(count|counting|number of|how many)\b`)
 	contractRunbook        = regexp.MustCompile(`\b(established|documented) runbook\b`)
@@ -28,7 +29,7 @@ type contractSection struct {
 func parseTaskContract(prompt, taskID, phase string, scope []string) (string, string, bool) {
 	defaultObjective := fmt.Sprintf("Task %s (%s phase) bounded to declared scope.", taskID, phase)
 	defaultCriteria := fmt.Sprintf("Verify correct implementation within declared scope (%s) with no material regression or scope expansion.", strings.Join(scope, ", "))
-	lines := strings.Split(prompt, "\n")
+	lines := strings.Split(strings.ReplaceAll(prompt, "\r\n", "\n"), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if len(line) < len("TASK_CONTRACT:") || !strings.EqualFold(line[:len("TASK_CONTRACT:")], "TASK_CONTRACT:") {
@@ -67,6 +68,20 @@ func parseTaskContract(prompt, taskID, phase string, scope []string) (string, st
 
 	var objective string
 	criteriaLines := []string{}
+	appendCriteria := func(value string) {
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix(value, "(1)") {
+			for _, part := range contractParenNumbered.Split(value, -1) {
+				if part = strings.TrimSpace(part); part != "" {
+					criteriaLines = append(criteriaLines, part)
+				}
+			}
+			return
+		}
+		if value != "" {
+			criteriaLines = append(criteriaLines, value)
+		}
+	}
 	collecting := false
 	for i, raw := range lines {
 		line := strings.TrimSpace(raw)
@@ -92,10 +107,11 @@ func parseTaskContract(prompt, taskID, phase string, scope []string) (string, st
 				if labelStart < 0 {
 					labelStart, labelEnd = match[4], match[5]
 				}
-				part := strings.Trim(value[labelEnd:], ". ")
-				if part != "" {
-					criteriaLines = append(criteriaLines, part)
+				if labelStart < 0 {
+					labelStart, labelEnd = match[6], match[7]
 				}
+				part := strings.Trim(value[labelEnd:], ". ")
+				appendCriteria(part)
 				value = strings.TrimRight(value[:labelStart], ". ,")
 				collecting = true
 			}
@@ -106,13 +122,13 @@ func parseTaskContract(prompt, taskID, phase string, scope []string) (string, st
 			collecting = true
 			label := strings.TrimSpace(strings.SplitN(line, ":", 2)[0]) + ":"
 			if value := strings.TrimSpace(line[len(label):]); value != "" {
-				criteriaLines = append(criteriaLines, value)
+				appendCriteria(value)
 			}
 		case collecting:
 			if strings.HasPrefix(line, "ORCH|") || strings.HasPrefix(line, "TASK_CONTRACT:") || strings.HasPrefix(line, "```") || contractStop.MatchString(lower) {
 				collecting = false
 			} else if line != "" {
-				criteriaLines = append(criteriaLines, contractBullet.ReplaceAllString(line, ""))
+				appendCriteria(contractBullet.ReplaceAllString(line, ""))
 			}
 		}
 	}

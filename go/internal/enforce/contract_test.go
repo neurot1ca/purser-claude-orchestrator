@@ -73,6 +73,41 @@ func TestTaskContractRequirementsLabelAndMissingCriteria(t *testing.T) {
 			wantCrit:   "version is \"X\"",
 			wantGround: true,
 		},
+		{
+			name:       "criteria heading with bullets after objective paragraph",
+			prompt:     "Objective: preserve parser behavior\n\nCriteria:\n- keep existing results\n- parse bullet items",
+			wantObj:    "preserve parser behavior",
+			wantCrit:   "keep existing results; parse bullet items",
+			wantGround: true,
+		},
+		{
+			name:       "criteria heading with numbered lines after objective paragraph",
+			prompt:     "Objective: preserve parser behavior\n\nCriteria:\n1. keep existing results\n2. parse numbered items",
+			wantObj:    "preserve parser behavior",
+			wantCrit:   "keep existing results; parse numbered items",
+			wantGround: true,
+		},
+		{
+			name:       "inline criteria with parenthesized numbered items",
+			prompt:     "Objective: preserve parser behavior Criteria: (1) keep existing results (2) parse numbered items",
+			wantObj:    "preserve parser behavior",
+			wantCrit:   "keep existing results; parse numbered items",
+			wantGround: true,
+		},
+		{
+			name:       "parenthesized number in criteria prose is preserved",
+			prompt:     "Objective: x Criteria: Preserve section (1) behavior",
+			wantObj:    "x",
+			wantCrit:   "Preserve section (1) behavior",
+			wantGround: true,
+		},
+		{
+			name:       "criteria bullets with CRLF line endings",
+			prompt:     "Objective: preserve parser behavior\r\n\r\nCriteria:\r\n- keep existing results\r\n- parse bullet items",
+			wantObj:    "preserve parser behavior",
+			wantCrit:   "keep existing results; parse bullet items",
+			wantGround: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
