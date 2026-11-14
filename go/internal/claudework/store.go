@@ -1,6 +1,7 @@
 package claudework
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -290,14 +291,14 @@ func acquire(path string, deadline time.Time) (*os.File, error) {
 	for {
 		if !time.Now().Before(deadline) {
 			_ = f.Close()
-			return nil, errors.New("Claude work lock deadline exceeded")
+			return nil, fmt.Errorf("Claude work lock deadline exceeded: %w", context.DeadlineExceeded)
 		}
 		if err = contextio.TryLock(f); err == nil {
 			return f, nil
 		}
 		if !time.Now().Before(deadline) {
 			_ = f.Close()
-			return nil, fmt.Errorf("Claude work lock timeout: %w", err)
+			return nil, fmt.Errorf("Claude work lock timeout: %w: %w", context.DeadlineExceeded, err)
 		}
 		time.Sleep(min(time.Millisecond, time.Until(deadline)))
 	}

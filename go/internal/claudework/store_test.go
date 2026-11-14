@@ -1,6 +1,7 @@
 package claudework
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -110,14 +111,15 @@ func TestUpdateConcurrentAndFailedPublication(t *testing.T) {
 	const writers = 12
 	var wg sync.WaitGroup
 	errs := make(chan error, writers)
+	retryDeadline := time.Now().Add(2 * time.Second)
 	for i := 0; i < writers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			var err error
-			for attempt := 0; attempt < 12; attempt++ {
+			for {
 				err = Update(root, sampleRecord())
-				if err == nil || !strings.Contains(err.Error(), "lock deadline exceeded") && !strings.Contains(err.Error(), "lock timeout") {
+				if !errors.Is(err, context.DeadlineExceeded) || !time.Now().Before(retryDeadline) {
 					break
 				}
 				time.Sleep(time.Millisecond)
@@ -164,8 +166,8 @@ func TestUpdateConcurrentAndFailedPublication(t *testing.T) {
 	}
 	defer contextio.Unlock(lock)
 	start := time.Now()
-	if err = Update(root, sampleRecord()); err == nil {
-		t.Fatal("contended update succeeded")
+	if err = Update(root, sampleRecord()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("contended update did not report a deadline: %v", err)
 	}
 	if time.Since(start) > 250*time.Millisecond {
 		t.Fatalf("lock wait exceeded bound: %s", time.Since(start))
