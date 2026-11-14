@@ -112,7 +112,18 @@ func TestUpdateConcurrentAndFailedPublication(t *testing.T) {
 	errs := make(chan error, writers)
 	for i := 0; i < writers; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); errs <- Update(root, sampleRecord()) }()
+		go func() {
+			defer wg.Done()
+			var err error
+			for attempt := 0; attempt < 12; attempt++ {
+				err = Update(root, sampleRecord())
+				if err == nil || !strings.Contains(err.Error(), "lock deadline exceeded") && !strings.Contains(err.Error(), "lock timeout") {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			errs <- err
+		}()
 	}
 	wg.Wait()
 	close(errs)

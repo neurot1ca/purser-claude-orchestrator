@@ -126,7 +126,8 @@ func validatedTranscriptPath(r Record) (string, error) {
 		return "", e
 	}
 	path, e := filepath.EvalSymlinks(abs)
-	if e != nil || !samePath(abs, path) {
+	parent, parentErr := filepath.EvalSymlinks(filepath.Dir(abs))
+	if e != nil || parentErr != nil || !samePath(filepath.Join(parent, filepath.Base(abs)), path) {
 		return "", errors.New("transcript link rejected")
 	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))

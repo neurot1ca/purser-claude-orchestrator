@@ -104,6 +104,24 @@ func TestExtractTranscriptMissingAndSymlink(t *testing.T) {
 	}
 }
 
+func TestExtractTranscriptAcceptsResolvedParentPath(t *testing.T) {
+	r := transcriptRecord(t, "session")
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(filepath.Dir(r.TranscriptPath), alias); err != nil {
+		t.Skipf("directory symlink creation unavailable: %v", err)
+	}
+	r.TranscriptPath = filepath.Join(alias, filepath.Base(r.TranscriptPath))
+	usage := map[string]any{"input_tokens": 1, "output_tokens": 2, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+	data := line(t, map[string]any{"type": "assistant", "message": map[string]any{"id": "m1", "usage": usage}}) + "\n"
+	if err := os.WriteFile(r.TranscriptPath, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ExtractTranscript(&r)
+	if r.Usage == nil || r.Usage.InputTokens == nil || *r.Usage.InputTokens != 1 {
+		t.Fatalf("resolved parent spelling was rejected: %+v", r.Usage)
+	}
+}
+
 func TestExtractSubagentRejectsDifferentSession(t *testing.T) {
 	for _, key := range []string{"sessionId", "session_id"} {
 		r := transcriptRecord(t, "subagent")
