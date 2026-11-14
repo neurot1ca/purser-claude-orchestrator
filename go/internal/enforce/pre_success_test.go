@@ -13,6 +13,7 @@ import (
 
 	"purser-hook/internal/ledger"
 	"purser-hook/internal/profile"
+	"purser-hook/internal/waiter"
 )
 
 func TestPreSuccessP64Fixture(t *testing.T) {
@@ -115,6 +116,15 @@ func TestPreSuccessP64Fixture(t *testing.T) {
 				}
 			} else if !os.IsNotExist(readErr) {
 				t.Fatal(readErr)
+			}
+			if record, ok := pending.(map[string]any); ok {
+				if owner, exists := record["session_owner"]; exists {
+					if _, err := waiter.ParseOwner(stringValue(owner)); err != nil {
+						t.Fatalf("invalid pending session_owner: %v", err)
+					}
+					// Optional host process identity is not part of the durable fixture.
+					delete(record, "session_owner")
+				}
 			}
 			var session any
 			sessionPath, _ := ledger.PathForTask(filepath.Join(runtimeRoot, "projects", project), stringValue(tc["task_id"]))

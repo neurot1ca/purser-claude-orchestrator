@@ -157,7 +157,7 @@ func SessionStart(event map[string]any) []byte {
 			additional = joinContext(additional, coderGuidance, routingGuidance)
 		}
 		additional = joinContext(additional, durationHint(root, projectKey, "codex-main"))
-		additional = joinContext(additional, followupHints(root, projectKey, session, language))
+		additional = joinContext(additional, followupHints(root, projectKey, session, source, language))
 		additional = joinContext(additional, recoverGearAdvice(root, projectKey, time.Now().UTC()))
 		if source == "compact" {
 			additional = joinContext(additional, compactAccuracyHint(root, projectKey, language))
@@ -432,7 +432,7 @@ func contains(values []string, value string) bool {
 	return false
 }
 
-func followupHints(root, key, session, language string) string {
+func followupHints(root, key, session, source, language string) string {
 	paths, _ := filepath.Glob(filepath.Join(root, "async_jobs", "*.json"))
 	if len(paths) > 256 {
 		paths = paths[:256]
@@ -489,6 +489,15 @@ func followupHints(root, key, session, language string) string {
 		}
 		state, _ := job["state"].(string)
 		sameSession := prior == session
+		if !sameSession {
+			if source != "startup" && source != "resume" {
+				continue
+			}
+			ownerStatus := sessionOwnerStatus(index["session_owner"])
+			if ownerStatus == "alive" || ownerStatus == "unknown" && !recentForeignJob(job, filepath.Join(root, "pending", callKey+".json"), time.Now().UTC()) {
+				continue
+			}
+		}
 		if contains([]string{"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}, state) {
 			if stamp, ok := numeric(job["finishedAt"]); ok && stamp > 0 {
 				finishedAt := time.Unix(0, int64(stamp*float64(time.Second))).UTC()
@@ -534,6 +543,38 @@ func followupHints(root, key, session, language string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+func sessionOwnerStatus(value any) string {
+	token, _ := value.(string)
+	owner, err := waiter.ParseOwner(token)
+	if err != nil {
+		return "unknown"
+	}
+	actual, err := waiter.PinOwner(owner.PID)
+	if errors.Is(err, os.ErrNotExist) || err == nil && actual != owner {
+		return "dead"
+	}
+	if err != nil {
+		return "unknown"
+	}
+	return "alive"
+}
+
+func recentForeignJob(job map[string]any, pendingPath string, now time.Time) bool {
+	if liveness, ok := job["liveness"].(map[string]any); ok {
+		if stamp, ok := numeric(liveness["lastActivityAt"]); ok && stamp > 0 {
+			age := now.Sub(time.Unix(0, int64(stamp*float64(time.Second))).UTC())
+			return age >= 0 && age <= staleFinishedJobMaxAge
+		}
+	}
+	info, err := os.Stat(pendingPath)
+	if err != nil {
+		return false
+	}
+	age := now.Sub(info.ModTime())
+	return age >= 0 && age <= staleFinishedJobMaxAge
+}
+
 func readSmallObject(path string) (map[string]any, bool) {
 	info, e := os.Stat(path)
 	if e != nil || info.Size() > 64<<10 {

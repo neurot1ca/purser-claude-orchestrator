@@ -397,32 +397,32 @@ func TestFollowupHintsTerminalPythonParity(t *testing.T) {
 	}
 
 	write("FAILED", true)
-	if got := followupHints(root, project, session, ""); got != "" {
+	if got := followupHints(root, project, session, "startup", ""); got != "" {
 		t.Fatalf("observed failure in same session produced hint: %q", got)
 	}
-	if got := followupHints(root, project, "session-2", ""); !strings.Contains(got, "adopt: true") {
+	if got := followupHints(root, project, "session-2", "startup", ""); !strings.Contains(got, "adopt: true") {
 		t.Fatalf("observed failure in other session hint = %q", got)
 	}
 	write("FAILED", false)
-	if got := followupHints(root, project, session, ""); !strings.Contains(got, "Call codex_result") {
+	if got := followupHints(root, project, session, "startup", ""); !strings.Contains(got, "Call codex_result") {
 		t.Fatalf("unobserved failure hint = %q", got)
 	}
 	write("SUCCEEDED", true)
-	if got := followupHints(root, project, session, ""); !strings.Contains(got, "Call codex_result") {
+	if got := followupHints(root, project, session, "startup", ""); !strings.Contains(got, "Call codex_result") {
 		t.Fatalf("observed success hint = %q", got)
 	}
 	write("UNKNOWN_OR_IN_PROGRESS", false)
-	if got := followupHints(root, project, session, ""); !strings.Contains(got, "Call codex_result") {
+	if got := followupHints(root, project, session, "startup", ""); !strings.Contains(got, "Call codex_result") {
 		t.Fatalf("same-session unknown hint = %q", got)
 	}
-	if got := followupHints(root, project, "session-2", ""); got != "" {
+	if got := followupHints(root, project, "session-2", "startup", ""); got != "" {
 		t.Fatalf("other-session unknown hint = %q", got)
 	}
 	write("RUNNING", false)
 	writeSessionMaintenanceJSON(t, jobPath, map[string]any{"jobId": id, "call": call, "state": "RUNNING",
 		"errorCode": "STALLED", "stallDetectedAt": time.Now().Unix(),
 		"liveness": map[string]any{"lastActivityAt": time.Now().Add(-125 * time.Second).Unix()}})
-	got := followupHints(root, project, session, "")
+	got := followupHints(root, project, session, "startup", "")
 	if !strings.Contains(strings.ToLower(got), "do not call codex_result") ||
 		!strings.Contains(got, "Restart ") || !strings.Contains(got, " wait "+id) ||
 		!strings.Contains(got, fmt.Sprintf("%d minutes", 2)) {

@@ -69,6 +69,9 @@ func postStart(event map[string]any, root string) (map[string]any, error) {
 	}
 	index := map[string]any{"jobId": jobID, "call": call, "call_key": callKeyValue,
 		"session_id": pending["session_id"], "project_key": pending["project_key"]}
+	if pending["session_owner"] != nil {
+		index["session_owner"] = pending["session_owner"]
+	}
 	encoded, err := canonicalJSON(index)
 	if err != nil || atomicObservationJSON(filepath.Join(root, "async_jobs", jobID+".json"), encoded) != nil {
 		return postStartFailure(event, root, pending, "async job index write failed"), nil

@@ -24,6 +24,7 @@ import (
 	"purser-hook/internal/policy"
 	"purser-hook/internal/proc"
 	"purser-hook/internal/profile"
+	"purser-hook/internal/waiter"
 )
 
 var afterPreMetadata = func() {}
@@ -733,6 +734,9 @@ func persistPreSuccess(event map[string]any, runtimeRoot string, repository *str
 		pending["async_updated_input"], pending["async_ready"] = updated, false
 		pending["job_id"] = nil
 		pending["session_id"], pending["tool_use_id"] = event["session_id"], event["tool_use_id"]
+		if sessionOwner, ownerErr := waiter.SessionOwner(); ownerErr == nil {
+			pending["session_owner"] = sessionOwner.String()
+		}
 		if _, ok := updated["label"]; ok {
 			pending["label"] = updated["label"]
 		}
