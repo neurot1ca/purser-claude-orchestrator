@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.247 — 2026-11-15
+- **Fixed:** the Jobs pane no longer stays empty in Claude Desktop; it keeps showing the last board when the pane has no working directory or a refresh fails.
+- **Fixed:** after a compact, Purser no longer reports another open session's Codex jobs as tasks started before the app closed.
+- **Fixed:** task contracts whose criteria sit on a separate heading line, as bullets or as inline (1) (2) items, are now recognized.
+- **Fixed:** `purser-hook wait` prints a one-line reason and a retry command when its session owner is gone, instead of exiting silently.
+
 ## 0.1.246 — 2026-11-14
 - **Added:** the bar details list Claude subagent work next to Codex jobs: agent type, model, state, duration, tokens, a short excerpt and the transcript path; the bar shows how many subagents are running.
 - **Added:** each finished Claude subagent or session writes one usage event (`CLAUDE_WORK_USAGE_RECORDED`) to Purser telemetry; token totals are cumulative per work unit and unknown values stay unknown.
