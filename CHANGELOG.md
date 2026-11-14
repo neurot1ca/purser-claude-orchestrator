@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.246 — 2026-11-14
+- **Added:** the bar details list Claude subagent work next to Codex jobs: agent type, model, state, duration, tokens, a short excerpt and the transcript path; the bar shows how many subagents are running.
+- **Added:** each finished Claude subagent or session writes one usage event (`CLAUDE_WORK_USAGE_RECORDED`) to Purser telemetry; token totals are cumulative per work unit and unknown values stay unknown.
+- **Fixed:** a dispatcher no longer returns an unknown job state when Claude Code moves its wait to the background after three minutes.
+
 ## 0.1.245 — 2026-11-12
 - **Fixed:** `purser-release` no longer leaves its caller waiting after “plugin update ok” when a process left by `claude plugin update` keeps the inherited output open.
 - **Fixed:** job cleanup continues past an unreadable job record; shared-worktree cleanup and size-pressure deletion wait until the record is readable.
