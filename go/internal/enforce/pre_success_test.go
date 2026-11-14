@@ -16,6 +16,10 @@ import (
 )
 
 func TestPreSuccessP64Fixture(t *testing.T) {
+	oldBudget := codeMapPreBudget
+	codeMapPreBudget = codeMapMaxSeconds
+	t.Cleanup(func() { codeMapPreBudget = oldBudget })
+
 	fixturePath := filepath.Join("..", "..", "..", ".claude", "hooks", "orchestrator", "tests", "fixtures", "go_policy", "pre_success.json")
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
