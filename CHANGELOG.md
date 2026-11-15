@@ -3,6 +3,12 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.248 — 2026-11-15
+- **Fixed:** the Claude subagents list shows each subagent's type, model and done state, and hides empty phantom rows.
+- **Fixed:** a subagent's compact no longer rewrites the main session handoff or cancels its idle auto-compact.
+- **Fixed:** one repository reached through different path spellings, short names, symlinks or junctions keeps one project key.
+- **Fixed:** Claude subagent effort sent as an object is read instead of dropped.
+
 ## 0.1.247 — 2026-11-15
 - **Fixed:** the Jobs pane no longer stays empty in Claude Desktop; it keeps showing the last board when the pane has no working directory or a refresh fails.
 - **Fixed:** after a compact, Purser no longer reports another open session's Codex jobs as tasks started before the app closed.
