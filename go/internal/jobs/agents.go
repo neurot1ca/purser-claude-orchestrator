@@ -154,8 +154,13 @@ const openCodeReadOnlyAgent = "purser-read-only"
 // AgentCommandEnvironment adds launch-time policy that cannot be expressed in
 // argv. OpenCode reads OPENCODE_CONFIG_CONTENT before resolving the agent.
 func AgentCommandEnvironment(in AgentCommandInput) []string {
-	if in.Agent != "opencode" || in.Sandbox == nil || *in.Sandbox != "read-only" {
+	if in.Agent != "opencode" {
 		return nil
+	}
+	if in.Sandbox == nil || *in.Sandbox != "read-only" {
+		permissions := map[string]string{"edit": "allow", "write": "allow", "bash": "allow", "external_directory": "deny", "webfetch": "deny", "task": "deny"}
+		config, _ := json.Marshal(map[string]any{"permission": permissions})
+		return []string{"OPENCODE_CONFIG_CONTENT=" + string(config)}
 	}
 	permissions := map[string]string{"edit": "deny", "write": "deny", "bash": "deny", "webfetch": "deny", "task": "deny", "external_directory": "deny", "*_*": "deny", "opencode_list_mcp_resources": "deny", "opencode_read_mcp_resource": "deny"}
 	config, _ := json.Marshal(map[string]any{

@@ -164,6 +164,45 @@ func TestOpenCodeReadOnlyEnvironmentKeepsReportStream(t *testing.T) {
 	}
 }
 
+func TestOpenCodeWriteEnvironmentAllowsWorkspaceBash(t *testing.T) {
+	for name, sandbox := range map[string]*string{
+		"workspace-write": stringPointer("workspace-write"),
+		"nil":             nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			environment := AgentCommandEnvironment(AgentCommandInput{Agent: "opencode", Sandbox: sandbox})
+			if len(environment) != 1 || !strings.HasPrefix(environment[0], "OPENCODE_CONFIG_CONTENT=") {
+				t.Fatalf("write OpenCode environment = %#v", environment)
+			}
+			var config map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(environment[0], "OPENCODE_CONFIG_CONTENT=")), &config); err != nil {
+				t.Fatal(err)
+			}
+			permissions, ok := config["permission"].(map[string]any)
+			if !ok || permissions["bash"] != "allow" || permissions["external_directory"] != "deny" {
+				t.Fatalf("write OpenCode permissions = %#v", config["permission"])
+			}
+			for key, want := range map[string]string{"edit": "allow", "write": "allow", "webfetch": "deny", "task": "deny"} {
+				if permissions[key] != want {
+					t.Errorf("permission %q = %v, want %q", key, permissions[key], want)
+				}
+			}
+			if _, exists := config["agent"]; exists {
+				t.Fatalf("write OpenCode config unexpectedly defines an agent: %#v", config)
+			}
+			if _, exists := config["mcp"]; exists {
+				t.Fatalf("write OpenCode config unexpectedly changes MCP: %#v", config)
+			}
+		})
+	}
+}
+
+func TestNonOpenCodeAgentCommandEnvironmentIsNil(t *testing.T) {
+	if got := AgentCommandEnvironment(AgentCommandInput{Agent: "codex"}); got != nil {
+		t.Fatalf("non-OpenCode environment = %#v, want nil", got)
+	}
+}
+
 func TestOpenCodeMCPDisabledWithCommentAfterTrailingComma(t *testing.T) {
 	for name, content := range map[string]string{
 		"line":  "{\"mcp\": {\"a\": {}, // note\n}}",
