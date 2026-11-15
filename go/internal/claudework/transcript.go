@@ -23,18 +23,22 @@ type transcriptUsage struct {
 	CacheCreate *uint64 `json:"cache_creation_input_tokens"`
 }
 type transcriptMessage struct {
-	ID          string `json:"id"`
-	MessageID   string `json:"message_id"`
-	Role, Model string
-	Side        bool             `json:"isSidechain"`
-	Usage       *transcriptUsage `json:"usage"`
-	Nested      *struct {
+	ID              string `json:"id"`
+	MessageID       string `json:"message_id"`
+	Role, Model     string
+	Effort          any              `json:"effort"`
+	ReasoningEffort any              `json:"reasoning_effort"`
+	Side            bool             `json:"isSidechain"`
+	Usage           *transcriptUsage `json:"usage"`
+	Nested          *struct {
 		Usage *transcriptUsage `json:"usage"`
 	} `json:"message"`
 	Content []struct{ Type, Text string }
 }
 type transcriptEvent struct {
 	Type, Timestamp, Model, ID, RequestID string
+	Effort                                any               `json:"effort"`
+	ReasoningEffort                       any               `json:"reasoning_effort"`
 	Session                               string            `json:"sessionId"`
 	SessionAlt                            string            `json:"session_id"`
 	Agent                                 string            `json:"agentId"`
@@ -194,6 +198,14 @@ func readTranscriptLine(r *Record, line string, seen map[string][4]uint64, sum *
 		}
 		if r.Model != "" {
 			r.ModelSource = "transcript"
+		}
+	}
+	if r.Effort == "" {
+		for _, value := range []interface{}{m.Effort, m.ReasoningEffort, e.Effort, e.ReasoningEffort} {
+			if effort := effortString(value); effort != "" {
+				r.Effort = effort
+				break
+			}
 		}
 	}
 	for _, b := range m.Content {

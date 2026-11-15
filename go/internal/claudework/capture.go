@@ -8,6 +8,26 @@ import (
 	"strings"
 )
 
+func effortString(value any) string {
+	switch value := value.(type) {
+	case string:
+		return value
+	case map[string]any:
+		var effort string
+		for _, key := range []string{"level", "value"} {
+			if candidate, ok := value[key].(string); ok && candidate != "" {
+				if effort != "" {
+					return ""
+				}
+				effort = candidate
+			}
+		}
+		return effort
+	default:
+		return ""
+	}
+}
+
 // MergeExisting restores previously observed metadata for a terminal update.
 func MergeExisting(stateRoot string, record Record) (Record, error) {
 	if err := validate(&record); err != nil {
@@ -44,7 +64,15 @@ func CaptureHookFields(record Record, event map[string]any) Record {
 	}
 	copyString("transcript_path", &record.TranscriptPath)
 	copyString("model", &record.Model)
-	copyString("effort", &record.Effort)
+	for _, key := range []string{"effort", "reasoning_effort"} {
+		if value, ok := event[key]; ok {
+			if effort := effortString(value); effort != "" {
+				record.Effort = effort
+				break
+			}
+			record.Effort = ""
+		}
+	}
 	if record.TranscriptPath != "" {
 		record.TranscriptPath = filepath.Clean(record.TranscriptPath)
 	}

@@ -161,3 +161,66 @@ func TestCaptureHookFieldsAllowlist(t *testing.T) {
 		t.Fatalf("hook normalization failed: %+v", r)
 	}
 }
+
+func TestCaptureHookEffortShapes(t *testing.T) {
+	tests := []struct {
+		name  string
+		event map[string]any
+		want  string
+	}{
+		{name: "string", event: map[string]any{"effort": "high"}, want: "high"},
+		{name: "level object", event: map[string]any{"effort": map[string]any{"level": "high"}}, want: "high"},
+		{name: "value object", event: map[string]any{"reasoning_effort": map[string]any{"type": "reasoning", "value": "medium"}}, want: "medium"},
+		{name: "unexpected object", event: map[string]any{"effort": map[string]any{"type": "reasoning", "name": "high"}}},
+		{name: "ambiguous object", event: map[string]any{"effort": map[string]any{"level": "high", "value": "medium"}}},
+		{name: "number", event: map[string]any{"effort": 3}},
+		{name: "null", event: map[string]any{"effort": nil}},
+		{name: "missing", event: map[string]any{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := CaptureHookFields(Record{}, tt.event)
+			if r.Effort != tt.want {
+				t.Fatalf("effort = %q, want %q", r.Effort, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractTranscriptEffortShapesKeepUsage(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		value any
+		want string
+		omit bool
+	}{
+		{name: "string", key: "effort", value: "high", want: "high"},
+		{name: "level object", key: "effort", value: map[string]any{"level": "high"}, want: "high"},
+		{name: "value object", key: "reasoning_effort", value: map[string]any{"type": "reasoning", "value": "medium"}, want: "medium"},
+		{name: "unexpected object", key: "effort", value: map[string]any{"type": "reasoning", "name": "high"}},
+		{name: "number", key: "effort", value: 3},
+		{name: "null", key: "effort", value: nil},
+		{name: "missing", omit: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := transcriptRecord(t, "session")
+			message := map[string]any{"id": "m1", "role": "assistant", "usage": map[string]any{"input_tokens": 11, "output_tokens": 3, "cache_read_input_tokens": 4, "cache_creation_input_tokens": 2}, "content": []any{map[string]any{"type": "text", "text": "still recorded"}}}
+			event := map[string]any{"type": "assistant", "message": message}
+			if !tt.omit {
+				message[tt.key] = tt.value
+			}
+			if err := os.WriteFile(r.TranscriptPath, []byte(line(t, event)+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ExtractTranscript(&r)
+			if r.Effort != tt.want {
+				t.Fatalf("effort = %q, want %q", r.Effort, tt.want)
+			}
+			if r.Usage == nil || r.Usage.Completeness != "complete" || r.Usage.InputTokens == nil || *r.Usage.InputTokens != 11 || r.FinalExcerpt == "" {
+				t.Fatalf("effort shape dropped transcript metadata or usage: %+v", r)
+			}
+		})
+	}
+}
