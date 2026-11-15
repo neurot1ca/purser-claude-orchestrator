@@ -89,7 +89,7 @@ func Path(stateRoot, projectKey string, record Record) (string, error) {
 
 // Update validates, merges and atomically publishes one observer record.
 func Update(stateRoot string, record Record) error {
-	deadline := time.Now().Add(100 * time.Millisecond)
+	lockDeadline := time.Now().Add(100 * time.Millisecond)
 	if runtime.GOOS == "windows" {
 		record.ProjectKey = strings.ToLower(record.ProjectKey)
 	}
@@ -120,11 +120,14 @@ func Update(stateRoot string, record Record) error {
 	} else if e != nil && !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
-	lock, err := acquire(lockPath, deadline)
+	lock, err := acquire(lockPath, lockDeadline)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = contextio.Unlock(lock); _ = lock.Close() }()
+	// Keep lock contention bounded, but let transient filesystem holds during
+	// cleanup, pruning, and publication use fsretry's full retry window.
+	deadline := time.Now().Add(2 * time.Second)
 	if err = os.Chmod(lockPath, 0600); err != nil {
 		return err
 	}
