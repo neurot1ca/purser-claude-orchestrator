@@ -149,7 +149,7 @@ export function usageGroups(codex: Quota, session: SessionData, now = Date.now()
   ]) {
     if (typeof agent !== 'string' || !agent.trim() || agent.trim().toLowerCase() === 'unknown' ||
         typeof model !== 'string' || !model.trim() || model.trim().toLowerCase() === 'unknown') continue
-    agents.push({ id: role, label: role, value: `${agent} · ${model}`, detail, icon: '', color: '#788797' })
+    agents.push({ id: role, label: role, value: `${agent} · ${model.startsWith(`${agent}/`) ? model.slice(agent.length + 1) : model}`, detail, icon: '', color: '#788797' })
   }
   groups.push(agents)
   if (session.cost !== undefined) {

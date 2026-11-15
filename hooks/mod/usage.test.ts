@@ -34,6 +34,7 @@ test('shows all three agent pills after Codex using only the board reads', async
   expect(groups[2].map(pill => [pill.label, pill.value])).toEqual([
     ['coder', 'codex · gpt-6.1-sol'], ['reviewer', 'agy · gemini-3.8-flash-high'], ['free', 'opencode · beam-free'],
   ])
+  expect(usageGroups({}, { quota: {} }, now, { ...agentFiles, jobs: [{ ...agentFiles.jobs[0], model: 'opencode/beam-free' }] })[0][0].value).toBe('opencode · beam-free')
   for (const pill of groups[2]) {
     expect(terminalBar(pill)).toBeUndefined()
     expect(pillSvg(pill)).not.toContain('height="4"')
