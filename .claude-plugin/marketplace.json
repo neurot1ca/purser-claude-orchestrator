@@ -3,6 +3,6 @@
   "description": "The Purser plugin marketplace.",
   "owner": {"name": "Purser"},
   "plugins": [
-    {"name":"purser","source":{"source":"archive","url":"https://github.com/neurot1ca/purser-claude-orchestrator/releases/download/v0.1.251/purser-0.1.251.zip","sha256":"9ce1afe8880f8b595d22bf6e264bb2d3104500c886ab991faf94f16289b4602e"}}
+    {"name":"purser","source":{"source":"archive","url":"https://github.com/neurot1ca/purser-claude-orchestrator/releases/download/v0.1.252/purser-0.1.252.zip","sha256":"bf43087c4499ff6b4e3cabc3aacf69205d4b9ab9e79f977ce27e50123a1160e6"}}
   ]
 }
