@@ -236,6 +236,7 @@ test('adds an escaped task label only to dispatchers and keeps the compact colum
 })
 
 test('normalizes Claude terminal states and hides rows without identifying metadata', () => {
+  const now = Date.parse(claudeRecord.observed_at) / 1000
   const board = renderJobBoard({ indexes: [], jobs: [], claude: [
     { ...claudeRecord, state: 'response_finished' },
     { ...claudeRecord, id: 'a'.repeat(64), state: 'finished' },
@@ -245,7 +246,7 @@ test('normalizes Claude terminal states and hides rows without identifying metad
     { ...claudeRecord, id: 'e'.repeat(64), agent_type: null, model: '', transcript_path: '', usage: null },
     { ...claudeRecord, id: 'f'.repeat(64), agent_type: null, model: '', transcript_path: '', usage: { input_tokens: null, output_tokens: null, cache_read_input_tokens: null, cache_creation_input_tokens: null } },
     { ...claudeRecord, id: '0'.repeat(64), agent_type: null, model: '', transcript_path: '/missing/subagents/agent-phantom.jsonl', usage: null },
-  ] })
+  ] }, now)
   expect(board?.detail).toContain('| Explore | claude-sonnet | done |')
   expect(board?.detail).toContain('| Explore | claude-sonnet | ended |')
   expect(board?.detail).toContain('| Explore | claude-sonnet | custom_state |')
@@ -256,18 +257,33 @@ test('normalizes Claude terminal states and hides rows without identifying metad
 })
 
 test('sorts running Claude rows first and newest history before limiting to 100 rows', () => {
+  const now = Date.parse(claudeRecord.observed_at) / 1000 + 120
   const history = Array.from({ length: 101 }, (_, index) => ({ ...claudeRecord,
     id: String(index).padStart(64, '0'), model: `history ${index}`,
     observed_at: new Date(Date.parse(claudeRecord.observed_at) + index * 1000).toISOString() }))
   const board = renderJobBoard({ indexes: [], jobs: [], claude: [...history,
     { ...claudeRecord, state: 'running', model: 'older running' },
     { ...claudeRecord, state: 'running', observed_at: '2026-11-15T00:00:00Z', model: 'newer running' },
-  ] })
+  ] }, now)
   expect(board?.detail.split('\n').filter(line => line.startsWith('| Explore |'))).toHaveLength(100)
   const models = board?.detail.split('\n').filter(line => line.startsWith('| Explore |')).map(line => line.split(' | ')[1])
   expect(models).toEqual(['newer running', 'older running', ...history.slice(3).reverse().map(record => record.model)])
   expect(board?.detail).toContain('Omitted Claude subagents: 3')
   expect(board?.summary.map(part => part.text).join('')).toContain('Claude subagents running 2')
+})
+
+test('keeps running and recent Claude subagents and drops stale finished rows', () => {
+  const now = Date.parse('2026-11-15T12:00:00Z') / 1000
+  const board = renderJobBoard({ indexes: [], jobs: [], claude: [
+    { ...claudeRecord, id: 'a'.repeat(64), model: 'running', state: 'running', observed_at: undefined },
+    { ...claudeRecord, id: 'b'.repeat(64), model: 'recent', observed_at: new Date((now - 600) * 1000).toISOString() },
+    { ...claudeRecord, id: 'c'.repeat(64), model: 'stale', observed_at: new Date((now - 7200) * 1000).toISOString() },
+  ] }, now)!
+  expect(board.detail).toContain('| Explore | running | running |')
+  expect(board.detail).toContain('| Explore | recent | done |')
+  expect(board.detail).not.toContain('stale')
+  expect(board.detail).not.toContain('Omitted Claude subagents:')
+  expect(board.summary.map(part => part.text).join('')).toContain('Claude subagents running 1')
 })
 
 test('hides Claude sessions, tokens and excerpts, and escapes paths and metadata', () => {

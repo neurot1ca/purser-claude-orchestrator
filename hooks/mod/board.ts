@@ -40,7 +40,12 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
     (typeof record.agent_type === 'string' && record.agent_type.length > 0 ||
       typeof record.model === 'string' && record.model.length > 0 ||
       ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'].some(name =>
-        Number.isSafeInteger(record.usage?.[name]) && record.usage[name] >= 0)))
+        Number.isSafeInteger(record.usage?.[name]) && record.usage[name] >= 0)) &&
+    (record.state === 'running' || (() => {
+      const finished = [record.finished_at, record.ended_at, record.finishedAt, record.endedAt, record.observed_at]
+        .find(value => typeof value === 'string' && Number.isFinite(Date.parse(value)))
+      return finished !== undefined && now - Date.parse(finished) / 1000 <= 3600
+    })()))
     .sort((a, b) => Number(b.state === 'running') - Number(a.state === 'running') || Date.parse(b.observed_at) - Date.parse(a.observed_at))
   const runningClaude = allClaude.filter(record => record.state === 'running').length
   const claude = allClaude.slice(0, 100)
