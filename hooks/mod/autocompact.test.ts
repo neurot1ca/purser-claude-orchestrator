@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, resetAutoCompactForTests, RESUME_PROMPT, thresholdFrom, turnIsRunning, WAKE_MARKER, wakeContext } from './autocompact.js'
+import { compactNotice, DEFAULT_THRESHOLD, needsCompactPrompt, registerAutoCompact, resetAutoCompactForTests, RESUME_PROMPT, thresholdFrom, turnIsRunning, WAKE_MARKER, wakeContext } from './autocompact.js'
 
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
 const normalized = (path: string) => path.replace(/\\/g, '/').replace(/(^|:)[A-Za-z]:(?=\/)/g, '$1')
@@ -123,6 +123,20 @@ test('does not re-arm after idle compact until a user prompt completes', async (
   await $.prompt.submit({ text: WAKE_MARKER, origin: { kind: 'user' } })
   await $.turn.complete({ ...TURN, turnId: 't-user-marker' })
   expect(log().match(/idle timer armed at 130000 tokens/g)?.length).toBe(4)
+})
+
+test('subagent compact leaves the main idle timer armed', async ($, on) => {
+  const { calls, clock, files } = engine(on, 130_000, {}, 0, '{"enabled": true}', true)
+  await $.turn.complete(TURN)
+  expect([...files.values()].join('\n')).toContain('idle timer armed at 130000 tokens')
+
+  let compactHandler
+  registerAutoCompact((event, handler) => {
+    if (event === 'session.compact') compactHandler = handler
+  })
+  await compactHandler!({}, { agentId: 'agent-child', trigger: 'manual' }, async (event) => event)
+  await clock.advance(271_000)
+  expect(calls.compacts).toBe(1)
 })
 
 test('does not arm the idle timer below 100K tokens', async ($, on) => {

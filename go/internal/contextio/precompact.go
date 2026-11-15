@@ -21,8 +21,23 @@ const stateStart = "<!-- PURSER:STATE:START -->"
 const stateEnd = "<!-- PURSER:STATE:END -->"
 
 var orchestrationTask = regexp.MustCompile(`^ORCH\|task=([^|\s]+)\|`)
+var subagentTranscript = regexp.MustCompile(`(?i)/subagents/agent-[^/]+\.jsonl$`)
+
+// Claude Code 2.1.323 added agent_id to compact hook payloads; older versions
+// may omit it, so also recognize the child transcript layout. agent_type alone
+// also appears in main sessions started with --agent.
+func subagentCompactEvent(event map[string]any) bool {
+	if stringValue(event["agent_id"]) != "" {
+		return true
+	}
+	transcript := strings.ReplaceAll(stringValue(event["transcript_path"]), "\\", "/")
+	return subagentTranscript.MatchString(transcript)
+}
 
 func PreCompact(event map[string]any) {
+	if subagentCompactEvent(event) {
+		return
+	}
 	repository := projectRoot(event)
 	if repository == "" {
 		return

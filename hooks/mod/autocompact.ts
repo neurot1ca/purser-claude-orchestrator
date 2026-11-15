@@ -202,9 +202,10 @@ export function registerAutoCompact(on) {
     return next({ ...e, context: [...(e.context ?? []), context] })
   })
   on('session.compact', async ($, e, next) => {
+    if (e.agentId) return next(e)
     dropIdleTimer($, 'compaction')
     const result = await next(e)
-    if (!e.agentId && e.trigger !== 'precompute' && result && 'tokensAfter' in result) compactedTokens = result.tokensAfter
+    if (e.trigger !== 'precompute' && result && 'tokensAfter' in result) compactedTokens = result.tokensAfter
     return result
   })
   on('turn.complete', async ($, e, next) => {

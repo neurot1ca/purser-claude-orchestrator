@@ -129,7 +129,7 @@ func TestStateRefreshPreservesEmbeddedNarrativeMarker(t *testing.T) {
 }
 
 func TestPreCompactManualTriggerRefreshesStateAndRecentTurns(t *testing.T) {
-	for _, source := range []string{"file", "session"} {
+	for _, source := range []string{"file", "session", "agent-type-only"} {
 		t.Run(source, func(t *testing.T) {
 			stateRoot := t.TempDir()
 			t.Setenv("PURSER_STATE_DIR", stateRoot)
@@ -155,6 +155,9 @@ func TestPreCompactManualTriggerRefreshesStateAndRecentTurns(t *testing.T) {
 				{"type": "assistant", "message": map[string]any{"content": "current assistant", "usage": map[string]any{"input_tokens": 123456}}},
 			})
 			event := map[string]any{"cwd": repository, "trigger": "manual", "transcript_path": transcript}
+			if source == "agent-type-only" {
+				event["agent_type"] = "worker"
+			}
 			if source == "session" {
 				event["transcript_path"] = ""
 				var records []any
@@ -187,5 +190,43 @@ func TestPreCompactManualTriggerRefreshesStateAndRecentTurns(t *testing.T) {
 				t.Fatalf("manual PreCompact left old mechanical blocks: %s", updated)
 			}
 		})
+	}
+}
+
+func TestPreCompactSubagentLeavesMainHandoffUntouched(t *testing.T) {
+	stateRoot, repository := t.TempDir(), t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", stateRoot)
+	if output, err := exec.Command("git", "init", "--quiet", repository).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	handoff := filepath.Join(stateRoot, "projects", repositoryProjectKey(repository), "telemetry", "purser-handoff.md")
+	if err := os.MkdirAll(filepath.Dir(handoff), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("# handoff\n" + stateStart + "\nmain state\n" + stateEnd + "\n" + recentStart + "\nmain recent\n" + recentEnd + "\n")
+	if err := os.WriteFile(handoff, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	setHandoffModTime(t, handoff, time.Now().Add(-time.Hour))
+	before, err := os.Stat(handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []map[string]any{
+		{"cwd": repository, "agent_id": "agent-child"},
+		{"cwd": repository, "transcript_path": `C:\Users\test\session\subagents\AGENT-CHILD.JSONL`},
+	} {
+		PreCompact(event)
+	}
+	after, err := os.Stat(handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("subagent PreCompact changed main handoff bytes or mtime: bytes=%q mtime=%v", got, after.ModTime())
 	}
 }

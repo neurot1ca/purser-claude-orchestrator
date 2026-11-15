@@ -34,6 +34,65 @@ func sessionStartContext(t *testing.T, event map[string]any) string {
 	return context
 }
 
+func TestSessionStartSubagentCompactSkipsMainHandoffAndAdvisor(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", stateRoot)
+	repo := updateSessionTestRepo(t)
+	telemetry := filepath.Join(stateRoot, "projects", repositoryProjectKey(repo), "telemetry")
+	if err := os.MkdirAll(telemetry, 0700); err != nil {
+		t.Fatal(err)
+	}
+	handoff := filepath.Join(telemetry, "purser-handoff.md")
+	advisor := filepath.Join(telemetry, "compaction_advisor.json")
+	for path, content := range map[string][]byte{
+		handoff: []byte("MAIN HANDOFF MUST NOT BE RESTORED\n"),
+		advisor: []byte(`{"session_id":"main-session","sentinel":"unchanged"}`),
+	} {
+		if err := os.WriteFile(path, content, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, identity := range []map[string]any{
+		{"agent_id": "agent-child"},
+		{"transcript_path": `C:\Users\test\session\subagents\agent-child.jsonl`},
+	} {
+		event := map[string]any{"hook_event_name": "SessionStart", "session_id": "child-session", "source": "compact", "cwd": repo}
+		for key, value := range identity {
+			event[key] = value
+		}
+		if got := SessionStart(event); got != nil {
+			t.Fatalf("subagent SessionStart compact output = %q, want nil", got)
+		}
+	}
+	for path, want := range map[string]string{handoff: "MAIN HANDOFF MUST NOT BE RESTORED\n", advisor: `{"session_id":"main-session","sentinel":"unchanged"}`} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("subagent SessionStart changed %s: %q", filepath.Base(path), got)
+		}
+	}
+}
+
+func TestSessionStartCompactAgentTypeOnlyRestoresMainHandoff(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("PURSER_STATE_DIR", stateRoot)
+	t.Setenv("USERPROFILE", t.TempDir())
+	repo := updateSessionTestRepo(t)
+	handoff := filepath.Join(stateRoot, "projects", repositoryProjectKey(repo), "telemetry", "purser-handoff.md")
+	if err := os.MkdirAll(filepath.Dir(handoff), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(handoff, []byte("# Purser handoff\n## Goal\nMAIN SESSION HANDOFF MARKER\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := SessionStart(map[string]any{"hook_event_name": "SessionStart", "session_id": "main-session", "source": "compact", "cwd": repo, "agent_type": "worker"})
+	if !strings.Contains(string(got), "MAIN SESSION HANDOFF MARKER") {
+		t.Fatalf("main SessionStart compact did not restore handoff: %q", got)
+	}
+}
+
 func TestSessionStartConfiguredCoderGuidance(t *testing.T) {
 	const want = coderGuidance
 	for _, source := range []string{"startup", "resume", "compact", "clear"} {
