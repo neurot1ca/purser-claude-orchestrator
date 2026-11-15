@@ -82,7 +82,8 @@ test('shows selected agents after Codex and keeps free sourced from board reads'
   expect((await ui.find({ type: 'Text', text: /^coder codex$/ }))?.props.color).toBe('#10A37F')
   expect(await ui.find({ type: 'Text', text: /reviewer agy · gemini-3.8-flash-high/ })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: /free opencode · beam-free/ }))?.props.color).toBe('#0D9488')
-  expect(reads).toHaveLength(7) // Existing board reads plus one user config read.
+  expect(reads.filter(path => path === 'config.toml')).toHaveLength(1)
+  expect(reads.filter(path => path !== 'config.toml').length % 6).toBe(0) // Only existing board reads on each render.
   await ui.unmount()
 })
 
@@ -418,4 +419,77 @@ test('keeps the selected Claude name when a Codex artifact model is present', ()
   expect(usageGroups({ model: 'gpt-6.1-sol', effort: 'medium' }, { quota: {} }, now, undefined, { coder: 'claude' })[0][0]).toMatchObject({
     id: 'coder', value: 'claude', color: '#D97757', detail: 'Coder selected for Purser',
   })
+})
+
+test('keeps the desktop pill band below the board across refreshes and optional read failures', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.env(on, { OS: 'Linux', HOME: '/home/pill-refresh', PURSER_STATE_DIR: '/refresh-state' })
+  const repo = '/pill-refresh'
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(repo))
+  const key = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
+  const id = 'a'.repeat(64)
+  let phase = 'healthy'
+  let release: (() => void) | undefined
+  let configReads = 0
+  on('process.run', () => ({ value: { exitCode: 0, stdout: `${repo}\n`, stderr: '' } }))
+  on('session.cwd', () => ({ value: repo }))
+  on('session.usage', () => phase === 'healthy' ? { value: usage } : { deny: 'temporary session usage failure' })
+  on('fs.list', (_$, e) => {
+    const path = e.path.replace(/\\/g, '/')
+    if (path.endsWith('/.orchestrator')) return { value: [{ name: 'config.toml', kind: 'file', size: selectedConfig.length, mtimeMs: phase === 'healthy' ? 1 : 2 }] }
+    if (path.endsWith('/async_jobs') && phase === 'locked') return { deny: 'ERROR_SHARING_VIOLATION' }
+    if (path.endsWith('/async_jobs') || path.endsWith('/bundle_artifacts')) return { value: [{ name: `${id}.json`, kind: 'file', size: 100, mtimeMs: 1 }] }
+    return { value: [] }
+  })
+  on('fs.read', async (_$, e) => {
+    const path = e.path.replace(/\\/g, '/')
+    if (path.endsWith('/.orchestrator/config.toml')) {
+      configReads++
+      if (phase === 'pending') await new Promise<void>(resolve => { release = resolve })
+      if (phase === 'locked') return { deny: 'ERROR_SHARING_VIOLATION' }
+      return { value: selectedConfig }
+    }
+    if (path.includes('/async_jobs/')) return { value: JSON.stringify({ jobId: id, call: 'coder', call_key: id, project_key: key }) }
+    if (path.includes('/codex_exec_mcp/jobs/')) return { value: JSON.stringify({ jobId: id, call: 'coder', state: 'RUNNING', label: 'refresh job', startedAt: Date.now() / 1000, acceptedAt: Date.now() / 1000 }) }
+    if (path.includes('/bundle_artifacts/')) return { value: JSON.stringify(quotaRecord(55, 65)) }
+    return { deny: 'ENOENT' }
+  })
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: '.' })
+  })
+  // Mount the actual plugin: hooks/register.ts supplies the production mod order.
+  const ui = await $.ui.mount({
+    plugin: 'purser', surface: 'desktop', component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 40, scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  })
+  for (const nextPhase of ['healthy', 'pending', 'locked', 'recovered']) {
+    phase = nextPhase
+    if (phase !== 'healthy') await clock.advance(5000)
+    const tree = await ui.find({ type: 'Box' })
+    const nodes: any[] = []
+    const visit = node => { nodes.push(node); for (const child of node.children ?? []) visit(child) }
+    visit(tree)
+    expect(nodes.find(node => node.type === 'Svg' && node.props.alt.startsWith('codex 5h'))?.props.source).toContain('height="24"')
+    expect(await ui.find({ type: 'Button', key: 'purser-board-details' })).toBeDefined()
+    expect(tree?.props.flexDirection).toBe('column')
+    expect(tree?.children.at(-1)?.props).toMatchObject({ width: 40, flexDirection: 'row', flexWrap: 'wrap' })
+    expect(tree?.children.at(-1)?.children.every(node => node.props.flexShrink === 0)).toBe(true)
+    if (phase === 'pending') {
+      expect(configReads).toBe(2)
+      release!()
+    }
+  }
+  await ui.unmount()
+})
+
+test('ellipsizes long pill values at narrow widths without scaling the SVG font or height', () => {
+  const pill = usageGroups({}, { quota: {} }, now, undefined, { reviewer: 'agy', model: 'gemini-' + 'long-model-name-'.repeat(8) })[0][0]
+  const svg = pillSvg(pill, 240)
+  expect(Number(/<svg[^>]* width="(\d+)"/.exec(svg)?.[1]) <= 240).toBe(true)
+  expect(svg).toContain('height="24"')
+  expect(svg).toContain('font-size="12" font-weight="700"')
+  expect(svg).toContain('…</text>')
+  expect(svg).not.toContain('scale(')
+  expect(pillSvg(pill)).toContain(pill.value)
 })

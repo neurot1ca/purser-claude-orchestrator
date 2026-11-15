@@ -162,7 +162,7 @@ const escapeXml = (value: string) => value.replace(/[&<>"']/g, character => ({ '
 // Monospace advance per character at the given font size; lays each part out after the previous one.
 const textWidth = (value: string, size: number) => Math.ceil([...value].length * size * 0.62)
 
-export function pillSvg(pill: Pill): string {
+export function pillSvg(pill: Pill, maxWidth = Infinity): string {
   const style = `<style>text{font-family:ui-monospace,SFMono-Regular,monospace;fill:#27313b}.pill{fill:${pill.color}22}@media(prefers-color-scheme:dark){text{fill:#f3f5f7}.pill{fill:${pill.color}55}}</style>`
   const height = 24
   const baseline = 16
@@ -182,14 +182,18 @@ export function pillSvg(pill: Pill): string {
     inner += `<rect x="${x}" y="10" width="${barWidth}" height="4" rx="2" fill="#8c96a0" opacity=".35"/><rect x="${x}" y="10" width="${barWidth * pill.percent / 100}" height="4" rx="2" fill="${barColor(pill.percent)}"/>${pill.tick === undefined ? '' : `<path d="M${x + barWidth * pill.tick} 7v10" stroke="#252b32" stroke-width="1.4"/>`}`
     x += barWidth + 8
   }
-  inner += `<text x="${x}" y="${baseline}" font-size="12" font-weight="700">${escapeXml(pill.value)}</text>`
-  x += textWidth(pill.value, 12)
-  if (pill.countdown) {
+  const countdown = pill.countdown && x + textWidth(pill.value, 12) + 24 + textWidth(`${pill.icon} ${pill.countdown}`, 11) <= maxWidth ? pill.countdown : undefined
+  const valueWidth = maxWidth - x - 10 - (countdown ? 14 + textWidth(`${pill.icon} ${countdown}`, 11) : 0)
+  const characters = Math.max(0, Math.floor(valueWidth / (12 * 0.62)))
+  const value = [...pill.value].length > characters ? `${[...pill.value].slice(0, Math.max(0, characters - 1)).join('')}${characters ? '…' : ''}` : pill.value
+  inner += `<text x="${x}" y="${baseline}" font-size="12" font-weight="700">${escapeXml(value)}</text>`
+  x += textWidth(value, 12)
+  if (countdown) {
     x += 7
     inner += `<path d="M${x} 5v14" stroke="#66717c" opacity=".5"/>`
     x += 7
-    inner += `<text x="${x}" y="${baseline}" font-size="11">${escapeXml(pill.icon)} ${escapeXml(pill.countdown)}</text>`
-    x += textWidth(`${pill.icon} ${pill.countdown}`, 11)
+    inner += `<text x="${x}" y="${baseline}" font-size="11">${escapeXml(pill.icon)} ${escapeXml(countdown)}</text>`
+    x += textWidth(`${pill.icon} ${countdown}`, 11)
   }
   const width = x + 10
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${style}<title>${escapeXml(pill.detail)}</title><rect class="pill" x=".5" y=".5" width="${width - 1}" height="${height - 1}" rx="${(height - 1) / 2}"/>${inner}</svg>`
@@ -320,6 +324,8 @@ function terminalPill(Text, pill: Pill) {
 }
 
 let timerStarted = false
+let selectedForBar: SelectedAgents = {}
+let selectionPending = false
 
 export function registerUsage(on) {
   on('session.measure', async ($, e, next) => {
@@ -335,21 +341,30 @@ export function registerUsage(on) {
         timerStarted = true
         $.clock.every(5000, () => $.ui.invalidate('ui.render'))
       }
-      const [usage, root, selected] = await Promise.all([$.session.usage(), runtimeStateRoot($), readSelectedAgents($)])
+      // Optional user-file reads must not hold the quota band behind a locked file.
+      if (!selectionPending) {
+        selectionPending = true
+        void readSelectedAgents($).then(selected => {
+          const changed = selected.coder !== selectedForBar.coder || selected.reviewer !== selectedForBar.reviewer || selected.model !== selectedForBar.model
+          selectedForBar = selected
+          selectionPending = false
+          if (changed) $.ui.invalidate('ui.render')
+        }).catch(() => { selectionPending = false })
+      }
+      const [usage, root] = await Promise.all([$.session.usage().catch(() => ({})), runtimeStateRoot($).catch(() => undefined)])
       const session = mapSessionUsage(usage)
       const codex = root ? await readCodexQuota($, root, Date.now()) : {}
       const cwd = await $.session.cwd().catch(() => undefined)
-      const groups = usageGroups(codex, session, Date.now(), cwd === undefined ? undefined : cachedProjectJobs(cwd), selected)
+      const groups = usageGroups(codex, session, Date.now(), cwd === undefined ? undefined : cachedProjectJobs(cwd), selectedForBar)
       if (!groups.length) return prior
       const { Box, Text, Svg } = $.ui.resolve(e)
       const terminal = e.surface === 'terminal' || !Svg
-      const rendered = groups.map((group, groupIndex) => Box({
-        key: `purser-usage-group-${groupIndex}`,
-        flexDirection: 'row', flexWrap: 'wrap', gap: 1,
-        children: group.map(pill => terminal ? terminalPill(Text, pill) : Svg({ key: pill.id, source: pillSvg(pill), alt: pill.detail })),
+      const rendered = groups.flat().map(pill => Box({
+        key: pill.id, flexShrink: 0,
+        children: terminal ? terminalPill(Text, pill) : Svg({ key: pill.id, source: pillSvg(pill, e.props.bodyColumns * 12 * 0.62), alt: pill.detail }),
       }))
-      const band = Box({ flexDirection: 'row', flexWrap: 'wrap', gap: terminal ? 3 : 1, children: rendered })
-      return Box({ children: prior ? [prior, band] : [band] })
+      const band = Box({ key: 'purser-usage-band', width: e.props.bodyColumns, flexDirection: 'row', flexWrap: 'wrap', gap: terminal ? 3 : 1, children: rendered })
+      return Box({ key: 'purser-usage', flexDirection: 'column', children: prior ? [prior, band] : [band] })
     } catch { return prior }
   })
 }

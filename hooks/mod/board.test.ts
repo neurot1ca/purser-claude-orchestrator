@@ -158,9 +158,10 @@ test('draws cached Codex and real-shaped Claude rows in the pane and keeps the p
     props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100, scroll: { offset: 0, bodyRows: 12 }, view: {} },
   })
   expect(logs).toEqual([])
-  expect(listed).toHaveLength(3)
+  expect(listed).toHaveLength(4)
   expect(listed.some(path => path.replace(/\\/g, '/').toLowerCase().endsWith('/custom/claude/purser/async_jobs'))).toBe(true)
   expect(listed.some(path => path.replace(/\\/g, '/').toLowerCase().endsWith('/.orchestrator'))).toBe(true)
+  expect(listed.some(path => path.replace(/\\/g, '/').toLowerCase().endsWith('/bundle_artifacts'))).toBe(true)
   const summary = await ui.find({ type: 'Text', text: '⚓' })
   expect(summary?.props.color).toBe('cyan')
   expect(summary?.props.wrap).toBe('truncate-end')
