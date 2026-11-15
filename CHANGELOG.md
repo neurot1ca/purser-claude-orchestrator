@@ -3,6 +3,9 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.252 — 2026-11-15
+- **Fixed:** finished jobs now hide after two board displays as intended, and finished Claude subagent rows leave the board pane after an hour.
+
 ## 0.1.251 — 2026-11-15
 - **Fixed:** the bar no longer vanishes when the user config read fails or stalls, and agent pills wrap into rows at one size in narrow windows.
 
