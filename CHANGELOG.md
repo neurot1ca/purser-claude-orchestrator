@@ -3,6 +3,9 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.250 — 2026-11-15
+- **Changed:** the bar's coder pill shows the latest Codex model and effort, the separate Codex model pill is gone, and agent pills use each agent's brand color.
+
 ## 0.1.249 — 2026-11-15
 - **Fixed:** write-mode OpenCode jobs get explicit permissions, so their bash calls are no longer rejected.
 - **Added:** the Claude subagents table shows which Purser task a dispatcher runs, and drops the excerpt and tokens columns.
