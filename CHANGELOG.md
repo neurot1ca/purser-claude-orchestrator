@@ -3,6 +3,9 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.251 — 2026-11-15
+- **Fixed:** the bar no longer vanishes when the user config read fails or stalls, and agent pills wrap into rows at one size in narrow windows.
+
 ## 0.1.250 — 2026-11-15
 - **Changed:** the bar's coder pill shows the latest Codex model and effort, the separate Codex model pill is gone, and agent pills use each agent's brand color.
 
