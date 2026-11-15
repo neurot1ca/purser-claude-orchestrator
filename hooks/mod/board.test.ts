@@ -96,6 +96,7 @@ test('draws cached Codex and real-shaped Claude rows in the pane and keeps the p
   ]
   const claudeId = 'e'.repeat(64)
   const realClaudeRecord = { schema_version: 1, id: claudeId, project_key: projectKey, provider: 'claude', kind: 'subagent',
+    agent_type: 'Explore', model: 'claude-sonnet', transcript_path: '/home/test/agent-e.jsonl',
     state: 'running', started_at: new Date(now * 1000 - 60_000).toISOString(), observed_at: new Date(now * 1000).toISOString(), metadata_status: 'complete' }
   const indexes = files.indexes.map(index => ({ ...index, project_key: projectKey }))
   const values: Record<string, string> = {
@@ -163,7 +164,7 @@ test('draws cached Codex and real-shaped Claude rows in the pane and keeps the p
   expect(detail?.text).toContain('| test update | gpt-6-sol (medium) |')
   expect(detail?.text).toContain('| docs | gpt-6-sol (low) |')
   expect(detail?.text).toContain('### Claude subagents')
-  expect(detail?.text).toContain('| unknown | unknown | running |')
+  expect(detail?.text).toContain('| Explore | claude-sonnet | running |')
   expect((await pane.find({ type: 'Text', text: 'Other mod pane status' }))?.text).toBe('Other mod pane status')
   await pane.unmount()
   paneCwdUnavailable = false
@@ -174,7 +175,7 @@ test('draws cached Codex and real-shaped Claude rows in the pane and keeps the p
   })
   expect((await failedRefreshPane.find({ type: 'Markdown' }))?.text).toContain('| api fix | gpt-6-sol (high) |')
   expect((await failedRefreshPane.find({ type: 'Markdown' }))?.text).toContain('| docs | gpt-6-sol (low) |')
-  expect((await failedRefreshPane.find({ type: 'Markdown' }))?.text).toContain('| unknown | unknown | running |')
+  expect((await failedRefreshPane.find({ type: 'Markdown' }))?.text).toContain('| Explore | claude-sonnet | running |')
   await failedRefreshPane.unmount()
   await ui.unmount()
 })
@@ -199,9 +200,29 @@ test('renders Claude-only and mixed provider details without changing Codex rows
   expect(only?.detail).toContain('C:\\Users\\雪\\agent.jsonl')
   const mixed = renderJobBoard({ ...files, claude: [claudeRecord] }, 1000)
   expect(mixed?.detail).toContain('| api fix | gpt-6-sol (high) | coding · codex-main active 3s ago |')
-  expect(mixed?.detail).toContain('| Explore | claude-sonnet | response_finished |')
+  expect(mixed?.detail).toContain('| Explore | claude-sonnet | done |')
   expect(mixed?.summary.map(part => part.text).join('')).not.toContain('Claude subagents')
   expect(mixed?.detail.indexOf('| api fix')).toBeLessThan(mixed?.detail.indexOf('### Claude subagents'))
+})
+
+test('normalizes Claude terminal states and hides rows without identifying metadata', () => {
+  const board = renderJobBoard({ indexes: [], jobs: [], claude: [
+    { ...claudeRecord, state: 'response_finished' },
+    { ...claudeRecord, id: 'a'.repeat(64), state: 'finished' },
+    { ...claudeRecord, id: 'b'.repeat(64), state: 'session_ended' },
+    { ...claudeRecord, id: 'c'.repeat(64), state: 'custom_state' },
+    { ...claudeRecord, id: 'd'.repeat(64), state: 'running' },
+    { ...claudeRecord, id: 'e'.repeat(64), agent_type: null, model: '', transcript_path: '', usage: null },
+    { ...claudeRecord, id: 'f'.repeat(64), agent_type: null, model: '', transcript_path: '', usage: { input_tokens: null, output_tokens: null, cache_read_input_tokens: null, cache_creation_input_tokens: null } },
+    { ...claudeRecord, id: '0'.repeat(64), agent_type: null, model: '', transcript_path: '/missing/subagents/agent-phantom.jsonl', usage: null },
+  ] })
+  expect(board?.detail).toContain('| Explore | claude-sonnet | done |')
+  expect(board?.detail).toContain('| Explore | claude-sonnet | ended |')
+  expect(board?.detail).toContain('| Explore | claude-sonnet | custom_state |')
+  expect(board?.detail).not.toContain('response_finished')
+  expect(board?.detail).not.toContain('session_ended')
+  expect(board?.detail).not.toContain('/missing/subagents/agent-phantom.jsonl')
+  expect(board?.detail.split('\n').filter(line => line.includes('claude-sonnet'))).toHaveLength(5)
 })
 
 test('sorts running Claude rows first and newest history before limiting to 100 rows', () => {

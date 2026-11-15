@@ -135,7 +135,7 @@ func TestClaudeWorkSubagentUsesAgentTranscript(t *testing.T) {
 	if err := os.MkdirAll(subagents, 0700); err != nil {
 		t.Fatal(err)
 	}
-	transcript := filepath.Join(subagents, "agent-1.jsonl")
+	transcript := filepath.Join(subagents, "agent-agent-1.jsonl")
 	if err := os.WriteFile(transcript, []byte(`{"type":"assistant","sessionId":"s3","agentId":"agent-1","isSidechain":true,"message":{"id":"m3","role":"assistant","content":[{"type":"text","text":"agent result"}]}}`+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +165,31 @@ func TestClaudeWorkSubagentUsesAgentTranscript(t *testing.T) {
 	}
 	if record.State != "response_finished" || record.FinalExcerpt != "agent result" || record.AgentType == nil || *record.AgentType != "general-purpose" {
 		t.Fatalf("record=%+v", record)
+	}
+	events, err := filepath.Glob(filepath.Join(root, "state", "telemetry", "events", "????-??", "session_s3.jsonl"))
+	if err != nil || len(events) != 1 {
+		t.Fatalf("subagent telemetry=%v err=%v", events, err)
+	}
+	telemetry, err := os.ReadFile(events[0])
+	if err != nil || !strings.Contains(string(telemetry), `"event_type":"CLAUDE_WORK_USAGE_RECORDED"`) {
+		t.Fatalf("real subagent telemetry missing: %s err=%v", telemetry, err)
+	}
+}
+
+func TestClaudeWorkSkipsPhantomSubagent(t *testing.T) {
+	root := claudeWorkTempDir(t)
+	t.Setenv("PURSER_STATE_DIR", filepath.Join(root, "state"))
+	project := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	event := map[string]any{"hook_event_name": "SubagentStop", "session_id": "phantom-session", "cwd": project, "agent_id": "phantom", "agent_transcript_path": filepath.Join(root, "session", "subagents", "agent-phantom.jsonl")}
+	if err := captureClaudeWork(event); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(root, "state", "claude_work", "*.json"))
+	if err != nil || len(files) != 0 {
+		t.Fatalf("phantom subagent records=%v err=%v", files, err)
 	}
 }
 

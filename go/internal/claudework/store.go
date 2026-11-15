@@ -172,7 +172,7 @@ func validate(r *Record) error {
 	if r.SchemaVersion == 0 {
 		r.SchemaVersion = 1
 	}
-	if r.SchemaVersion != 1 || r.ProjectKey == "" || r.Kind == "" || (r.Kind != "subagent" && r.Kind != "session") || !oneOf(r.State, "running", "response_finished", "session_ended", "unknown") || !oneOf(r.MetadataStatus, "complete", "partial", "degraded") {
+	if r.SchemaVersion != 1 || r.ProjectKey == "" || r.Kind == "" || (r.Kind != "subagent" && r.Kind != "session") || !oneOf(r.State, "running", "response_finished", "session_ended", "finished", "unknown") || !oneOf(r.MetadataStatus, "complete", "partial", "degraded") {
 		return errors.New("invalid Claude work record")
 	}
 	for _, p := range []*string{r.SessionID, r.AgentID, r.AgentType, r.ParentSessionID} {

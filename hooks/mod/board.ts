@@ -36,7 +36,11 @@ const duration = (seconds: number) => {
 }
 
 export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windows = false): JobBoard | undefined {
-  const allClaude = (files.claude ?? []).filter(record => record.kind === 'subagent')
+  const allClaude = (files.claude ?? []).filter(record => record.kind === 'subagent' &&
+    (typeof record.agent_type === 'string' && record.agent_type.length > 0 ||
+      typeof record.model === 'string' && record.model.length > 0 ||
+      ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'].some(name =>
+        Number.isSafeInteger(record.usage?.[name]) && record.usage[name] >= 0)))
     .sort((a, b) => Number(b.state === 'running') - Number(a.state === 'running') || Date.parse(b.observed_at) - Date.parse(a.observed_at))
   const runningClaude = allClaude.filter(record => record.state === 'running').length
   const claude = allClaude.slice(0, 100)
@@ -201,7 +205,8 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
     return { line, rank, timestamp: finiteTime(timestamp) ? timestamp : 0 }
   }).sort((a, b) => a.rank - b.rank || b.timestamp - a.timestamp)
   const claudeRows = claude.map(record => {
-    const state = ['running', 'response_finished', 'session_ended', 'unknown'].includes(record.state) ? record.state : 'unknown'
+    const state = record.state === 'response_finished' || record.state === 'finished' ? 'done' :
+      record.state === 'session_ended' ? 'ended' : typeof record.state === 'string' ? record.state : 'unknown'
     const elapsed = Number.isSafeInteger(record.duration_ms) && record.duration_ms >= 0 ? record.duration_ms / 1000 :
       state === 'running' && typeof record.started_at === 'string' && Number.isFinite(Date.parse(record.started_at)) ? now - Date.parse(record.started_at) / 1000 : undefined
     const usage = record.usage && typeof record.usage === 'object' ? record.usage : undefined
@@ -290,7 +295,7 @@ async function readClaudeWork($, runtime: string, key: string): Promise<Job[]> {
         const record = JSON.parse(raw)
         if (record.schema_version !== 1 || record.provider !== 'claude' || record.project_key !== key || record.kind !== 'subagent' ||
             !/^[0-9a-f]{64}$/.test(record.id) || entry.name !== `${key}-${record.id}.json` ||
-            !['running', 'response_finished', 'session_ended', 'unknown'].includes(record.state) ||
+            typeof record.state !== 'string' || record.state.length > 128 ||
             !['complete', 'partial', 'degraded'].includes(record.metadata_status) ||
             (record.session_id != null && (typeof record.session_id !== 'string' || record.session_id.length > 512)) ||
             (record.agent_id != null && (typeof record.agent_id !== 'string' || record.agent_id.length > 512)) ||

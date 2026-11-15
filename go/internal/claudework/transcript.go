@@ -136,7 +136,7 @@ func validatedTranscriptPath(r Record) (string, error) {
 	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	if r.Kind == "subagent" {
-		if r.AgentID == nil || !samePath(name, *r.AgentID) || !samePath(filepath.Base(filepath.Dir(path)), "subagents") {
+		if r.AgentID == nil || (!samePath(name, *r.AgentID) && !samePath(name, "agent-"+*r.AgentID)) || !samePath(filepath.Base(filepath.Dir(path)), "subagents") {
 			return "", errors.New("subagent path identity mismatch")
 		}
 	} else if !samePath(name, *r.SessionID) {

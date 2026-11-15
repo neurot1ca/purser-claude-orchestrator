@@ -55,6 +55,7 @@ func captureClaudeWork(event map[string]any) error {
 	default:
 		return nil
 	}
+	terminal := event["hook_event_name"] == "Stop" || event["hook_event_name"] == "SubagentStop" || event["hook_event_name"] == "SessionEnd"
 	repository := contextio.ProjectRoot(event)
 	if repository == "" {
 		return nil
@@ -67,10 +68,16 @@ func captureClaudeWork(event map[string]any) error {
 		}
 	}
 	record = claudework.CaptureHookFields(record, event)
+	if kind == "subagent" {
+		transcriptPresent, metaPresent := claudework.CaptureAgentMeta(&record)
+		if !transcriptPresent && !metaPresent && record.AgentType == nil {
+			return nil
+		}
+	}
 	if state == "running" {
 		record.StartedAt = record.ObservedAt
 	}
-	if state == "response_finished" || state == "session_ended" {
+	if terminal {
 		merged, err := claudework.MergeExisting(contextio.StateRoot(), record)
 		if err != nil {
 			return err
@@ -97,7 +104,7 @@ func captureClaudeWork(event map[string]any) error {
 	if err := claudework.Update(contextio.StateRoot(), record); err != nil {
 		return err
 	}
-	if state == "response_finished" || state == "session_ended" {
+	if terminal {
 		usage := map[string]any{}
 		if record.Usage != nil {
 			for name, value := range map[string]*uint64{"input_tokens": record.Usage.InputTokens, "output_tokens": record.Usage.OutputTokens, "cache_read_input_tokens": record.Usage.CacheReadInputTokens, "cache_creation_input_tokens": record.Usage.CacheCreationInputTokens} {

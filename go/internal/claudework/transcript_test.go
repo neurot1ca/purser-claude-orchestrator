@@ -187,13 +187,60 @@ func TestCaptureHookEffortShapes(t *testing.T) {
 	}
 }
 
+func TestCaptureAgentMetaPresentAbsentAndMalformed(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		meta       string
+		wantType   string
+		wantModel  string
+		wantState  string
+		wantExists bool
+	}{
+		{name: "present", meta: `{"agentType":"purser:helper","pickedEffortModel":"claude-opus-5-5","finished":true}`, wantType: "purser:helper", wantModel: "claude-opus-5-5", wantState: "finished", wantExists: true},
+		{name: "absent"},
+		{name: "malformed", meta: `{bad`, wantExists: true},
+		{name: "oversized", meta: strings.Repeat("x", agentMetaLimit+1), wantExists: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "session", "subagents")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			transcript := filepath.Join(dir, "agent-a6a549c6acfa70263.jsonl")
+			if tt.name == "present" || tt.name == "absent" {
+				if err := os.WriteFile(transcript, []byte("{}\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.meta != "" {
+				if err := os.WriteFile(filepath.Join(dir, "agent-a6a549c6acfa70263.meta.json"), []byte(tt.meta), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			agentID := "a6a549c6acfa70263"
+			record := Record{Kind: "subagent", AgentID: &agentID, State: "response_finished", TranscriptPath: transcript}
+			transcriptPresent, metaPresent := CaptureAgentMeta(&record)
+			if transcriptPresent != (tt.name == "present" || tt.name == "absent") || metaPresent != tt.wantExists {
+				t.Fatalf("presence = %v/%v, want %v/%v", transcriptPresent, metaPresent, tt.name == "present" || tt.name == "absent", tt.wantExists)
+			}
+			gotType := ""
+			if record.AgentType != nil {
+				gotType = *record.AgentType
+			}
+			if gotType != tt.wantType || record.Model != tt.wantModel || record.State != map[bool]string{true: "finished", false: "response_finished"}[tt.wantState == "finished"] {
+				t.Fatalf("metadata = type %q model %q state %q", gotType, record.Model, record.State)
+			}
+		})
+	}
+}
+
 func TestExtractTranscriptEffortShapesKeepUsage(t *testing.T) {
 	tests := []struct {
-		name string
-		key  string
+		name  string
+		key   string
 		value any
-		want string
-		omit bool
+		want  string
+		omit  bool
 	}{
 		{name: "string", key: "effort", value: "high", want: "high"},
 		{name: "level object", key: "effort", value: map[string]any{"level": "high"}, want: "high"},
