@@ -9,6 +9,10 @@ type SelectedAgents = { coder?: string; reviewer?: string; model?: string }
 type Pill = { id: string; label: string; value: string; detail: string; icon: string; color: string; brandMark?: 'claude' | 'codex'; percent?: number; tick?: number; countdown?: string }
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+const agentColors = new Map([
+  ['claude', '#D97757'], ['codex', '#10A37F'], ['gemini', '#8E75B2'],
+  ['agy', '#8E75B2'], ['opencode', '#0D9488'], ['cursor', '#2563EB'],
+])
 
 function quotaWindow(percent: unknown, reset: unknown, windowMs: number, now: number): Window | undefined {
   const resetAt = typeof reset === 'string' ? Date.parse(reset) : Number.NaN
@@ -64,7 +68,6 @@ export function claudeRateLimitResetAt(value: any, now = Date.now()): number | u
   return resets.length ? Math.max(...resets) : undefined
 }
 
-// The newest artifact naming a model gives the model pill, even when it carries no quota.
 export function readCodexModel(records: unknown[]): Pick<Quota, 'model' | 'effort'> {
   for (const value of records.slice(0, 20)) {
     let item: any = value
@@ -123,13 +126,6 @@ export function usageGroups(codex: Quota, session: SessionData, now = Date.now()
   }
   if (claude.length) claude[0].brandMark = 'claude'
   const codexPills = quotaPills(codex, 'codex', now, session.contextFill)
-  if (codex.model) {
-    const value = codex.effort ? `${codex.model} · ${codex.effort}` : codex.model
-    codexPills.unshift({
-      id: 'codex-model', label: 'codex', value,
-      detail: `Codex model of the latest job: ${value}`, icon: '◷', color: '#6b7cff',
-    })
-  }
   if (codexPills.length) codexPills[0].brandMark = 'codex'
   const groups: Pill[][] = [claude, codexPills]
   const jobs = (files?.jobs ?? []).filter(job => finite(job.startedAt)).map(job => ({
@@ -137,16 +133,17 @@ export function usageGroups(codex: Quota, session: SessionData, now = Date.now()
   }))
     .sort((a, b) => b.startedAt - a.startedAt)
   const free = jobs.find(job => job.agent === 'opencode' && job.startedAt * 1000 <= now && now - job.startedAt * 1000 <= 7 * 24 * 60 * 60_000)
+  const coderModel = selected.coder?.toLowerCase() === 'codex' && codex.model ? `${codex.model}${codex.effort ? ` · ${codex.effort}` : ''}` : undefined
   const agents: Pill[] = []
   for (const [role, agent, model, detail] of [
-    ['coder', selected.coder, undefined, 'Coder selected for Purser'],
+    ['coder', selected.coder, undefined, `Coder selected for Purser${coderModel ? `; latest model ${codex.model}` : ''}`],
     ['reviewer', selected.reviewer, selected.model, 'Reviewer selected for Purser'],
     ['free', free?.agent, free?.model, 'OpenCode Purser used in the last 7 days'],
   ]) {
     if (typeof agent !== 'string' || !agent.trim() || ['unknown', 'none'].includes(agent.toLowerCase()) ||
         (role === 'free' && !model) || (model !== undefined && (typeof model !== 'string' || !model.trim() || model.toLowerCase() === 'unknown'))) continue
-    const value = model ? `${agent} · ${model.startsWith(`${agent}/`) ? model.slice(agent.length + 1) : model}` : agent
-    agents.push({ id: role, label: role, value, detail, icon: '', color: '#788797' })
+    const value = role === 'coder' && coderModel ? coderModel : model ? `${agent} · ${model.startsWith(`${agent}/`) ? model.slice(agent.length + 1) : model}` : agent
+    agents.push({ id: role, label: role, value, detail, icon: '', color: agentColors.get(agent.toLowerCase()) ?? '#788797' })
   }
   groups.push(agents)
   if (session.cost !== undefined) {

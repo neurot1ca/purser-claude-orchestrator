@@ -28,9 +28,9 @@ const agentFiles = {
 const selectedConfig = '[roles]\r\ncoder = "codex"\r\nreviewer = "claude"\r\n[coding]\r\ncoder_agent = "codex" # selected coder\r\n[reviewer]\r\nselected = { agent = "agy", model = "gemini-3.8-flash-high" } # selected reviewer\r\n'
 
 test('shows selected agents after Codex and keeps free sourced from board reads', async ($, on) => {
-  const groups = usageGroups({ model: 'gpt-6.1-sol' }, mapSessionUsage(usage, now), now, agentFiles, parseSelectedAgents(selectedConfig))
+  const groups = usageGroups(readQuotaSnapshot([quotaRecord()], now), mapSessionUsage(usage, now), now, agentFiles, parseSelectedAgents(selectedConfig))
   expect(groups.map(group => group.map(pill => pill.id))).toEqual([
-    ['claude-5h', 'claude-7d', 'claude-context'], ['codex-model'], ['coder', 'reviewer', 'free'], ['cost'],
+    ['claude-5h', 'claude-7d', 'claude-context'], ['codex-5h', 'codex-7d'], ['coder', 'reviewer', 'free'], ['cost'],
   ])
   expect(groups[2].map(pill => [pill.label, pill.value])).toEqual([
     ['coder', 'codex'], ['reviewer', 'agy · gemini-3.8-flash-high'], ['free', 'opencode · beam-free'],
@@ -79,9 +79,9 @@ test('shows selected agents after Codex and keeps free sourced from board reads'
     plugin: 'usage-agents-test', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} },
   })
-  expect(await ui.find({ type: 'Text', text: /^coder codex$/ })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /^coder codex$/ }))?.props.color).toBe('#10A37F')
   expect(await ui.find({ type: 'Text', text: /reviewer agy · gemini-3.8-flash-high/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /free opencode · beam-free/ })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /free opencode · beam-free/ }))?.props.color).toBe('#0D9488')
   expect(reads).toHaveLength(7) // Existing board reads plus one user config read.
   await ui.unmount()
 })
@@ -200,9 +200,9 @@ test('maps session usage fields and keeps Claude, Codex, then cost groups', () =
 
 test('uses brand colors and marks the first Claude and Codex pill in SVG', () => {
   const session = mapSessionUsage(usage, now)
-  const groups = usageGroups({ ...readQuotaSnapshot([quotaRecord()], now), model: 'gpt-6-luna' }, session, now)
+  const groups = usageGroups(readQuotaSnapshot([quotaRecord()], now), session, now)
   expect(groups[0].map(pill => pill.color)).toEqual(['#d97757', '#d97757', '#d97757'])
-  expect(groups[1].map(pill => pill.color)).toEqual(['#6b7cff', '#6b7cff', '#6b7cff'])
+  expect(groups[1].map(pill => pill.color)).toEqual(['#6b7cff', '#6b7cff'])
   expect(groups[2][0].color).toBe('#bd922e')
   expect(pillSvg(groups[0][0])).toContain('data-brand-mark="claude"')
   expect(pillSvg(groups[1][0])).toContain('data-brand-mark="codex"')
@@ -377,11 +377,45 @@ test('reads Codex quota from the newest artifact that contains it', async ($, on
   await ui.unmount()
 })
 
-test('shows the latest Codex model and effort as the first Codex pill', () => {
-  const records = [JSON.stringify({ model: 'gpt-6-luna', effort: 'high' }), quotaRecord()]
-  expect(readCodexModel(records)).toEqual({ model: 'gpt-6-luna', effort: 'high' })
-  expect(readCodexModel(['not json', { model: '' }])).toEqual({})
-  const groups = usageGroups({ ...readQuotaSnapshot([quotaRecord()], now), ...readCodexModel(records) }, mapSessionUsage(usage, now), now)
-  expect(groups[1][0]).toMatchObject({ id: 'codex-model', label: 'codex', value: 'gpt-6-luna · high', color: '#6b7cff' })
-  expect(terminalBar(groups[1][0])).toBeUndefined()
+test('omits the Codex model pill while preserving quota pills and their brand mark', () => {
+  const codex = { ...readQuotaSnapshot([quotaRecord()], now), model: 'gpt-6.1-terra', effort: 'medium' }
+  const groups = usageGroups(codex, { quota: {} }, now)
+  expect(groups[0].map(pill => pill.id)).toEqual(['codex-5h', 'codex-7d'])
+  expect(groups[0][0].brandMark).toBe('codex')
+  expect(usageGroups({ ...codex, fiveHour: undefined, sevenDay: undefined }, { quota: {} }, now)).toEqual([])
+})
+
+test('colors role pills by agent case-insensitively with a neutral fallback', () => {
+  for (const [agent, color] of [
+    ['Claude', '#D97757'], ['CODEX', '#10A37F'], ['Gemini', '#8E75B2'],
+    ['AGY', '#8E75B2'], ['OpenCode', '#0D9488'], ['Cursor', '#2563EB'], ['other', '#788797'],
+  ]) {
+    const pills = usageGroups({}, { quota: {} }, now, agentFiles, { coder: agent, reviewer: agent })[0]
+    expect(pills.map(pill => pill.color)).toEqual([color, color, '#0D9488'])
+    expect(pillSvg(pills[0])).toContain(`fill:${color}22`)
+  }
+})
+
+test('shows the latest artifact model and effort in the coder pill with its selected agent color', () => {
+  const codex = readCodexModel(['invalid json', JSON.stringify({ model: 'gpt-6.1-sol', effort: 'medium' }), { model: 'older-model' }])
+  const pills = usageGroups(codex, { quota: {} }, now, undefined, { coder: 'codex' })[0]
+  expect(pills).toHaveLength(1)
+  expect(pills[0]).toMatchObject({
+    id: 'coder', label: 'coder', value: 'gpt-6.1-sol · medium', color: '#10A37F',
+    detail: 'Coder selected for Purser; latest model gpt-6.1-sol',
+  })
+  expect(usageGroups({ model: 'gpt-6.1-sol' }, { quota: {} }, now, undefined, { coder: 'codex' })[0][0].value).toBe('gpt-6.1-sol')
+})
+
+test('falls back to the selected coder name when no artifact model is known', () => {
+  const codex = readCodexModel(['invalid json', { model: '' }])
+  expect(usageGroups(codex, { quota: {} }, now, undefined, { coder: 'codex' })[0][0]).toMatchObject({
+    id: 'coder', value: 'codex', color: '#10A37F', detail: 'Coder selected for Purser',
+  })
+})
+
+test('keeps the selected Claude name when a Codex artifact model is present', () => {
+  expect(usageGroups({ model: 'gpt-6.1-sol', effort: 'medium' }, { quota: {} }, now, undefined, { coder: 'claude' })[0][0]).toMatchObject({
+    id: 'coder', value: 'claude', color: '#D97757', detail: 'Coder selected for Purser',
+  })
 })
