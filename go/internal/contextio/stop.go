@@ -119,11 +119,13 @@ func Stop(event map[string]any, started time.Time) []byte {
 					all = false
 				}
 			}
-			if all && (!hasBoard || strings.Contains(joined, board)) {
-				// Board display counts are updated when the visible board is confirmed.
-				if hasBoard {
-					markBoardDisplayed(dispatch)
-				}
+			// Confirm the board independently of any still-missing dispatch lines.
+			boardShown := hasBoard && board != "" && strings.Contains(joined, board)
+			if boardShown {
+				display := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", session, str(event["transcript_path"]), latestUser)))
+				markBoardDisplayed(dispatch, hex.EncodeToString(display[:]))
+			}
+			if all && (!hasBoard || boardShown) {
 				clear("dispatch_pending")
 			}
 		}
@@ -406,7 +408,7 @@ func validStopPending(field string, p map[string]any) bool {
 	return false
 }
 
-func markBoardDisplayed(dispatch map[string]any) {
+func markBoardDisplayed(dispatch map[string]any, display string) {
 	ids, _ := dispatch["board_job_ids"].([]any)
 	for _, value := range ids {
 		id := str(value)
@@ -418,34 +420,40 @@ func markBoardDisplayed(dispatch map[string]any) {
 		if !ok || job["jobId"] != id || job["state"] == "QUEUED" || job["state"] == "RUNNING" {
 			continue
 		}
-		if root := str(job["repoRoot"]); root != "" {
-			digest := sha256.Sum256([]byte(resolve(root)))
-			lockPath := filepath.Join(stateRoot(), "codex_exec_mcp", "apply", hex.EncodeToString(digest[:])+".lock")
-			if os.MkdirAll(filepath.Dir(lockPath), 0700) != nil {
-				continue
+		func() {
+			if root := str(job["repoRoot"]); root != "" {
+				digest := sha256.Sum256([]byte(resolve(root)))
+				lockPath := filepath.Join(stateRoot(), "codex_exec_mcp", "apply", hex.EncodeToString(digest[:])+".lock")
+				if os.MkdirAll(filepath.Dir(lockPath), 0700) != nil {
+					return
+				}
+				lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+				if err != nil {
+					return
+				}
+				if info, _ := lock.Stat(); info != nil && info.Size() == 0 {
+					_, _ = lock.WriteAt([]byte("0"), 0)
+				}
+				if tryLock(lock) != nil {
+					_ = lock.Close()
+					return
+				}
+				defer func() { _ = unlock(lock); _ = lock.Close() }()
 			}
-			lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+			// Worker/cancel writers use the job owner lock, apply writers the repo lock.
+			release, err := LockFile(strings.TrimSuffix(path, ".json") + ".owner-lock")
 			if err != nil {
-				continue
+				return
 			}
-			if info, _ := lock.Stat(); info != nil && info.Size() == 0 {
-				_, _ = lock.WriteAt([]byte("0"), 0)
-			}
-			if tryLock(lock) != nil {
-				_ = lock.Close()
-				continue
-			}
+			defer func() { _ = release() }()
 			job, ok = readSmallObject(path)
-			if ok && job["jobId"] == id && job["state"] != "QUEUED" && job["state"] != "RUNNING" {
-				job["boardDisplayCount"] = number(job["boardDisplayCount"]) + 1
-				_ = writeJSONAtomically(path, job)
+			if !ok || job["jobId"] != id || job["state"] == "QUEUED" || job["state"] == "RUNNING" || job["boardLastDisplayTurn"] == display {
+				return
 			}
-			_ = unlock(lock)
-			_ = lock.Close()
-			continue
-		}
-		job["boardDisplayCount"] = number(job["boardDisplayCount"]) + 1
-		_ = writeJSONAtomically(path, job)
+			job["boardDisplayCount"] = number(job["boardDisplayCount"]) + 1
+			job["boardLastDisplayTurn"] = display
+			_ = writeJSONAtomically(path, job)
+		}()
 	}
 }
 

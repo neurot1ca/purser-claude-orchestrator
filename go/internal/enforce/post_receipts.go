@@ -16,6 +16,49 @@ import (
 var postReceiptLockFile = contextio.LockFile
 var postReceiptStateWriter = writePostReceiptState
 
+// Queue the exact board supplied to the assistant; Stop confirms its visible display.
+func postProjectJobBoard(root string, event map[string]any, repository, project string) string {
+	board, _, ids := projectJobBoard(root, project, time.Now())
+	session := stringValue(event["session_id"])
+	if repository == "" || session == "" {
+		return board
+	}
+	path := postReceiptStatePath(root, repository)
+	unlock, err := postReceiptLockFile(path + ".lock")
+	if err != nil {
+		postReceiptFailure(root, fmt.Errorf("board receipt lock: %w", err))
+		return board
+	}
+	defer func() {
+		if err := unlock(); err != nil {
+			postReceiptFailure(root, fmt.Errorf("board receipt lock release: %w", err))
+		}
+	}()
+	state := readPostReceiptState(path, session)
+	pending := mapValue(state["dispatch_pending"])
+	if pending == nil {
+		if board == "" {
+			return board
+		}
+		pending = map[string]any{"lines": []any{}}
+	}
+	pending["board"] = nil
+	pending["board_job_ids"] = []any{}
+	if board != "" {
+		visible, _, _ := strings.Cut(board, "\nReply to the user in ")
+		pending["board"] = visible
+		for _, id := range ids {
+			pending["board_job_ids"] = append(pending["board_job_ids"].([]any), id)
+		}
+	}
+	pending["blocked"] = false
+	state["dispatch_pending"] = pending
+	if err := postReceiptStateWriter(path, state); err != nil {
+		postReceiptFailure(root, fmt.Errorf("board receipt state write: %w", err))
+	}
+	return board
+}
+
 func postReceiptFailure(root string, err error) {
 	event := map[string]any{"hook_event_name": "PostToolUse", "tool_name": "post_receipt"}
 	if writePostDiagnostic(root, event, err) != nil {

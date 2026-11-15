@@ -361,7 +361,7 @@ func postApply(event map[string]any, root string) map[string]any {
 	if job == nil || (job["applyState"] != "applied" && job["applyState"] != "conflict") {
 		return map[string]any{}
 	}
-	message, _ := PostProjectJobBoard(root, stringValue(index["project_key"]), time.Now())
+	message := postProjectJobBoard(root, event, stringValue(job["repoRoot"]), stringValue(index["project_key"]))
 	context := message
 	if guidance := postPendingGuidance(root, event, stringValue(job["repoRoot"])); guidance != "" {
 		if context != "" {
@@ -448,7 +448,7 @@ func postAsyncDispatch(event map[string]any, root string) (response map[string]a
 			if output := mapValue(response["hookSpecificOutput"]); output != nil {
 				output["hookEventName"] = "PostToolUse"
 			}
-			board, _ := PostProjectJobBoard(root, stringValue(index["project_key"]), time.Now())
+			board := postProjectJobBoard(root, event, repoRoot, stringValue(index["project_key"]))
 			refreshCachedBoard(mapValue(response), board)
 			index["response"] = response
 			_ = atomicAdmissionJSON(filepath.Join(root, "async_jobs", stringValue(index["jobId"])+".json"), index)
@@ -609,7 +609,7 @@ func postResponseBundle(response, loaded map[string]any) map[string]any {
 }
 
 func appendAsyncProjectStatus(root string, event, index, pending, response map[string]any) map[string]any {
-	board, _ := PostProjectJobBoard(root, stringValue(index["project_key"]), time.Now())
+	board := postProjectJobBoard(root, event, stringValue(pending["repo_root"]), stringValue(index["project_key"]))
 	guidance := postPendingGuidance(root, event, stringValue(pending["repo_root"]))
 	context := strings.TrimSpace(strings.Join([]string{board, guidance}, "\n"))
 	if context != "" {
@@ -639,7 +639,7 @@ func appendPostDispatchReceipt(response map[string]any, root string, event, pend
 	}
 	context := line
 	if stringValue(pending["async_call"]) != "" {
-		board, _ := PostProjectJobBoard(root, pendingProjectKey(pending), time.Now())
+		board := postProjectJobBoard(root, event, repo, pendingProjectKey(pending))
 		if board != "" {
 			if context != "" {
 				context += "\n"

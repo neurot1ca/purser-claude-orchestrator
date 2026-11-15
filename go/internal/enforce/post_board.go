@@ -24,6 +24,11 @@ var RefreshHandAppliedJob func(stateRoot, jobID string)
 
 // PostProjectJobBoard reads the same durable state as codex._project_job_board_details.
 func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []string) {
+	board, ids, _ := projectJobBoard(root, projectKey, now)
+	return board, ids
+}
+
+func projectJobBoard(root, projectKey string, now time.Time) (string, []string, []string) {
 	defer func() {}()
 	jobs := []boardJob{}
 	paths, _ := filepath.Glob(filepath.Join(root, "async_jobs", "*.json"))
@@ -121,6 +126,7 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 	inProgress := []boardJob{}
 	finished := []boardJob{}
 	ids := []string{}
+	finishedIDs := []string{}
 	for _, key := range newestOrder {
 		item := newest[key]
 		j := item.job
@@ -149,6 +155,7 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 			inProgress = append(inProgress, item)
 		} else {
 			finished = append(finished, item)
+			finishedIDs = append(finishedIDs, fmt.Sprint(j["jobId"]))
 		}
 		ids = append(ids, fmt.Sprint(j["jobId"]))
 	}
@@ -160,7 +167,7 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 			}
 		}
 		if !visible {
-			return "", nil
+			return "", nil, nil
 		}
 	}
 	sort.Slice(inProgress, func(i, j int) bool {
@@ -327,7 +334,7 @@ func PostProjectJobBoard(root, projectKey string, now time.Time) (string, []stri
 	if instruction := contextio.ProjectLanguageInstruction(root, projectKey); instruction != "" {
 		board += "\n" + instruction
 	}
-	return board, ids
+	return board, ids, finishedIDs
 }
 
 func boardDisplayZero(value any) bool {
