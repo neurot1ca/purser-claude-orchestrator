@@ -11,14 +11,21 @@ import (
 // For returns the stable per-project key, resolving aliases when possible.
 func For(repository string) string {
 	repository = filepath.Clean(repository)
+	resolvedPath := repository
 	if absolute, err := filepath.Abs(repository); err == nil {
-		repository = absolute
+		resolvedPath = absolute
 	}
-	if resolved, err := filepath.EvalSymlinks(repository); err == nil {
-		repository = resolved
+	resolved := false
+	if path, err := filepath.EvalSymlinks(resolvedPath); err == nil {
+		resolvedPath = path
+		resolved = true
 	}
-	if resolved, err := filesystemPath(repository); err == nil {
-		repository = resolved
+	if path, err := filesystemPath(resolvedPath); err == nil {
+		resolvedPath = path
+		resolved = true
+	}
+	if resolved {
+		repository = resolvedPath
 	}
 	repository = filepath.Clean(repository)
 	if runtime.GOOS == "windows" {
