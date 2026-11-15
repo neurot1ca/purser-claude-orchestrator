@@ -191,14 +191,12 @@ func readTranscriptLine(r *Record, line string, seen map[string][4]uint64, sum *
 			*last = t
 		}
 	}
-	if r.Model == "" {
-		r.Model = m.Model
-		if r.Model == "" {
-			r.Model = e.Model
-		}
-		if r.Model != "" {
-			r.ModelSource = "transcript"
-		}
+	model := m.Model
+	if model == "" {
+		model = e.Model
+	}
+	if model != "" {
+		r.Model, r.ModelSource = model, "transcript"
 	}
 	if r.Effort == "" {
 		for _, value := range []interface{}{m.Effort, m.ReasoningEffort, e.Effort, e.ReasoningEffort} {

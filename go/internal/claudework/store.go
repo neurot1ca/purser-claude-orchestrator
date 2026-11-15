@@ -267,7 +267,7 @@ func mergeExisting(path string, next *Record) error {
 	if next.ParentSessionID == nil {
 		next.ParentSessionID, next.ParentSource = old.ParentSessionID, old.ParentSource
 	}
-	if next.Model == "" {
+	if next.Model == "" || old.ModelSource == "transcript" && next.ModelSource != "transcript" {
 		next.Model, next.ModelSource = old.Model, old.ModelSource
 	}
 	if next.Effort == "" {

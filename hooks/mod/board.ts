@@ -21,11 +21,6 @@ const routeMinutes: Record<string, number> = {
 
 const clean = (value: unknown) => String(value ?? '—').replace(/\|/g, '\\|').replace(/[\r\n]/g, ' ')
 const safeClaudeText = (value: unknown) => String(value ?? 'unknown').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}\[\]()#+!~|]/g, '\\$&')
-const codePath = (value: unknown) => {
-  const path = String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ')
-  const ticks = '`'.repeat(Math.max(1, ...[...path.matchAll(/`+/g)].map(match => match[0].length + 1)))
-  return `${ticks} ${path.replace(/\|/g, '\\|')} ${ticks}`
-}
 const finiteTime = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 const duration = (seconds: number) => {
   const whole = Math.floor(Math.max(0, seconds))
@@ -216,13 +211,13 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
       state === 'running' && typeof record.started_at === 'string' && Number.isFinite(Date.parse(record.started_at)) ? now - Date.parse(record.started_at) / 1000 : undefined
     const task = record.agent_type === 'purser:dispatcher' && typeof record.task_label === 'string' && record.task_label.trim()
       ? ` · ${safeClaudeText(record.task_label)}` : ''
-    return `| ${safeClaudeText(record.agent_type)}${task} | ${safeClaudeText(record.model)} | ${state} | ${elapsed === undefined ? 'unknown' : duration(elapsed)} | ${record.transcript_path ? codePath(record.transcript_path) : 'unknown'} |`
+    return `| ${safeClaudeText(record.agent_type)}${task} | ${safeClaudeText(record.model)} | ${state} | ${elapsed === undefined ? 'unknown' : duration(elapsed)} |`
   })
   return {
     summary,
     detail: [
       ...(rows.length ? ['| ⚓ Task | Model | State | ETA | Review | Apply |', '| --- | --- | --- | --- | --- | --- |', ...rows.map(row => row.line)] : []),
-      ...(claude.length ? [...(rows.length ? [''] : []), '### Claude subagents', '| Agent type | Model | State | Duration | Transcript path |', '| --- | --- | --- | --- | --- |', ...claudeRows,
+      ...(claude.length ? [...(rows.length ? [''] : []), '### Claude subagents', '| Agent type | Model | State | Duration |', '| --- | --- | --- | --- |', ...claudeRows,
         ...(allClaude.length > claude.length ? [`Omitted Claude subagents: ${allClaude.length - claude.length}`] : [])] : []),
     ].join('\n'),
   }
@@ -256,7 +251,7 @@ async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
     key = await projectKeyFromRoot(rootResult.stdout.trim(), os)
     projectKeys.set(cwd, key)
   }
-  const claude = await readClaudeWork($, runtime, key)
+  const claude = await readClaudeWork($, runtime, key, os === 'Windows_NT')
   let entries
   try { entries = await $.fs.list(`${runtime}/async_jobs`) }
   catch (error) {
@@ -295,7 +290,7 @@ async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
   return renderJobBoard(files, Date.now() / 1000, os === 'Windows_NT')
 }
 
-async function readClaudeWork($, runtime: string, key: string): Promise<Job[]> {
+async function readClaudeWork($, runtime: string, key: string, windows: boolean): Promise<Job[]> {
   try {
     const entries = await $.fs.list(`${runtime}/claude_work`)
     const candidates = entries.filter(entry => entry.kind === 'file' && !entry.isLink && typeof entry.size === 'number' && entry.size <= 8192 &&
@@ -324,7 +319,53 @@ async function readClaudeWork($, runtime: string, key: string): Promise<Job[]> {
       } catch { /* Malformed observer records are skipped. */ }
       return undefined
     }))
-    return found.filter((record): record is Job => record !== undefined)
+    const records = found.filter((record): record is Job => record !== undefined)
+    await Promise.all(records.filter(record => record.state === 'running' && (!record.model || record.model_source === 'agent_meta') && typeof record.transcript_path === 'string' &&
+      typeof record.agent_id === 'string' && typeof record.session_id === 'string').map(async record => {
+      try {
+        let transcriptPath = record.transcript_path as string
+        const agentId = record.agent_id as string
+        const sessionId = record.session_id as string
+        const parts = transcriptPath.split(/[\\/]/)
+        const filename = parts.pop() ?? ''
+        const compare = (value: string) => windows ? value.toLowerCase() : value
+        if (new TextEncoder().encode(transcriptPath).length > 4096 ||
+            [agentId, sessionId].some(id => !id || id === '.' || id === '..' || /[\\/\x00-\x1f\x7f:]/.test(id)) ||
+            !(windows ? /^[a-z]:[\\/]|^\\\\/i.test(transcriptPath) : transcriptPath.startsWith('/')) ||
+            parts.some(part => part === '.' || part === '..')) return
+        if (compare(filename) === compare(`${sessionId}.jsonl`)) {
+          transcriptPath = [...parts, sessionId, 'subagents', `agent-${agentId}.jsonl`].join(windows ? '\\' : '/')
+        } else if (compare(parts.at(-1) ?? '') !== 'subagents' || compare(filename) !== compare(`agent-${agentId}.jsonl`)) return
+        const separator = windows ? /[\\/]/ : /\//
+        const agentParts = transcriptPath.split(separator)
+        const agentFile = agentParts.pop()!
+        // The mod API reads whole files; use the same size preflight as usage config reads.
+        const entry = (await $.fs.list(agentParts.join(windows ? '\\' : '/'))).find(entry => compare(entry.name) === compare(agentFile))
+        if (!entry || entry.kind !== 'file' || entry.isLink || !Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > 65536) return
+        const raw = await $.fs.read(transcriptPath)
+        if (new TextEncoder().encode(raw).length > 65536) return
+        let model = ''
+        for (const line of raw.split(/\r?\n/)) {
+          if (!line) continue
+          try {
+            const event = JSON.parse(line)
+            if (event?.type !== 'assistant' && event?.message?.role !== 'assistant') continue
+            if ([event.sessionId, event.session_id].some(id => typeof id === 'string' && id !== sessionId) ||
+                [event.agentId, event.agent_id].some(id => typeof id === 'string' && id !== agentId)) continue
+            const candidate = typeof event.message?.model === 'string' ? event.message.model : event.model
+            if (typeof candidate === 'string' && candidate.length > 0 && candidate.length <= 512) {
+              model = candidate
+              break
+            }
+          } catch { /* A partial final line is ignored. */ }
+        }
+        if (model) {
+          record.model = model
+          record.model_source = 'transcript'
+        }
+      } catch { /* Transcript reads are best effort; Windows locks leave the model empty. */ }
+    }))
+    return records
   } catch { return [] /* Observer read failures must not prevent Codex refreshes. */ }
 }
 

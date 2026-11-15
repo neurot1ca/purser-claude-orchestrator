@@ -213,7 +213,8 @@ test('renders Claude-only and mixed provider details without changing Codex rows
   const only = renderJobBoard({ indexes: [], jobs: [], claude: [{ ...claudeRecord, state: 'running' }] }, 1000)
   expect(only?.summary.map(part => part.text).join('')).toContain('Claude subagents running 1')
   expect(only?.detail).toContain('| Explore | claude-sonnet | running | 2m 5s |')
-  expect(only?.detail).toContain('C:\\Users\\雪\\agent.jsonl')
+  expect(only?.detail).not.toContain('Transcript path')
+  expect(only?.detail).not.toContain('C:\\Users\\雪\\agent.jsonl')
   const mixed = renderJobBoard({ ...files, claude: [claudeRecord] }, 1000)
   expect(mixed?.detail).toContain('| api fix | gpt-6-sol (high) | coding · codex-main active 3s ago |')
   expect(mixed?.detail).toContain('| Explore | claude-sonnet | done |')
@@ -232,7 +233,7 @@ test('adds an escaped task label only to dispatchers and keeps the compact colum
   expect(board.detail).not.toContain('not a dispatcher')
   expect(board.detail).not.toContain('Done')
   expect(board.detail).not.toContain('12 / 34')
-  expect(board.detail.split('\n').filter(line => line.startsWith('|')).every(line => line.split(' | ').length === 5)).toBe(true)
+  expect(board.detail.split('\n').filter(line => line.startsWith('| purser:dispatcher')).every(line => line.split(' | ').length === 4)).toBe(true)
 })
 
 test('normalizes Claude terminal states and hides rows without identifying metadata', () => {
@@ -299,18 +300,23 @@ test('hides Claude sessions, tokens and excerpts, and escapes paths and metadata
   expect(board?.detail).not.toContain('&lt;script&gt;')
   expect(board?.detail).not.toContain('Excerpt')
   expect(board?.detail).not.toContain('Tokens')
-  expect(board?.detail).toContain('/Users/雪/')
-  expect(board?.detail).toContain('agent')
-  expect(board?.detail).toContain(`\\\\server\\share\\${'x'.repeat(260)}`)
+  expect(board?.detail).not.toContain('Transcript path')
+  expect(board?.detail).not.toContain('/Users/雪/`agent`|.jsonl')
+  expect(board?.detail).not.toContain(`\\\\server\\share\\${'x'.repeat(260)}`)
 })
 
 test('reads only bounded current-project Claude subagents and refreshes both UI surfaces on pane open', async ($, on) => {
   mock.clock(on)
   let repoRoot = '/repo'
-  mock.env(on, { OS: 'Linux', HOME: '/home/test', OSTYPE: 'linux-gnu', HOSTTYPE: 'x86_64' })
+  let runtimeOS = 'Linux'
+  on('env.get', (_$, e) => ({ value: e.name === 'OS' ? runtimeOS : e.name === 'HOME' ? '/home/test' :
+    e.name === 'USERPROFILE' ? 'C:\\Users\\test' : e.name === 'OSTYPE' ? 'linux-gnu' : e.name === 'HOSTTYPE' ? 'x86_64' : undefined }))
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(repoRoot))
   const key = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
-  const good = { ...claudeRecord, state: 'running', project_key: key, transcript_path: '/Users/雪/agent.jsonl' }
+  const parentTranscript = '/home/test/.claude/projects/p/session-1.jsonl'
+  const agentTranscript = '/home/test/.claude/projects/p/session-1/subagents/agent-agent-1.jsonl'
+  const good = { ...claudeRecord, state: 'running', project_key: key, agent_id: 'agent-1', session_id: 'session-1',
+    model: '', model_source: '', transcript_path: parentTranscript }
   const filesByName = [
     [`${key}-${good.id}.json`, JSON.stringify(good)],
     [`${key}-${'e'.repeat(64)}.json`, JSON.stringify({ ...good, id: 'e'.repeat(64), kind: 'session' })],
@@ -319,12 +325,27 @@ test('reads only bounded current-project Claude subagents and refreshes both UI 
     [`${key}-${'b'.repeat(64)}.json`, 'x'.repeat(8193)],
   ]
   const content = Object.fromEntries(filesByName.map(([name, raw]) => [`claude_work/${name}`, raw]))
+  let transcriptReads = 0
+  let transcriptSize = 8192
+  let transcriptLocked = false
   on('process.run', () => ({ value: { exitCode: 0, stdout: `${repoRoot}\n`, stderr: '' } }))
   on('session.cwd', () => ({ value: repoRoot }))
-  on('fs.list', (_$, e) => e.path.replace(/\\/g, '/').endsWith('/claude_work')
-    ? { value: filesByName.map(([name, raw]) => ({ name, kind: 'file', size: raw.length, mtimeMs: 0, isLink: false })) }
-    : { deny: 'ENOENT: no such file or directory' })
+  on('fs.list', (_$, e) => {
+    const path = e.path.replace(/\\/g, '/')
+    if (path.endsWith('/claude_work')) return { value: filesByName.map(([name, raw]) => ({ name, kind: 'file', size: raw.length, mtimeMs: 0, isLink: false })) }
+    if (path.endsWith('/session-1/subagents')) return { value: [{ name: 'agent-agent-1.jsonl', kind: 'file', size: transcriptSize, mtimeMs: 0, isLink: false }] }
+    return { deny: 'ENOENT: no such file or directory' }
+  })
   on('fs.read', (_$, e) => {
+    if (e.path.replace(/\\/g, '/').endsWith('/subagents/agent-agent-1.jsonl')) {
+      transcriptReads++
+      if (transcriptLocked) return { deny: 'EACCES: antivirus lock' }
+      return { value: [
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'x'.repeat(5000) } }),
+        JSON.stringify({ type: 'assistant', sessionId: 'session-1', agentId: 'agent-1', message: { role: 'assistant', model: 'claude-haiku-5-5' } }),
+        JSON.stringify({ type: 'assistant', message: { role: 'assistant', model: 'later-model' } }),
+      ].join('\n') }
+    }
     const name = e.path.split(/[\\/]/).pop()!
     const raw = content[`claude_work/${name}`]
     return raw === undefined ? { deny: 'unexpected fixture path' } : { value: raw }
@@ -347,13 +368,38 @@ test('reads only bounded current-project Claude subagents and refreshes both UI 
       props: { title: 'Jobs', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 12 }, view: {} } })
     const detail = (await pane.find({ type: 'Markdown' }))?.text
     expect(detail).toContain('Claude subagents')
+    expect(detail).toContain('| Explore | claude-haiku-5-5 | running |')
     expect(detail).toContain('running')
-    expect(detail).toContain('/Users/雪/agent.jsonl')
+    expect(detail).not.toContain('Transcript path')
+    expect(detail).not.toContain(agentTranscript)
     expect(detail).not.toContain('session')
     expect(detail).not.toContain('ffffffffffffffff')
     await pane.unmount()
     await ui.unmount()
   }
+  expect(transcriptReads).toBeGreaterThan(0)
+  for (const scenario of [
+    { model: 'claude-opus-5-5', model_source: 'agent_meta', size: 8192, locked: false, path: parentTranscript, want: 'claude-haiku-5-5', reads: 1 },
+    { model: 'stored-transcript-model', model_source: 'transcript', size: 8192, locked: false, path: parentTranscript, want: 'stored-transcript-model', reads: 0 },
+    { model: 'fallback', model_source: 'agent_meta', size: 65537, locked: false, path: parentTranscript, want: 'fallback', reads: 0 },
+    { model: 'fallback', model_source: 'agent_meta', size: 8192, locked: true, path: parentTranscript, want: 'fallback', reads: 1 },
+    { model: 'fallback', model_source: 'agent_meta', size: 8192, locked: false, path: parentTranscript.replace('session-1.jsonl', 'other.jsonl'), want: 'fallback', reads: 0 },
+    { model: 'fallback', model_source: 'agent_meta', size: 8192, locked: false, path: parentTranscript.replace('/p/', '/p/../'), want: 'fallback', reads: 0 },
+    { model: 'fallback', model_source: 'agent_meta', size: 8192, locked: false, path: parentTranscript.replace('session-1.jsonl', 'SESSION-1.JSONL'), want: 'fallback', reads: 0 },
+    { model: 'fallback', model_source: 'agent_meta', size: 8192, locked: false, path: 'C:\\Users\\test\\.claude\\projects\\p\\SESSION-1.JSONL', want: 'claude-haiku-5-5', reads: 1 },
+  ]) {
+    runtimeOS = scenario.path.startsWith('C:') ? 'Windows_NT' : 'Linux'
+    content[`claude_work/${filesByName[0][0]}`] = JSON.stringify({ ...good, model: scenario.model, model_source: scenario.model_source, transcript_path: scenario.path })
+    transcriptSize = scenario.size
+    transcriptLocked = scenario.locked
+    const before = transcriptReads
+    const pane = await $.ui.mount({ plugin: 'purser', surface: 'terminal', component: 'Pane', requestId: 'purser-job-board',
+      props: { title: 'Jobs', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 12 }, view: {} } })
+    expect((await pane.find({ type: 'Markdown' }))?.text).toContain(`| Explore | ${scenario.want} | running |`)
+    expect(transcriptReads - before).toBe(scenario.reads)
+    await pane.unmount()
+  }
+  runtimeOS = 'Linux'
   repoRoot = '/other-project'
   const other = await $.ui.mount({ plugin: 'purser', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} } })

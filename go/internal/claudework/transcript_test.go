@@ -234,6 +234,31 @@ func TestCaptureAgentMetaPresentAbsentAndMalformed(t *testing.T) {
 	}
 }
 
+func TestSubagentTranscriptModelPrecedenceAndMetaFallback(t *testing.T) {
+	for _, tt := range []struct {
+		name, transcript, wantModel, wantSource string
+	}{
+		{name: "transcript wins with latest assistant model", transcript: `{"type":"assistant","sidechain":true,"message":{"role":"assistant","model":"claude-sonnet-5-5"}}` + "\n" + `{"type":"assistant","sidechain":true,"message":{"role":"assistant","model":"claude-haiku-5-5"}}`, wantModel: "claude-haiku-5-5", wantSource: "transcript"},
+		{name: "metadata fallback", transcript: `{"type":"assistant","sidechain":true,"message":{"role":"assistant"}}`, wantModel: "claude-opus-5-5", wantSource: "agent_meta"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := transcriptRecord(t, "subagent")
+			if err := os.WriteFile(r.TranscriptPath, []byte(tt.transcript+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			metaPath := strings.TrimSuffix(r.TranscriptPath, ".jsonl") + ".meta.json"
+			if err := os.WriteFile(metaPath, []byte(`{"pickedEffortModel":"claude-opus-5-5"}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			CaptureAgentMeta(&r)
+			ExtractTranscript(&r)
+			if r.Model != tt.wantModel || r.ModelSource != tt.wantSource {
+				t.Fatalf("model = %q source = %q, want %q/%q", r.Model, r.ModelSource, tt.wantModel, tt.wantSource)
+			}
+		})
+	}
+}
+
 func TestCaptureDispatcherFirstPrompt(t *testing.T) {
 	for _, tc := range []struct {
 		name, prompt, later, want            string
