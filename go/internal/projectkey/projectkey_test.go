@@ -54,12 +54,33 @@ func TestFor(t *testing.T) {
 			name: "case normalization",
 			check: func(t *testing.T) {
 				upper := strings.ToUpper(first)
-				if runtime.GOOS == "windows" {
-					if For(first) != For(upper) {
-						t.Fatalf("Windows case changed key for %q", first)
+				upperInfo, err := os.Stat(upper)
+				if err == nil {
+					firstInfo, statErr := os.Stat(first)
+					if statErr == nil && os.SameFile(firstInfo, upperInfo) {
+						if For(first) != For(upper) {
+							t.Fatalf("filesystem-equivalent case changed key for %q", first)
+						}
+						return
 					}
-				} else if For(first) == For(upper) {
-					t.Fatalf("non-Windows path casing was unexpectedly normalized: %q", first)
+				}
+				if runtime.GOOS == "windows" {
+					t.Fatalf("Windows case changed key for %q", first)
+				}
+				if For(first) == For(upper) {
+					t.Fatalf("distinct case-sensitive paths shared a key: %q", first)
+				}
+			},
+		},
+		{
+			name: "symlink alias",
+			check: func(t *testing.T) {
+				link := filepath.Join(t.TempDir(), "alias")
+				if err := os.Symlink(first, link); err != nil {
+					t.Skipf("cannot create directory symlink: %v", err)
+				}
+				if For(first) != For(link) {
+					t.Fatalf("symlink alias changed key: For(%q) = %q, For(%q) = %q", first, For(first), link, For(link))
 				}
 			},
 		},
