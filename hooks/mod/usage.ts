@@ -5,6 +5,7 @@ import type { BoardFiles } from './board.js'
 type Window = { percent: number; resetAt?: number; windowMs: number }
 type Quota = { fiveHour?: Window; sevenDay?: Window; model?: string; effort?: string }
 type SessionData = { quota: Quota; contextFill?: number; cost?: number }
+type SelectedAgents = { coder?: string; reviewer?: string; model?: string }
 type Pill = { id: string; label: string; value: string; detail: string; icon: string; color: string; brandMark?: 'claude' | 'codex'; percent?: number; tick?: number; countdown?: string }
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
@@ -111,7 +112,7 @@ function quotaPills(quota: Quota, prefix: string, now: number, contextFill?: num
   return pills
 }
 
-export function usageGroups(codex: Quota, session: SessionData, now = Date.now(), files?: BoardFiles): Pill[][] {
+export function usageGroups(codex: Quota, session: SessionData, now = Date.now(), files?: BoardFiles, selected: SelectedAgents = {}): Pill[][] {
   const claude = quotaPills(session.quota, 'claude', now, session.contextFill)
   if (session.contextFill !== undefined) {
     claude.push({
@@ -135,21 +136,17 @@ export function usageGroups(codex: Quota, session: SessionData, now = Date.now()
     ...job, agent: job.servedAgent ?? job.activeAgent, model: job.servedAgent ? job.servedModel : job.model,
   }))
     .sort((a, b) => b.startedAt - a.startedAt)
-  const coder = jobs.find(job => job.agent !== 'opencode')
-  const reviewed = jobs.map(job => {
-    const index = files?.indexes.find(index => index.jobId === job.jobId && index.call === job.call)
-    return files?.bundles?.[index?.call_key] ?? job
-  }).find(bundle => bundle.reviewer1_result && bundle.reviewer1_result !== 'REVIEWER1_UNAVAILABLE' && !bundle.reviewer1_skipped_reason)
   const free = jobs.find(job => job.agent === 'opencode' && job.startedAt * 1000 <= now && now - job.startedAt * 1000 <= 7 * 24 * 60 * 60_000)
   const agents: Pill[] = []
   for (const [role, agent, model, detail] of [
-    ['coder', coder?.agent, coder?.model, 'Coder Purser used for the latest job'],
-    ['reviewer', reviewed?.reviewer1_provider, reviewed?.reviewer1_model_requested, 'Reviewer Purser used for the latest reviewed job'],
+    ['coder', selected.coder, undefined, 'Coder selected for Purser'],
+    ['reviewer', selected.reviewer, selected.model, 'Reviewer selected for Purser'],
     ['free', free?.agent, free?.model, 'OpenCode Purser used in the last 7 days'],
   ]) {
-    if (typeof agent !== 'string' || !agent.trim() || agent.trim().toLowerCase() === 'unknown' ||
-        typeof model !== 'string' || !model.trim() || model.trim().toLowerCase() === 'unknown') continue
-    agents.push({ id: role, label: role, value: `${agent} · ${model.startsWith(`${agent}/`) ? model.slice(agent.length + 1) : model}`, detail, icon: '', color: '#788797' })
+    if (typeof agent !== 'string' || !agent.trim() || ['unknown', 'none'].includes(agent.toLowerCase()) ||
+        (role === 'free' && !model) || (model !== undefined && (typeof model !== 'string' || !model.trim() || model.toLowerCase() === 'unknown'))) continue
+    const value = model ? `${agent} · ${model.startsWith(`${agent}/`) ? model.slice(agent.length + 1) : model}` : agent
+    agents.push({ id: role, label: role, value, detail, icon: '', color: '#788797' })
   }
   groups.push(agents)
   if (session.cost !== undefined) {
@@ -216,6 +213,91 @@ async function readCodexQuota($, root: string, now: number): Promise<Quota> {
   } catch { return {} }
 }
 
+// Only role keys need decoding; unrelated multiline values are skipped.
+export function parseSelectedAgents(raw: string): SelectedAgents {
+  if (raw.length > 65536 || new TextEncoder().encode(raw).length > 65536) return {}
+  const values = new Map<string, string>()
+  const invalid = new Set<string>()
+  let section = ''
+  let quote = ''
+  let depth = 0
+  const string = (value: string) => /^(?:"([A-Za-z0-9._:/-]+)"|'([A-Za-z0-9._:/-]+)')$/.exec(value.trim())
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const continuation = depth > 0 || quote.length === 3
+    let line = rawLine
+    for (let i = 0; i < rawLine.length; i++) {
+      const character = rawLine[i]
+      if (quote) {
+        if (quote[0] === '"' && character === '\\') { i++; continue }
+        if (rawLine.startsWith(quote, i)) { i += quote.length - 1; quote = '' }
+      } else if (character === '#') {
+        line = rawLine.slice(0, i)
+        break
+      } else if (character === '"' || character === "'") {
+        quote = rawLine.startsWith(character.repeat(3), i) ? character.repeat(3) : character
+        i += quote.length - 1
+      } else if (character === '[') depth++
+      else if (character === ']') depth = Math.max(0, depth - 1)
+    }
+    if (quote.length === 1) quote = ''
+    line = line.trim()
+    if (continuation || !line) continue
+    if (line.startsWith('[')) {
+      const header = /^\[([A-Za-z0-9_.-]+)\]$/.exec(line)
+      section = header?.[1] ?? ''
+      continue
+    }
+    const entry = /^([A-Za-z0-9_]+)\s*=\s*(.*)$/.exec(line)
+    const name = entry?.[1] ?? /^([A-Za-z0-9_]+)\b/.exec(line)?.[1]
+    const key = `${section}.${name}`
+    const rawValue = entry?.[2] ?? ''
+    if (key === 'reviewer.selected') {
+      if (!/^\{.*\}$/.test(rawValue)) { invalid.add('reviewer'); continue }
+      for (const field of rawValue.slice(1, -1).split(',')) {
+        const pair = /^\s*(agent|model|effort)\s*=\s*(.+?)\s*$/.exec(field)
+        if (!pair || values.has(`reviewer.selected.${pair[1]}`)) { invalid.add('reviewer'); break }
+        const value = string(pair[2])
+        if (!value) { invalid.add('reviewer'); break }
+        values.set(`reviewer.selected.${pair[1]}`, value[1] ?? value[2])
+      }
+    } else if (['roles.coder', 'roles.reviewer', 'coding.coder_agent', 'coding.reviewer1_agent', 'coding.reviewer1_model_requested', 'reviewer.selected.agent', 'reviewer.selected.model'].includes(key)) {
+      const value = string(rawValue)
+      if (!value || values.has(key)) { invalid.add(key === 'roles.coder' || key === 'coding.coder_agent' ? 'coder' : 'reviewer'); continue }
+      values.set(key, value[1] ?? value[2])
+    }
+  }
+  const agents = ['codex', 'agy', 'claude', 'opencode', 'cursor']
+  const role = values.get('roles.coder')
+  const coder = values.get('coding.coder_agent') ?? (role === 'codex' ? role : undefined)
+  const selected: SelectedAgents = {}
+  if (!invalid.has('coder') && coder && agents.includes(coder) && (role ?? 'codex') === coder) selected.coder = coder
+  if (invalid.has('reviewer') || values.get('roles.reviewer') === 'none') return selected
+  const reviewer = values.get('reviewer.selected.agent') ?? values.get('coding.reviewer1_agent') ?? values.get('roles.reviewer')
+  if (reviewer && agents.includes(reviewer)) {
+    selected.reviewer = reviewer
+    selected.model = values.get('reviewer.selected.model') ?? values.get('coding.reviewer1_model_requested')
+  }
+  return selected
+}
+
+let selectedCache: { path: string; mtime: number; size: number; selected: SelectedAgents } | undefined
+
+export async function readSelectedAgents($): Promise<SelectedAgents> {
+  try {
+    const os = await $.env.get('OS')
+    const home = os === 'Windows_NT' ? await $.env.get('USERPROFILE') : await $.env.get('HOME')
+    if (!home) return {}
+    const dir = `${home.replace(/[\\/]+$/, '')}/.orchestrator`
+    const entry = (await $.fs.list(dir)).find(entry => entry.name === 'config.toml' && entry.kind === 'file')
+    if (!entry || !finite(entry.size) || entry.size < 0 || entry.size > 65536) return {}
+    const path = `${dir}/config.toml`
+    if (finite(entry.mtimeMs) && selectedCache?.path === path && selectedCache.mtime === entry.mtimeMs && selectedCache.size === entry.size) return selectedCache.selected
+    const selected = parseSelectedAgents(await $.fs.read(path))
+    selectedCache = finite(entry.mtimeMs) ? { path, mtime: entry.mtimeMs, size: entry.size, selected } : undefined
+    return selected
+  } catch { selectedCache = undefined; return {} }
+}
+
 async function runtimeStateRoot($): Promise<string | undefined> {
   const os = await $.env.get('OS')
   const [purserState, claudeConfig, home] = await Promise.all([
@@ -256,11 +338,11 @@ export function registerUsage(on) {
         timerStarted = true
         $.clock.every(5000, () => $.ui.invalidate('ui.render'))
       }
-      const [usage, root] = await Promise.all([$.session.usage(), runtimeStateRoot($)])
+      const [usage, root, selected] = await Promise.all([$.session.usage(), runtimeStateRoot($), readSelectedAgents($)])
       const session = mapSessionUsage(usage)
       const codex = root ? await readCodexQuota($, root, Date.now()) : {}
       const cwd = await $.session.cwd().catch(() => undefined)
-      const groups = usageGroups(codex, session, Date.now(), cwd === undefined ? undefined : cachedProjectJobs(cwd))
+      const groups = usageGroups(codex, session, Date.now(), cwd === undefined ? undefined : cachedProjectJobs(cwd), selected)
       if (!groups.length) return prior
       const { Box, Text, Svg } = $.ui.resolve(e)
       const terminal = e.surface === 'terminal' || !Svg

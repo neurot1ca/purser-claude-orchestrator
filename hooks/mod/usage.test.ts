@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { barColor, formatUsageNumber, mapSessionUsage, pillSvg, readCodexModel, readQuotaSnapshot, registerUsage, terminalBar, timeElapsedTick, usageGroups } from './usage.js'
+import { barColor, formatUsageNumber, mapSessionUsage, parseSelectedAgents, pillSvg, readCodexModel, readQuotaSnapshot, readSelectedAgents, registerUsage, terminalBar, timeElapsedTick, usageGroups } from './usage.js'
 import { registerBoard } from './board.js'
 
 const now = Date.parse('2026-10-04T12:00:00Z')
@@ -25,15 +25,17 @@ const agentFiles = {
   ],
   bundles: { ['a'.repeat(64)]: { reviewer1_result: 'NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE', reviewer1_provider: 'agy', reviewer1_model_requested: 'gemini-3.8-flash-high' } },
 }
+const selectedConfig = '[roles]\r\ncoder = "codex"\r\nreviewer = "claude"\r\n[coding]\r\ncoder_agent = "codex" # selected coder\r\n[reviewer]\r\nselected = { agent = "agy", model = "gemini-3.8-flash-high" } # selected reviewer\r\n'
 
-test('shows all three agent pills after Codex using only the board reads', async ($, on) => {
-  const groups = usageGroups({ model: 'gpt-6.1-sol' }, mapSessionUsage(usage, now), now, agentFiles)
+test('shows selected agents after Codex and keeps free sourced from board reads', async ($, on) => {
+  const groups = usageGroups({ model: 'gpt-6.1-sol' }, mapSessionUsage(usage, now), now, agentFiles, parseSelectedAgents(selectedConfig))
   expect(groups.map(group => group.map(pill => pill.id))).toEqual([
     ['claude-5h', 'claude-7d', 'claude-context'], ['codex-model'], ['coder', 'reviewer', 'free'], ['cost'],
   ])
   expect(groups[2].map(pill => [pill.label, pill.value])).toEqual([
-    ['coder', 'codex · gpt-6.1-sol'], ['reviewer', 'agy · gemini-3.8-flash-high'], ['free', 'opencode · beam-free'],
+    ['coder', 'codex'], ['reviewer', 'agy · gemini-3.8-flash-high'], ['free', 'opencode · beam-free'],
   ])
+  expect(groups[2].slice(0, 2).map(pill => pill.detail)).toEqual(['Coder selected for Purser', 'Reviewer selected for Purser'])
   expect(usageGroups({}, { quota: {} }, now, { ...agentFiles, jobs: [{ ...agentFiles.jobs[0], model: 'opencode/beam-free' }] })[0][0].value).toBe('opencode · beam-free')
   for (const pill of groups[2]) {
     expect(terminalBar(pill)).toBeUndefined()
@@ -53,10 +55,16 @@ test('shows all three agent pills after Codex using only the board reads', async
     [`bundle_artifacts/${'a'.repeat(64)}.json`, agentFiles.bundles['a'.repeat(64)]],
   ])
   const reads: string[] = []
-  on('fs.list', (_$, e) => ({ value: e.path.replace(/\\/g, '/').endsWith('/async_jobs') ? agentFiles.indexes.map(index => ({
+  on('fs.list', (_$, e) => ({ value: e.path.replace(/\\/g, '/').endsWith('/.orchestrator')
+    ? [{ name: 'config.toml', kind: 'file', size: selectedConfig.length, mtimeMs: 1, isLink: false }]
+    : e.path.replace(/\\/g, '/').endsWith('/async_jobs') ? agentFiles.indexes.map(index => ({
     name: `${index.jobId}.json`, kind: 'file', size: 100, mtimeMs: now, isLink: false,
   })) : [] }))
   on('fs.read', (_$, e) => {
+    if (e.path.replace(/\\/g, '/').endsWith('/.orchestrator/config.toml')) {
+      reads.push('config.toml')
+      return { value: selectedConfig }
+    }
     const path = e.path.replace(/\\/g, '/').split('/purser/')[1]
     reads.push(path)
     return records[path] ? { value: JSON.stringify(records[path]) } : { deny: 'ENOENT' }
@@ -71,21 +79,95 @@ test('shows all three agent pills after Codex using only the board reads', async
     plugin: 'usage-agents-test', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} },
   })
-  expect(await ui.find({ type: 'Text', text: /coder codex · gpt-6.1-sol/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^coder codex$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /reviewer agy · gemini-3.8-flash-high/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /free opencode · beam-free/ })).toBeDefined()
-  expect(reads).toHaveLength(6) // Two indexes, two jobs, leases, and one bundle; no pill reads.
+  expect(reads).toHaveLength(7) // Existing board reads plus one user config read.
   await ui.unmount()
 })
 
-test('omits reviewer identity when the latest reviewed job lacks its model', () => {
-  const files = { ...agentFiles, bundles: { ['a'.repeat(64)]: { ...agentFiles.bundles['a'.repeat(64)], reviewer1_model_requested: undefined } } }
-  expect(usageGroups({}, { quota: {} }, now, files)[0].map(pill => pill.id)).toEqual(['coder', 'free'])
+test('shows the selected reviewer agent alone when no model is selected', () => {
+  const selected = parseSelectedAgents('[roles]\nreviewer = "agy"\n[reviewer]\nselected = { agent = "codex" }')
+  expect(usageGroups({}, { quota: {} }, now, undefined, selected)[0][0]).toMatchObject({ id: 'reviewer', value: 'codex' })
+})
+
+test('omits a reviewer turned off by roles even with a selected reviewer', () => {
+  const selected = parseSelectedAgents(selectedConfig.replace('reviewer = "claude"', 'reviewer = "none"'))
+  expect(usageGroups({}, { quota: {} }, now, undefined, selected)[0].map(pill => pill.id)).toEqual(['coder'])
+})
+
+test('takes the coder from coding config and omits conflicting roles', () => {
+  expect(parseSelectedAgents('[roles]\ncoder = "claude"\n[coding]\ncoder_agent = "claude"').coder).toBe('claude')
+  expect(parseSelectedAgents('[roles]\ncoder = "claude"').coder).toBeUndefined()
+  expect(parseSelectedAgents('[roles]\ncoder = "codex"\n[coding]\ncoder_agent = "claude"').coder).toBeUndefined()
+})
+
+test('omits selections for a missing config file', async ($, on) => {
+  mock.env(on, { OS: 'Linux', HOME: '/missing-config' })
+  on('fs.list', () => ({ deny: 'ENOENT' }))
+  on('fs.read', () => { throw new Error('must not read a missing config') })
+  const selected = await readSelectedAgents($)
+  expect(selected).toEqual({})
+  expect(usageGroups({}, { quota: {} }, now, undefined, selected)).toEqual([])
+})
+
+test('bounds config parsing and omits unsupported or duplicate selections', () => {
+  for (const raw of ['#'.repeat(65537), '[roles]\ncoder = "codex"\ncoder = "claude"', '[reviewer]\nselected = { agent = "agy", model = invalid }']) {
+    expect(parseSelectedAgents(raw)).toEqual({})
+  }
+})
+
+test('skips an unrelated multiline array while preserving selected agents', () => {
+  const raw = '[files]\r\npaths = [\r\n "a", # first path\r\n ["b"]\r\n]\r\n' + selectedConfig
+  expect(parseSelectedAgents(raw)).toEqual({ coder: 'codex', reviewer: 'agy', model: 'gemini-3.8-flash-high' })
+})
+
+test('skips unrelated multiline basic string contents including apparent role keys', () => {
+  const raw = '[notes]\ntext = """\n[roles]\ncoder = "claude"\n[reviewer]\nselected = { agent = "codex" }\n"""\n' + selectedConfig
+  expect(parseSelectedAgents(raw)).toEqual({ coder: 'codex', reviewer: 'agy', model: 'gemini-3.8-flash-high' })
+})
+
+test('omits only the reviewer pill when its selected table is malformed', () => {
+  const selected = parseSelectedAgents(selectedConfig.replace('model = "gemini-3.8-flash-high"', 'model = invalid'))
+  expect(usageGroups({}, { quota: {} }, now, undefined, selected)[0].map(pill => [pill.id, pill.value])).toEqual([['coder', 'codex']])
+})
+
+test('uses platform home paths, caches unchanged config, and omits locked or oversized reads', async () => {
+  for (const [os, home] of [['Windows_NT', 'C:\\Users\\pill-test\\'], ['Darwin', '/Users/pill-test/'], ['Linux', '/home/pill-test/']]) {
+    let reads = 0
+    let mtime = 1
+    let size = selectedConfig.length
+    let locked = false
+    const paths: string[] = []
+    const api = {
+      env: { get: async (name: string) => name === 'OS' ? os : name === (os === 'Windows_NT' ? 'USERPROFILE' : 'HOME') ? home : '/wrong-home' },
+      fs: {
+        list: async () => [{ name: 'config.toml', kind: 'file', size, mtimeMs: mtime }],
+        read: async (path: string) => {
+          reads++
+          paths.push(path)
+          if (locked) throw new Error('ERROR_SHARING_VIOLATION')
+          return selectedConfig
+        },
+      },
+    }
+    expect((await readSelectedAgents(api)).coder).toBe('codex')
+    expect((await readSelectedAgents(api)).reviewer).toBe('agy')
+    expect(reads).toBe(1)
+    expect(paths).toEqual([`${home.replace(/[\\/]+$/, '')}/.orchestrator/config.toml`])
+    mtime++
+    locked = true
+    expect(await readSelectedAgents(api)).toEqual({})
+    expect(reads).toBe(2)
+    size = 65537
+    expect(await readSelectedAgents(api)).toEqual({})
+    expect(reads).toBe(2)
+  }
 })
 
 test('omits free when OpenCode has not run in the last seven days', () => {
   const files = { ...agentFiles, jobs: agentFiles.jobs.map(job => job.activeAgent === 'opencode' ? { ...job, startedAt: now / 1000 - 7 * 86400 - 1 } : job) }
-  expect(usageGroups({}, { quota: {} }, now, files)[0].map(pill => pill.id)).toEqual(['coder', 'reviewer'])
+  expect(usageGroups({}, { quota: {} }, now, files)).toEqual([])
 })
 
 test('formats compact counts and applies all quota bar thresholds', () => {
@@ -287,8 +369,8 @@ test('reads Codex quota from the newest artifact that contains it', async ($, on
     plugin: 'usage-codex-test', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} },
   })
-  expect(listed).toHaveLength(1)
-  expect(listed[0].replace(/\\/g, '/').toLowerCase().endsWith('/shared/purser-state/bundle_artifacts')).toBe(true)
+  expect(listed).toHaveLength(2)
+  expect(listed.some(path => path.replace(/\\/g, '/').toLowerCase().endsWith('/shared/purser-state/bundle_artifacts'))).toBe(true)
   expect(reads.map(path => path.split(/[\\/]/).at(-1))).toEqual([newest, prior])
   expect(await ui.find({ type: 'Text', text: /codex 5h/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: />_/ })).toBeDefined()
