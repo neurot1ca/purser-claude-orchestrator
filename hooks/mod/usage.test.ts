@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { barColor, formatUsageNumber, mapSessionUsage, pillSvg, readCodexModel, readQuotaSnapshot, registerUsage, terminalBar, timeElapsedTick, usageGroups } from './usage.js'
+import { registerBoard } from './board.js'
 
 const now = Date.parse('2026-10-04T12:00:00Z')
 const quotaRecord = (five = 69, seven = 90) => ({ codex_quota: {
@@ -15,6 +16,76 @@ const usage = {
   ],
   cost: { usd: 4.32 },
 }
+
+const agentFiles = {
+  indexes: [{ jobId: 'a'.repeat(64), call: 'coder', call_key: 'a'.repeat(64) }, { jobId: 'b'.repeat(64), call: 'free' }],
+  jobs: [
+    { jobId: 'b'.repeat(64), call: 'free', activeAgent: 'opencode', model: 'beam-free', startedAt: now / 1000 - 10 },
+    { jobId: 'a'.repeat(64), call: 'coder', servedAgent: 'codex', servedModel: 'gpt-6.1-sol', model: 'original-request', startedAt: now / 1000 - 60 },
+  ],
+  bundles: { ['a'.repeat(64)]: { reviewer1_result: 'NO_MATERIAL_FINDING_IN_REVIEWED_SCOPE', reviewer1_provider: 'agy', reviewer1_model_requested: 'gemini-3.8-flash-high' } },
+}
+
+test('shows all three agent pills after Codex using only the board reads', async ($, on) => {
+  const groups = usageGroups({ model: 'gpt-6.1-sol' }, mapSessionUsage(usage, now), now, agentFiles)
+  expect(groups.map(group => group.map(pill => pill.id))).toEqual([
+    ['claude-5h', 'claude-7d', 'claude-context'], ['codex-model'], ['coder', 'reviewer', 'free'], ['cost'],
+  ])
+  expect(groups[2].map(pill => [pill.label, pill.value])).toEqual([
+    ['coder', 'codex · gpt-6.1-sol'], ['reviewer', 'agy · gemini-3.8-flash-high'], ['free', 'opencode · beam-free'],
+  ])
+  for (const pill of groups[2]) {
+    expect(terminalBar(pill)).toBeUndefined()
+    expect(pillSvg(pill)).not.toContain('height="4"')
+    expect(pillSvg(pill)).toContain(`<title>${pill.detail}</title>`)
+  }
+  mock.clock(on)
+  mock.env(on, { OS: 'Linux', HOME: '/home/test' })
+  on('session.cwd', () => ({ value: '/agent-project' }))
+  on('session.usage', () => ({ value: {} }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '/agent-project\n', stderr: '' } }))
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('/agent-project'))
+  const key = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16)
+  const records = Object.fromEntries([
+    ...agentFiles.indexes.map(index => [`async_jobs/${index.jobId}.json`, { ...index, project_key: key }]),
+    ...agentFiles.jobs.map(job => [`codex_exec_mcp/jobs/${job.jobId}.json`, { ...job, startedAt: Date.now() / 1000 - 60 }]),
+    [`bundle_artifacts/${'a'.repeat(64)}.json`, agentFiles.bundles['a'.repeat(64)]],
+  ])
+  const reads: string[] = []
+  on('fs.list', (_$, e) => ({ value: e.path.replace(/\\/g, '/').endsWith('/async_jobs') ? agentFiles.indexes.map(index => ({
+    name: `${index.jobId}.json`, kind: 'file', size: 100, mtimeMs: now, isLink: false,
+  })) : [] }))
+  on('fs.read', (_$, e) => {
+    const path = e.path.replace(/\\/g, '/').split('/purser/')[1]
+    reads.push(path)
+    return records[path] ? { value: JSON.stringify(records[path]) } : { deny: 'ENOENT' }
+  })
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: 'base prompt' })
+  })
+  registerUsage(on)
+  registerBoard(on)
+  const ui = await $.ui.mount({
+    plugin: 'usage-agents-test', surface: 'terminal', component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} },
+  })
+  expect(await ui.find({ type: 'Text', text: /coder codex · gpt-6.1-sol/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /reviewer agy · gemini-3.8-flash-high/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /free opencode · beam-free/ })).toBeDefined()
+  expect(reads).toHaveLength(6) // Two indexes, two jobs, leases, and one bundle; no pill reads.
+  await ui.unmount()
+})
+
+test('omits reviewer identity when the latest reviewed job lacks its model', () => {
+  const files = { ...agentFiles, bundles: { ['a'.repeat(64)]: { ...agentFiles.bundles['a'.repeat(64)], reviewer1_model_requested: undefined } } }
+  expect(usageGroups({}, { quota: {} }, now, files)[0].map(pill => pill.id)).toEqual(['coder', 'free'])
+})
+
+test('omits free when OpenCode has not run in the last seven days', () => {
+  const files = { ...agentFiles, jobs: agentFiles.jobs.map(job => job.activeAgent === 'opencode' ? { ...job, startedAt: now / 1000 - 7 * 86400 - 1 } : job) }
+  expect(usageGroups({}, { quota: {} }, now, files)[0].map(pill => pill.id)).toEqual(['coder', 'reviewer'])
+})
 
 test('formats compact counts and applies all quota bar thresholds', () => {
   expect(formatUsageNumber(15_600)).toBe('15.6k')

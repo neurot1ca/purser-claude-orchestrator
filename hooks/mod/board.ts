@@ -3,7 +3,7 @@ import { projectKeyFromRoot } from './project-key.js'
 
 type Job = Record<string, any>
 
-type BoardFiles = {
+export type BoardFiles = {
   indexes: Job[]
   jobs: Job[]
   claude?: Job[]
@@ -224,6 +224,12 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
 }
 
 const projectKeys = new Map<string, string>()
+let latestJobs: { cwd: string; files: BoardFiles } | undefined
+
+// Usage reuses the board's project-filtered records without another disk read.
+export function cachedProjectJobs(cwd: string): BoardFiles | undefined {
+  return latestJobs?.cwd === cwd ? latestJobs.files : undefined
+}
 
 async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
   const os = await $.env.get('OS')
@@ -252,6 +258,7 @@ async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
     const failure = error as { code?: unknown; message?: unknown }
     if (failure?.code === 'ENOENT' ||
         (typeof failure?.message === 'string' && /\b(?:ENOENT|no such file or directory)\b/i.test(failure.message))) {
+      latestJobs = { cwd, files: { indexes: [], jobs: [] } }
       return renderJobBoard({ indexes: [], jobs: [], claude }, Date.now() / 1000, os === 'Windows_NT')
     }
     throw error
@@ -278,7 +285,9 @@ async function readBoard($, cwd: string): Promise<JobBoard | undefined> {
     try { bundles[index.call_key] = JSON.parse(await $.fs.read(`${runtime}/bundle_artifacts/${index.call_key}.json`)) }
     catch { /* Review and apply fall back to the job record. */ }
   }
-  return renderJobBoard({ indexes, jobs, leases, bundles, claude }, Date.now() / 1000, os === 'Windows_NT')
+  const files = { indexes, jobs, leases, bundles, claude }
+  latestJobs = { cwd, files }
+  return renderJobBoard(files, Date.now() / 1000, os === 'Windows_NT')
 }
 
 async function readClaudeWork($, runtime: string, key: string): Promise<Job[]> {

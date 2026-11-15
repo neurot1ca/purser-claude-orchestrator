@@ -1,4 +1,6 @@
 import { stateRoot } from './state-root.js'
+import { cachedProjectJobs } from './board.js'
+import type { BoardFiles } from './board.js'
 
 type Window = { percent: number; resetAt?: number; windowMs: number }
 type Quota = { fiveHour?: Window; sevenDay?: Window; model?: string; effort?: string }
@@ -109,7 +111,7 @@ function quotaPills(quota: Quota, prefix: string, now: number, contextFill?: num
   return pills
 }
 
-export function usageGroups(codex: Quota, session: SessionData, now = Date.now()): Pill[][] {
+export function usageGroups(codex: Quota, session: SessionData, now = Date.now(), files?: BoardFiles): Pill[][] {
   const claude = quotaPills(session.quota, 'claude', now, session.contextFill)
   if (session.contextFill !== undefined) {
     claude.push({
@@ -129,6 +131,27 @@ export function usageGroups(codex: Quota, session: SessionData, now = Date.now()
   }
   if (codexPills.length) codexPills[0].brandMark = 'codex'
   const groups: Pill[][] = [claude, codexPills]
+  const jobs = (files?.jobs ?? []).filter(job => finite(job.startedAt)).map(job => ({
+    ...job, agent: job.servedAgent ?? job.activeAgent, model: job.servedAgent ? job.servedModel : job.model,
+  }))
+    .sort((a, b) => b.startedAt - a.startedAt)
+  const coder = jobs.find(job => job.agent !== 'opencode')
+  const reviewed = jobs.map(job => {
+    const index = files?.indexes.find(index => index.jobId === job.jobId && index.call === job.call)
+    return files?.bundles?.[index?.call_key] ?? job
+  }).find(bundle => bundle.reviewer1_result && bundle.reviewer1_result !== 'REVIEWER1_UNAVAILABLE' && !bundle.reviewer1_skipped_reason)
+  const free = jobs.find(job => job.agent === 'opencode' && job.startedAt * 1000 <= now && now - job.startedAt * 1000 <= 7 * 24 * 60 * 60_000)
+  const agents: Pill[] = []
+  for (const [role, agent, model, detail] of [
+    ['coder', coder?.agent, coder?.model, 'Coder Purser used for the latest job'],
+    ['reviewer', reviewed?.reviewer1_provider, reviewed?.reviewer1_model_requested, 'Reviewer Purser used for the latest reviewed job'],
+    ['free', free?.agent, free?.model, 'OpenCode Purser used in the last 7 days'],
+  ]) {
+    if (typeof agent !== 'string' || !agent.trim() || agent.trim().toLowerCase() === 'unknown' ||
+        typeof model !== 'string' || !model.trim() || model.trim().toLowerCase() === 'unknown') continue
+    agents.push({ id: role, label: role, value: `${agent} · ${model}`, detail, icon: '', color: '#788797' })
+  }
+  groups.push(agents)
   if (session.cost !== undefined) {
     const context = session.contextFill === undefined ? '' : `; context ${session.contextFill.toFixed(1)}%`
     groups.push([{
@@ -236,7 +259,8 @@ export function registerUsage(on) {
       const [usage, root] = await Promise.all([$.session.usage(), runtimeStateRoot($)])
       const session = mapSessionUsage(usage)
       const codex = root ? await readCodexQuota($, root, Date.now()) : {}
-      const groups = usageGroups(codex, session)
+      const cwd = await $.session.cwd().catch(() => undefined)
+      const groups = usageGroups(codex, session, Date.now(), cwd === undefined ? undefined : cachedProjectJobs(cwd))
       if (!groups.length) return prior
       const { Box, Text, Svg } = $.ui.resolve(e)
       const terminal = e.surface === 'terminal' || !Svg

@@ -87,8 +87,8 @@ async function lifecycle($, e, next, name: LifecycleEvent) {
 
 export function register(on) {
   registerClaudeWork(on)
-  registerBoard(on)
   registerUsage(on)
+  registerBoard(on)
   registerEnforcement(on)
   registerAutoCompact(on)
   registerLanguage(on)
