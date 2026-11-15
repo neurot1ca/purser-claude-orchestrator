@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.249 — 2026-11-15
+- **Fixed:** write-mode OpenCode jobs get explicit permissions, so their bash calls are no longer rejected.
+- **Added:** the Claude subagents table shows which Purser task a dispatcher runs, and drops the excerpt and tokens columns.
+- **Added:** the bar shows the selected coder and reviewer, and the free OpenCode model when it ran in the last 7 days.
+
 ## 0.1.248 — 2026-11-15
 - **Fixed:** the Claude subagents list shows each subagent's type, model and done state, and hides empty phantom rows.
 - **Fixed:** a subagent's compact no longer rewrites the main session handoff or cancels its idle auto-compact.
