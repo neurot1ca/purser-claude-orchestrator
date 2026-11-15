@@ -234,6 +234,82 @@ func TestCaptureAgentMetaPresentAbsentAndMalformed(t *testing.T) {
 	}
 }
 
+func TestCaptureDispatcherFirstPrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name, prompt, later, want            string
+		blocks, mismatch, badPath, malformed bool
+	}{
+		{name: "CRLF string", prompt: "label: Fix API\r\nORCH|task=api-fix|phase=implementation\r\nWork", want: "Fix API"},
+		{name: "text blocks and unicode bound", prompt: "label: " + strings.Repeat("雪", 100), blocks: true, want: strings.Repeat("雪", 80)},
+		{name: "task fallback", prompt: "ORCH|task=api-fix|phase=implementation", want: "api-fix"},
+		{name: "empty label fallback", prompt: "label: \nORCH|task=api-fix|phase=plan", want: "api-fix"},
+		{name: "never later prompt", prompt: "Start", later: "label: wrong\nORCH|task=wrong"},
+		{name: "ambiguous label", prompt: "label: one\nlabel: two\nORCH|task=api-fix"},
+		{name: "ambiguous task", prompt: "label: one\nORCH|task=one\nORCH|task=two"},
+		{name: "unsafe label", prompt: "label: unsafe\x00label\nORCH|task=api-fix"},
+		{name: "identity mismatch", prompt: "label: wrong", mismatch: true},
+		{name: "path mismatch", prompt: "label: wrong", badPath: true},
+		{name: "malformed before prompt", prompt: "label: wrong", malformed: true},
+		{name: "bounded read", prompt: strings.Repeat("x", transcriptLimit) + "\nlabel: wrong"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := transcriptRecord(t, "subagent")
+			agentType := "purser:dispatcher"
+			r.AgentType = &agentType
+			// Exercise Claude's agent- prefix and portable slash paths on Windows too.
+			r.TranscriptPath = filepath.ToSlash(filepath.Join(filepath.Dir(r.TranscriptPath), "agent-"+*r.AgentID+".jsonl"))
+			if tc.badPath {
+				r.TranscriptPath = filepath.Join(filepath.Dir(r.TranscriptPath), "wrong.jsonl")
+			}
+			user := func(prompt string) string {
+				var content any = prompt
+				if tc.blocks {
+					content = []any{map[string]any{"type": "text", "text": prompt}}
+				}
+				session := *r.SessionID
+				if tc.mismatch {
+					session = "another-session"
+				}
+				return line(t, map[string]any{"type": "user", "sessionId": session, "agentId": *r.AgentID,
+					"isSidechain": true, "message": map[string]any{"role": "user", "content": content}}) + "\r\n"
+			}
+			data := user(tc.prompt)
+			if tc.malformed {
+				data = "{bad json}\n" + data
+			}
+			if tc.later != "" {
+				data += user(tc.later)
+			}
+			if err := os.WriteFile(r.TranscriptPath, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			CaptureAgentMeta(&r)
+			if r.TaskLabel != tc.want {
+				t.Fatalf("label = %q, want %q", r.TaskLabel, tc.want)
+			}
+		})
+	}
+}
+
+func TestDispatcherLabelSurvivesTerminalMerge(t *testing.T) {
+	r := sampleRecord()
+	r.TaskLabel = "Fix API"
+	root := t.TempDir()
+	if err := Update(root, r); err != nil {
+		t.Fatal(err)
+	}
+	r.TaskLabel = ""
+	r.State = "response_finished"
+	merged, err := MergeExisting(root, r)
+	if err != nil || merged.TaskLabel != "Fix API" {
+		t.Fatalf("terminal label lost: %+v, %v", merged, err)
+	}
+	r.TaskLabel = strings.Repeat("x", 241)
+	if err := Update(root, r); err == nil {
+		t.Fatal("oversized label accepted")
+	}
+}
+
 func TestExtractTranscriptEffortShapesKeepUsage(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -64,6 +64,20 @@ test('a coded job still moving to review sits above queued jobs', () => {
   expect(board?.detail.split('\n').slice(2).map(line => line.split(' | ')[0])).toEqual(['| api fix', '| docs', '| test update'])
 })
 
+test('deduplicates running and awaiting-review attempts by thread before counting rows', () => {
+  for (const state of ['RUNNING', 'SUCCEEDED']) {
+    const prior = { ...files.jobs[0], state, label: 'prior attempt', taskId: 'prior-task', acceptedAt: 100,
+      finishedAt: 900, boardDisplayCount: 0 }
+    const retry = { ...prior, jobId: queuedId, call: 'retry', state: 'RUNNING', label: 'retry', taskId: 'retry-task', acceptedAt: 200 }
+    const board = renderJobBoard({ jobs: [prior, retry], indexes: [files.indexes[0], { jobId: queuedId, call: 'retry' }],
+      bundles: { 'run-bundle': { apply: 'codex_apply', reviewer1_result: 'PASS' } } }, 1000)!
+    expect(board.detail).not.toContain('prior attempt')
+    expect(board.detail).toContain('| retry |')
+    expect(board.detail.split('\n')).toHaveLength(3)
+    expect(board.summary.map(part => part.text).join('')).toBe('⚓ ● 1 coding · next 3m')
+  }
+})
+
 test('shows a dim quiet hint from an old running-job activity timestamp', () => {
   const job = { ...files.jobs[0], startedAt: 900, acceptedAt: 900, activeAgent: undefined, liveness: { lastActivityAt: 100 } }
   const board = renderJobBoard({ indexes: [files.indexes[0]], jobs: [job] }, 1000)
@@ -196,13 +210,27 @@ test('renders Claude-only and mixed provider details without changing Codex rows
   expect(renderJobBoard({ indexes: [], jobs: [], claude: [{ ...claudeRecord, state: 'unknown' }] }, 1000)).toBeUndefined()
   const only = renderJobBoard({ indexes: [], jobs: [], claude: [{ ...claudeRecord, state: 'running' }] }, 1000)
   expect(only?.summary.map(part => part.text).join('')).toContain('Claude subagents running 1')
-  expect(only?.detail).toContain('| Explore | claude-sonnet | running | 2m 5s | 12 / 34 / 5 / 2 (complete) | Done |')
+  expect(only?.detail).toContain('| Explore | claude-sonnet | running | 2m 5s |')
   expect(only?.detail).toContain('C:\\Users\\雪\\agent.jsonl')
   const mixed = renderJobBoard({ ...files, claude: [claudeRecord] }, 1000)
   expect(mixed?.detail).toContain('| api fix | gpt-6-sol (high) | coding · codex-main active 3s ago |')
   expect(mixed?.detail).toContain('| Explore | claude-sonnet | done |')
   expect(mixed?.summary.map(part => part.text).join('')).not.toContain('Claude subagents')
   expect(mixed?.detail.indexOf('| api fix')).toBeLessThan(mixed?.detail.indexOf('### Claude subagents'))
+})
+
+test('adds an escaped task label only to dispatchers and keeps the compact columns', () => {
+  const board = renderJobBoard({ indexes: [], jobs: [], claude: [
+    { ...claudeRecord, state: 'running', agent_type: 'purser:dispatcher', task_label: 'Fix <api>|*' },
+    { ...claudeRecord, agent_type: 'purser:dispatcher' },
+    { ...claudeRecord, task_label: 'not a dispatcher' },
+  ] }, 1000)!
+  expect(board.detail).toContain('| purser:dispatcher · Fix &lt;api&gt;\\|\\* |')
+  expect(board.detail).toContain('| purser:dispatcher |')
+  expect(board.detail).not.toContain('not a dispatcher')
+  expect(board.detail).not.toContain('Done')
+  expect(board.detail).not.toContain('12 / 34')
+  expect(board.detail.split('\n').filter(line => line.startsWith('|')).every(line => line.split(' | ').length === 5)).toBe(true)
 })
 
 test('normalizes Claude terminal states and hides rows without identifying metadata', () => {
@@ -227,20 +255,20 @@ test('normalizes Claude terminal states and hides rows without identifying metad
 
 test('sorts running Claude rows first and newest history before limiting to 100 rows', () => {
   const history = Array.from({ length: 101 }, (_, index) => ({ ...claudeRecord,
-    id: String(index).padStart(64, '0'), final_excerpt: `history ${index}`,
+    id: String(index).padStart(64, '0'), model: `history ${index}`,
     observed_at: new Date(Date.parse(claudeRecord.observed_at) + index * 1000).toISOString() }))
   const board = renderJobBoard({ indexes: [], jobs: [], claude: [...history,
-    { ...claudeRecord, state: 'running', final_excerpt: 'older running' },
-    { ...claudeRecord, state: 'running', observed_at: '2026-11-15T00:00:00Z', final_excerpt: 'newer running' },
+    { ...claudeRecord, state: 'running', model: 'older running' },
+    { ...claudeRecord, state: 'running', observed_at: '2026-11-15T00:00:00Z', model: 'newer running' },
   ] })
   expect(board?.detail.split('\n').filter(line => line.startsWith('| Explore |'))).toHaveLength(100)
-  const excerpts = board?.detail.split('\n').filter(line => line.startsWith('| Explore |')).map(line => line.split(' | ')[5])
-  expect(excerpts).toEqual(['newer running', 'older running', ...history.slice(3).reverse().map(record => record.final_excerpt)])
+  const models = board?.detail.split('\n').filter(line => line.startsWith('| Explore |')).map(line => line.split(' | ')[1])
+  expect(models).toEqual(['newer running', 'older running', ...history.slice(3).reverse().map(record => record.model)])
   expect(board?.detail).toContain('Omitted Claude subagents: 3')
   expect(board?.summary.map(part => part.text).join('')).toContain('Claude subagents running 2')
 })
 
-test('hides Claude sessions and escapes excerpt, path, and unknown metadata', () => {
+test('hides Claude sessions, tokens and excerpts, and escapes paths and metadata', () => {
   const board = renderJobBoard({ ...files, claude: [
     { ...claudeRecord, kind: 'session' },
     { ...claudeRecord, id: 'e'.repeat(64), state: 'unknown', duration_ms: null,
@@ -249,8 +277,10 @@ test('hides Claude sessions and escapes excerpt, path, and unknown metadata', ()
     { ...claudeRecord, id: 'f'.repeat(64), transcript_path: `\\\\server\\share\\${'x'.repeat(260)}.jsonl` },
   ] }, 1000)
   expect(board?.detail).not.toContain('session')
-  expect(board?.detail).toContain('unknown | unknown | unknown / 0 / unknown / unknown (partial)')
-  expect(board?.detail).toContain('&lt;script&gt;\\|\\*hi\\*')
+  expect(board?.detail).toContain('&lt;model&gt;\\| | unknown | unknown |')
+  expect(board?.detail).not.toContain('&lt;script&gt;')
+  expect(board?.detail).not.toContain('Excerpt')
+  expect(board?.detail).not.toContain('Tokens')
   expect(board?.detail).toContain('/Users/雪/')
   expect(board?.detail).toContain('agent')
   expect(board?.detail).toContain(`\\\\server\\share\\${'x'.repeat(260)}`)

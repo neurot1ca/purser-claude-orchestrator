@@ -45,6 +45,7 @@ type Record struct {
 	SessionID       *string `json:"session_id"`
 	AgentID         *string `json:"agent_id"`
 	AgentType       *string `json:"agent_type"`
+	TaskLabel       string  `json:"task_label,omitempty"`
 	ParentSessionID *string `json:"parent_session_id"`
 	ParentSource    string  `json:"parent_source,omitempty"`
 	Model           string  `json:"model,omitempty"`
@@ -180,7 +181,7 @@ func validate(r *Record) error {
 			return errors.New("unsafe Claude work metadata")
 		}
 	}
-	if !safeText(r.FinalExcerpt, 240) || strings.ContainsAny(r.FinalExcerpt, "\r\n\u2028\u2029") {
+	if !safeText(r.TaskLabel, 240) || !safeText(r.FinalExcerpt, 240) || strings.ContainsAny(r.FinalExcerpt, "\r\n\u2028\u2029") {
 		return errors.New("unsafe Claude work excerpt")
 	}
 	for _, value := range []string{r.ParentSource, r.Model, r.ModelSource, r.Effort, r.EffortSource, r.StartedAt, r.LastResponseAt, r.EndedAt, r.EndReason, r.ObservedAt, r.MetadataStatus} {
@@ -256,6 +257,9 @@ func mergeExisting(path string, next *Record) error {
 	}
 	if next.AgentType == nil {
 		next.AgentType = old.AgentType
+	}
+	if next.TaskLabel == "" {
+		next.TaskLabel = old.TaskLabel
 	}
 	if next.ParentSessionID == nil {
 		next.ParentSessionID, next.ParentSource = old.ParentSessionID, old.ParentSource

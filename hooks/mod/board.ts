@@ -209,16 +209,15 @@ export function renderJobBoard(files: BoardFiles, now = Date.now() / 1000, windo
       record.state === 'session_ended' ? 'ended' : typeof record.state === 'string' ? record.state : 'unknown'
     const elapsed = Number.isSafeInteger(record.duration_ms) && record.duration_ms >= 0 ? record.duration_ms / 1000 :
       state === 'running' && typeof record.started_at === 'string' && Number.isFinite(Date.parse(record.started_at)) ? now - Date.parse(record.started_at) / 1000 : undefined
-    const usage = record.usage && typeof record.usage === 'object' ? record.usage : undefined
-    const count = (name: string) => Number.isSafeInteger(usage?.[name]) && usage[name] >= 0 ? String(usage[name]) : 'unknown'
-    const tokens = usage ? `${count('input_tokens')} / ${count('output_tokens')} / ${count('cache_read_input_tokens')} / ${count('cache_creation_input_tokens')} (${safeClaudeText(usage.completeness)})` : 'unknown'
-    return `| ${safeClaudeText(record.agent_type)} | ${safeClaudeText(record.model)} | ${state} | ${elapsed === undefined ? 'unknown' : duration(elapsed)} | ${tokens} | ${safeClaudeText(record.final_excerpt)} | ${record.transcript_path ? codePath(record.transcript_path) : 'unknown'} |`
+    const task = record.agent_type === 'purser:dispatcher' && typeof record.task_label === 'string' && record.task_label.trim()
+      ? ` · ${safeClaudeText(record.task_label)}` : ''
+    return `| ${safeClaudeText(record.agent_type)}${task} | ${safeClaudeText(record.model)} | ${state} | ${elapsed === undefined ? 'unknown' : duration(elapsed)} | ${record.transcript_path ? codePath(record.transcript_path) : 'unknown'} |`
   })
   return {
     summary,
     detail: [
       ...(rows.length ? ['| ⚓ Task | Model | State | ETA | Review | Apply |', '| --- | --- | --- | --- | --- | --- |', ...rows.map(row => row.line)] : []),
-      ...(claude.length ? [...(rows.length ? [''] : []), '### Claude subagents', '| Agent type | Model | State | Duration | Tokens (in/out/cache read/cache create) | Excerpt | Transcript path |', '| --- | --- | --- | --- | --- | --- | --- |', ...claudeRows,
+      ...(claude.length ? [...(rows.length ? [''] : []), '### Claude subagents', '| Agent type | Model | State | Duration | Transcript path |', '| --- | --- | --- | --- | --- |', ...claudeRows,
         ...(allClaude.length > claude.length ? [`Omitted Claude subagents: ${allClaude.length - claude.length}`] : [])] : []),
     ].join('\n'),
   }
