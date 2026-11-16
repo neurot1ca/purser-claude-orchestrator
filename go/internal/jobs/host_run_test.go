@@ -557,7 +557,10 @@ func TestRunHostGenerationPreservesPromptBytesOnStdin(t *testing.T) {
 }
 
 func TestRewriteCheckoutPaths(t *testing.T) {
-	worktree := filepath.Clean(string(filepath.Separator) + "worktree")
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	if err := os.MkdirAll(filepath.Join(worktree, "src"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	wantCase := worktree + `\src\main.go`
 	if runtime.GOOS != "windows" {
 		wantCase = `c:\ai-operations\src\main.go`
@@ -587,10 +590,49 @@ func TestRewriteCheckoutPaths(t *testing.T) {
 	}
 }
 
+func TestRewriteCheckoutPathsFilesystem(t *testing.T) {
+	root := t.TempDir()
+	checkout, worktree := filepath.Join(root, "main-checkout"), filepath.Join(root, "job-worktree")
+	for _, dir := range []string{checkout, filepath.Join(checkout, ".tmp"), filepath.Join(checkout, "src"), worktree, filepath.Join(worktree, ".tmp"), filepath.Join(worktree, "src")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tracked := filepath.Join("src", "main.go")
+	mainOnly := filepath.Join(".tmp", "readme-refresh.patch")
+	if err := os.WriteFile(filepath.Join(checkout, tracked), []byte("tracked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, tracked), []byte("tracked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, mainOnly), []byte("main only"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	newFile := filepath.Join("src", "new.go")
+	for _, test := range []struct {
+		name, path, wantRoot string
+	}{
+		{"tracked file", tracked, worktree},
+		{"main-only untracked file", mainOnly, checkout},
+		{"main-only file with trailing period", mainOnly + ".", checkout},
+		{"new file in existing worktree directory", newFile, worktree},
+		{"new file in nonexistent nested directory", filepath.Join("new-pkg", "sub", "file.go"), worktree},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := filepath.Join(checkout, test.path)
+			want := filepath.Join(test.wantRoot, test.path)
+			if got := rewriteCheckoutPaths(input, checkout, worktree); got != want {
+				t.Fatalf("rewriteCheckoutPaths() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestRunHostGenerationRewritesLaunchedWorktreePrompt(t *testing.T) {
 	root := t.TempDir()
 	repo, worktree := filepath.Join(root, "main-checkout"), filepath.Join(root, "job-worktree")
-	for _, directory := range []string{repo, worktree} {
+	for _, directory := range []string{repo, filepath.Join(repo, "src"), worktree, filepath.Join(worktree, "src")} {
 		if err := os.MkdirAll(directory, 0700); err != nil {
 			t.Fatal(err)
 		}

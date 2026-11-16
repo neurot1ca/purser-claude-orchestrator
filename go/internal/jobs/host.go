@@ -861,6 +861,7 @@ func rewriteCheckoutPaths(text, checkoutRoot, worktreeRoot string) string {
 	}
 	worktreeRoot = filepath.Clean(worktreeRoot)
 	var out strings.Builder
+	pathDecisions := make(map[string]bool)
 	for i := 0; i < len(text); {
 		matched := 0
 		for _, root := range roots {
@@ -876,6 +877,30 @@ func rewriteCheckoutPaths(text, checkoutRoot, worktreeRoot string) string {
 			i++
 			continue
 		}
+		end := i + matched
+		if end < len(text) && (text[end] == '/' || text[end] == '\\') {
+			for end < len(text) {
+				r, size := utf8.DecodeRuneInString(text[end:])
+				if unicode.IsSpace(r) || strings.ContainsRune("\"'`),;:]>", r) {
+					break
+				}
+				end += size
+			}
+			suffix := strings.TrimRight(text[i+matched:end], ".!?")
+			if strings.Trim(suffix, "/\\") != "" {
+				key := roots[0] + "\x00" + worktreeRoot + "\x00" + suffix
+				rewrite, checked := pathDecisions[key]
+				if !checked {
+					rewrite = checkoutPathExistsInWorktree(roots[0], worktreeRoot, suffix)
+					pathDecisions[key] = rewrite
+				}
+				if !rewrite {
+					out.WriteString(text[i:end])
+					i = end
+					continue
+				}
+			}
+		}
 		out.WriteString(worktreeRoot)
 		i += matched
 		if i < len(text) && (text[i] == '/' || text[i] == '\\') {
@@ -884,6 +909,22 @@ func rewriteCheckoutPaths(text, checkoutRoot, worktreeRoot string) string {
 		}
 	}
 	return out.String()
+}
+
+func checkoutPathExistsInWorktree(checkoutRoot, worktreeRoot, suffix string) bool {
+	suffix = filepath.FromSlash(strings.TrimLeft(strings.ReplaceAll(suffix, "\\", "/"), "/"))
+	worktreePath := filepath.Join(worktreeRoot, suffix)
+	if _, err := os.Stat(worktreePath); err == nil {
+		return true
+	} else if !os.IsNotExist(err) {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(checkoutRoot, suffix)); err == nil {
+		return false
+	} else if !os.IsNotExist(err) {
+		return true
+	}
+	return true
 }
 
 func checkoutPathMatch(value, root string) (int, bool) {
