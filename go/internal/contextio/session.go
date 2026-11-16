@@ -743,15 +743,15 @@ func KnownUserLanguage(root, handoffContent string) string {
 	return lastUserLanguage(root)
 }
 
-// ProjectLanguageInstruction returns the existing reply instruction when a project language is known.
-func ProjectLanguageInstruction(root, projectKey string) string {
+// BoardLanguageInstruction translates the English board when a non-English language is known.
+func BoardLanguageInstruction(root, projectKey string) string {
 	handoffPath := filepath.Join(root, "projects", projectKey, "telemetry", "purser-handoff.md")
 	content, _ := os.ReadFile(handoffPath)
 	language := KnownUserLanguage(root, string(content))
 	if language == "" || strings.EqualFold(language, "English") {
 		return ""
 	}
-	return languageInstruction(language)
+	return "Render this job board " + noticeLanguagePhrase(language) + ", translating from English while keeping ⚓, markdown table structure, row order, model names, task labels, ETAs and dashes unchanged."
 }
 
 // FillHandoffLanguage replaces the template placeholder only when language is known.

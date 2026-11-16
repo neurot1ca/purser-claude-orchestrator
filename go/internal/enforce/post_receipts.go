@@ -46,6 +46,7 @@ func postProjectJobBoard(root string, event map[string]any, repository, project 
 	pending["board_job_ids"] = []any{}
 	if board != "" {
 		visible, _, _ := strings.Cut(board, "\nReply to the user in ")
+		visible, _, _ = strings.Cut(visible, "\nRender this job board ")
 		pending["board"] = visible
 		for _, id := range ids {
 			pending["board_job_ids"] = append(pending["board_job_ids"].([]any), id)

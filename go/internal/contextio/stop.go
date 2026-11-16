@@ -120,7 +120,7 @@ func Stop(event map[string]any, started time.Time) []byte {
 				}
 			}
 			// Confirm the board independently of any still-missing dispatch lines.
-			boardShown := hasBoard && board != "" && strings.Contains(joined, board)
+			boardShown := hasBoard && boardDisplayed(joined, board)
 			if boardShown {
 				display := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", session, str(event["transcript_path"]), latestUser)))
 				markBoardDisplayed(dispatch, hex.EncodeToString(display[:]))
@@ -242,7 +242,7 @@ func Stop(event map[string]any, started time.Time) []byte {
 		add("maintenance", maintenanceGuidance(pending))
 	}
 	if pending, ok := state["dispatch_pending"].(map[string]any); ok && pending["blocked"] != true {
-		if advice := dispatchAdvice(pending); advice != "" {
+		if advice := dispatchAdvice(pending, repositoryProjectKey(repository)); advice != "" {
 			pending["blocked"] = true
 			add("dispatch", advice)
 		}
@@ -325,15 +325,19 @@ func fallbackGuidance(p map[string]any) string {
 	return "On your next reply, render exactly one bold quoted question line in the user's language as `> ⚓ **...**`. Translate the line below while keeping ⚓ and the model name; include no other question line.\n\n" + str(p["line"])
 }
 
-func dispatchAdvice(p map[string]any) string {
+func dispatchAdvice(p map[string]any, projectKey string) string {
 	lines, ok := p["lines"].([]any)
 	if !ok {
 		return ""
 	}
 	board, hasBoard := p["board"].(string)
+	instruction := BoardLanguageInstruction(stateRoot(), projectKey)
+	if instruction == "" {
+		instruction = "Include this latest job board verbatim:"
+	}
 	if len(lines) == 0 {
 		if hasBoard {
-			return "Include this latest job board verbatim:\n" + board
+			return instruction + "\n" + board
 		}
 		return ""
 	}
@@ -343,7 +347,7 @@ func dispatchAdvice(p map[string]any) string {
 	}
 	advice := "Write one line in the user's language as `> ⚓ **Codex: ...**`, including every exact dispatch receipt line below verbatim:\n" + strings.Join(parts, "\n")
 	if hasBoard {
-		advice += "\nInclude this latest job board verbatim:\n" + board
+		advice += "\n" + instruction + "\n" + board
 	}
 	return advice
 }
@@ -404,6 +408,47 @@ func validStopPending(field string, p map[string]any) bool {
 			}
 		}
 		return true
+	}
+	return false
+}
+
+var boardCell = regexp.MustCompile(`(?:\\.|[^|])+`)
+
+// boardDisplayed checks preserved table fields rather than translated headings and states.
+func boardDisplayed(reply, board string) bool {
+	rows := strings.Split(strings.TrimSpace(board), "\n")
+	if len(rows) < 4 {
+		return false
+	}
+	rows = rows[1:] // The English master title is not part of display evidence.
+	cells := func(line string) []string {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "> |") || !strings.HasSuffix(line, "|") {
+			return nil
+		}
+		parts := boardCell.FindAllString(strings.TrimSuffix(strings.TrimPrefix(line, "> |"), "|"), -1)
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		return parts
+	}
+	lines := strings.Split(reply, "\n")
+	for i, line := range lines {
+		header := cells(line)
+		if len(header) != 6 || !strings.HasPrefix(header[0], "⚓") || i+len(rows) > len(lines) {
+			continue
+		}
+		matched := true
+		for j := 1; j < len(rows); j++ {
+			want, got := cells(rows[j]), cells(lines[i+j])
+			if len(want) != 6 || len(got) != 6 || want[0] != got[0] || want[1] != got[1] || want[3] != got[3] {
+				matched = false
+				break
+			}
+		}
+		if matched && (i+len(rows) == len(lines) || cells(lines[i+len(rows)]) == nil) {
+			return true
+		}
 	}
 	return false
 }

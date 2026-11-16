@@ -115,12 +115,12 @@ func TestPostApplyGuidanceUsesModelContext(t *testing.T) {
 }
 
 func TestRefreshCachedBoardReplacesStaleSnapshot(t *testing.T) {
-	response := map[string]any{"hookSpecificOutput": map[string]any{"additionalContext": "review summary\nPurser jobs:\n> | queued behind old-holder |\nReply to the user in German.\nlater guidance"}}
-	refreshCachedBoard(response, "Purser jobs:\n> | current board |\nReply to the user in Turkish.")
+	response := map[string]any{"hookSpecificOutput": map[string]any{"additionalContext": "review summary\nPurser jobs:\n> | queued behind old-holder |\nRender this job board in German.\nlater guidance"}}
+	refreshCachedBoard(response, "Purser jobs:\n> | current board |\nRender this job board in Turkish.")
 	context := stringValue(mapValue(response["hookSpecificOutput"])["additionalContext"])
 	if strings.Contains(context, "old-holder") || !strings.Contains(context, "current board") ||
 		!strings.Contains(context, "review summary") || !strings.Contains(context, "later guidance") ||
-		strings.Contains(context, "Reply to the user in German.") || strings.Count(context, "Reply to the user in Turkish.") != 1 {
+		strings.Contains(context, "Render this job board in German.") || strings.Count(context, "Render this job board in Turkish.") != 1 {
 		t.Fatalf("refreshed context = %q", context)
 	}
 }
@@ -130,14 +130,14 @@ func TestPostProjectJobBoardAddsKnownLanguageInstruction(t *testing.T) {
 	tests := []struct {
 		name, language, source, want string
 	}{
-		{name: "Turkish handoff", language: "Turkish", source: "handoff", want: "Reply to the user in Turkish."},
-		{name: "Turkish saved language", language: "Turkish", source: "saved", want: "Reply to the user in Turkish."},
+		{name: "Turkish handoff", language: "Turkish", source: "handoff", want: "Render this job board in Turkish, translating from English while keeping ⚓, markdown table structure, row order, model names, task labels, ETAs and dashes unchanged."},
+		{name: "Turkish saved language", language: "Turkish", source: "saved", want: "Render this job board in Turkish, translating from English while keeping ⚓, markdown table structure, row order, model names, task labels, ETAs and dashes unchanged."},
 		{name: "English", language: "English", source: "handoff"},
 		{name: "unknown"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := preTempDir(t)
 			write := func(path string, value any) {
 				data, err := json.Marshal(value)
 				if err != nil {
@@ -169,7 +169,7 @@ func TestPostProjectJobBoardAddsKnownLanguageInstruction(t *testing.T) {
 			if tc.want != "" && !strings.Contains(board, tc.want) {
 				t.Fatalf("board=%q want instruction %q", board, tc.want)
 			}
-			if tc.want == "" && (strings.Contains(board, "Reply to the user in") || strings.Contains(board, "Reply in the language")) {
+			if tc.want == "" && (strings.Contains(board, "Render this job board") || strings.Contains(board, "Reply to the user in") || strings.Contains(board, "Reply in the language")) {
 				t.Fatalf("board=%q has an instruction for English or unknown language", board)
 			}
 		})

@@ -331,7 +331,7 @@ func projectJobBoard(root, projectKey string, now time.Time) (string, []string, 
 		rows = append(rows, row.line)
 	}
 	board := "Purser jobs:\n" + strings.Join(rows, "\n")
-	if instruction := contextio.ProjectLanguageInstruction(root, projectKey); instruction != "" {
+	if instruction := contextio.BoardLanguageInstruction(root, projectKey); instruction != "" {
 		board += "\n" + instruction
 	}
 	return board, ids, finishedIDs
@@ -361,7 +361,7 @@ func refreshCachedBoard(response map[string]any, board string) {
 		for len(lines) > 0 && strings.HasPrefix(lines[0], "> |") {
 			lines = lines[1:]
 		}
-		if len(lines) > 0 && strings.HasPrefix(lines[0], "Reply to the user in ") && strings.HasSuffix(lines[0], ".") {
+		if len(lines) > 0 && (strings.HasPrefix(lines[0], "Reply to the user in ") || strings.HasPrefix(lines[0], "Render this job board ")) && strings.HasSuffix(lines[0], ".") {
 			lines = lines[1:]
 		}
 		context = strings.TrimSpace(before + strings.Join(lines, "\n"))

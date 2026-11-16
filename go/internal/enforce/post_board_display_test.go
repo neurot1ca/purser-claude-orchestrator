@@ -63,7 +63,12 @@ func TestPostBoardCountsOnlyConfirmedFinishedDisplays(t *testing.T) {
 		event["last_assistant_message"] = "No board shown."
 		contextio.Stop(event, time.Now())
 		check(display - 1)
-		visible, _, _ := strings.Cut(board, "\nReply to the user in ")
+		visible, _, _ := strings.Cut(board, "\nRender this job board ")
+		visible = strings.NewReplacer(
+			"Purser jobs:", "Purser işleri:",
+			"⚓ Task | Model | State | ETA | Review | Apply", "⚓ Görev | Model | Durum | Süre | İnceleme | Uygulama",
+			"coding", "kodlanıyor", "coded · fetching result", "kodlandı · sonuç alınıyor",
+		).Replace(visible)
 		event["last_assistant_message"] = visible
 		contextio.Stop(event, time.Now())
 		check(display)
@@ -71,6 +76,9 @@ func TestPostBoardCountsOnlyConfirmedFinishedDisplays(t *testing.T) {
 		event["last_assistant_message"] = visible + "\nDispatch receipt"
 		contextio.Stop(event, time.Now())
 		check(display)
+		if state := readPostReceiptState(postReceiptStatePath(root, repo), "board-display"); state["dispatch_pending"] != nil {
+			t.Fatal("translated board and receipt did not clear the Stop reminder")
+		}
 		// Recreate pending state, as after a failed state write or cached receipt.
 		if err := atomicAdmissionJSON(postReceiptStatePath(root, repo), map[string]any{
 			"session_id": "board-display", "dispatch_pending": pending,
