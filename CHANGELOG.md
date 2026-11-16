@@ -3,6 +3,11 @@
 Every plugin release (`.claude-plugin/plugin.json` version) gets an entry here
 before it is published.
 
+## 0.1.253 — 2026-11-16
+- **Fixed:** Claude subagents stopped by a user interrupt, or left behind by a closed session, no longer stay "running"; Details shows each subagent's real model and drops the transcript path column.
+- **Fixed:** worker prompts keep paths to files that exist only in the main checkout instead of pointing them into the job worktree.
+- **Changed:** the job board is shown in the user's language, translated from the English master.
+
 ## 0.1.252 — 2026-11-15
 - **Fixed:** finished jobs now hide after two board displays as intended, and finished Claude subagent rows leave the board pane after an hour.
 
