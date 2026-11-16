@@ -104,6 +104,7 @@ func captureClaudeWork(event map[string]any) error {
 	if err := claudework.Update(contextio.StateRoot(), record); err != nil {
 		return err
 	}
+	claudework.Reconcile(contextio.StateRoot(), record.ProjectKey, time.Now())
 	if terminal {
 		usage := map[string]any{}
 		if record.Usage != nil {

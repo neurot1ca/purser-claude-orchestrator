@@ -243,6 +243,43 @@ func TestClaudeWorkSessionEndPreservesExcerptAndSchedulesCleanup(t *testing.T) {
 	}
 }
 
+func TestClaudeWorkStopReconcilesInterruptedSubagent(t *testing.T) {
+	root := claudeWorkTempDir(t)
+	state := filepath.Join(root, "state")
+	t.Setenv("PURSER_STATE_DIR", state)
+	project := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	session, agent := "session-interrupt", "agent-interrupt"
+	parent := filepath.Join(project, session+".jsonl")
+	path := filepath.Join(project, session, "subagents", "agent-"+agent+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	record := claudework.Record{ProjectKey: contextio.ProjectKey(project), Kind: "subagent", SessionID: &session, AgentID: &agent, State: "running", MetadataStatus: "partial", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), TranscriptPath: parent}
+	if err := claudework.Update(state, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := captureClaudeWork(map[string]any{"hook_event_name": "Stop", "session_id": session, "cwd": project, "transcript_path": parent}); err != nil {
+		t.Fatal(err)
+	}
+	storedPath, _ := claudework.Path(state, record.ProjectKey, record)
+	data, err := os.ReadFile(storedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.State != "interrupted" || record.EndedAt == "" {
+		t.Fatalf("subagent not reconciled at Stop: %+v", record)
+	}
+}
+
 func claudeWorkTempDir(t *testing.T) string {
 	t.Helper()
 	base, err := filepath.Abs(filepath.Join("..", "..", "..", ".tmp"))

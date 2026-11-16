@@ -287,6 +287,19 @@ test('keeps running and recent Claude subagents and drops stale finished rows', 
   expect(board.summary.map(part => part.text).join('')).toContain('Claude subagents running 1')
 })
 
+test('renders reconciled interruptions without counting them as running and ages them from ended_at', () => {
+  const now = Date.parse('2026-11-15T12:00:00Z') / 1000
+  const board = renderJobBoard({ ...files, claude: [
+    { ...claudeRecord, state: 'interrupted', model: 'recent interrupt', ended_at: new Date((now - 600) * 1000).toISOString() },
+    { ...claudeRecord, state: 'interrupted', model: 'old interrupt', ended_at: new Date((now - 3601) * 1000).toISOString(), observed_at: new Date(now * 1000).toISOString() },
+    { ...claudeRecord, state: 'session_ended', model: 'ended session', ended_at: new Date((now - 600) * 1000).toISOString() },
+  ] }, now)!
+  expect(board.detail).toContain('| Explore | recent interrupt | interrupted |')
+  expect(board.detail).toContain('| Explore | ended session | ended |')
+  expect(board.detail).not.toContain('old interrupt')
+  expect(board.summary.map(part => part.text).join('')).not.toContain('Claude subagents running')
+})
+
 test('hides Claude sessions, tokens and excerpts, and escapes paths and metadata', () => {
   const board = renderJobBoard({ ...files, claude: [
     { ...claudeRecord, kind: 'session' },
